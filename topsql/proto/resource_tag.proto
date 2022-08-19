@@ -1,0 +1,18 @@
+syntax = "proto2";
+
+package tipb;
+
+message ResourceGroupTag {
+  optional bytes sql_digest = 1;
+  optional bytes plan_digest = 2;
+
+  // Use to label the handling kv type of the request.
+  // This is for TiKV resource_metering to collect execution information by the key label.
+  optional ResourceGroupTagLabel label = 3;
+}
+
+enum ResourceGroupTagLabel {
+  ResourceGroupTagLabelUnknown = 0;
+  ResourceGroupTagLabelRow = 1;
+  ResourceGroupTagLabelIndex = 2;
+}

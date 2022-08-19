@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package resource_usage_agent;
+
+// TiKV implements ResourceMeteringPubSub service for clients to subscribe to resource metering records.
+service ResourceMeteringPubSub {
+  // Clients subscribe to resource metering records through this RPC, and TiKV periodically (e.g. per minute)
+  // publishes resource metering records to clients via gRPC stream.
+  rpc Subscribe(ResourceMeteringRequest) returns (stream ResourceUsageRecord) {}
+}
+
+message ResourceMeteringRequest {}
+
+message EmptyResponse {}
+
+message ResourceUsageRecord {
+  oneof record_oneof {
+    GroupTagRecord record = 1;
+  }
+}
+
+// GroupTagRecord is a set of resource usage data grouped by resource_group_tag.
+message GroupTagRecord {
+  bytes resource_group_tag = 1;
+  repeated GroupTagRecordItem items = 2;
+}
+
+message GroupTagRecordItem {
+  uint64 timestamp_sec = 1;
+  uint32 cpu_time_ms = 2;
+  uint32 read_keys = 3;
+  uint32 write_keys = 4;
+}
