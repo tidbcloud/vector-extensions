@@ -1,4 +1,4 @@
-# Extensions of Vector for TiDB Cloud
+# Extensions for Vector
 
 We have some sources and sinks associated with TiDB Cluster, but not sutable to put in official vector repository, e.g. the topsql source, are putted in this repository.
 
@@ -9,14 +9,14 @@ To add a new component, you can take topsql source as an example.
 Steps in general:
 1. Initialize a crate as a member of current workspace.
     * create a new crate at `extensions/${YOUR_COMPONENT_NAME}`
-    * declare the crate to `workspace.member` in `Cargo.toml`
+    * declare the crate at `workspace.member` in `Cargo.toml`
 2. Introduce the component as a dependency.
     * add the component to `dependencies` in `Cargo.toml`
-3. Add a feature to control if equipped with the component.
-    * add a feature depends on the dependency introduced in step 2.
+3. Add a feature to control if equipped with the component in `Cargo.toml`.
+    * add a feature depends on the dependency introduced in step 2
     * extend the `features.default` to include the feature
 4. Declare the component in `src/main.rs`
-    * add a line `extern crate ${YOUR_COMPONENT_NAME}`
+    * add a line of code `extern crate ${YOUR_COMPONENT_NAME}`
     * add an attribute `#[cfg(feature = "${FEATURE_ADD_IN_STEP_3}")]` above the delcaration
 
 ### Clean
@@ -31,10 +31,10 @@ make clean
 cargo check
 # or make check
 
-# check for topsql only
+# check for topsql only for speed up
 cargo check --no-default-features --features topsql
 
-# check for vm-import only
+# check for vm-import only for speed up
 cargo check --no-default-features --features vm-import
 ```
 
@@ -44,10 +44,10 @@ cargo check --no-default-features --features vm-import
 cargo clippy
 # or make clippy
 
-# lint for topsql only
+# lint for topsql only for speed up
 cargo clippy --no-default-features --features topsql
 
-# lint for vm-import only
+# lint for vm-import only for speed up
 cargo clippy --no-default-features --features vm-import
 ```
 
