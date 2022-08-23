@@ -20,17 +20,27 @@ jobs:
       RUSTFLAGS: "-D warnings"
     steps:
     - uses: actions/checkout@v2
+
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
     - name: Set up toolchains
       uses: actions-rs/toolchain@v1
       with:
           toolchain: stable
           override: true
           components: rustfmt, clippy
+
     - name: Check format
       run: cargo fmt --all -- --check
+
     - name: Lint
       run: make clippy
-    - name: Check
-      run: make check
+
     - name: Test
       run: make test
