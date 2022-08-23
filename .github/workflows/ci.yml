@@ -31,6 +31,8 @@ jobs:
 
     - name: Set up toolchains
       uses: actions-rs/toolchain@v1
+      with:
+          components: rustfmt, clippy
 
     - name: Check format
       run: cargo fmt --all -- --check
