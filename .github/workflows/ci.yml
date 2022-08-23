@@ -29,7 +29,7 @@ jobs:
     - name: Check format
       run: cargo fmt --all -- --check
     - name: Lint
-      run: make lint
+      run: make clippy
     - name: Check
       run: make check
     - name: Test
