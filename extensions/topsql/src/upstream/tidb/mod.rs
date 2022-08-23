@@ -4,13 +4,11 @@ pub mod proto;
 #[cfg(test)]
 pub mod mock_upstream;
 
-use tonic::{
-    transport::{Channel, Endpoint},
-    Status, Streaming,
-};
+use tonic::transport::{Channel, Endpoint};
+use tonic::{Status, Streaming};
 
-use super::{tls_proxy, Upstream};
 use crate::shutdown::ShutdownSubscriber;
+use crate::upstream::{tls_proxy, Upstream};
 
 pub struct TiDBUpstream;
 

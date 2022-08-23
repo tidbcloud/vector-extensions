@@ -11,20 +11,18 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio_stream::wrappers::IntervalStream;
 use tonic::transport::{Channel, Endpoint};
-use vector::{
-    internal_events::{BytesReceived, EventsReceived, StreamClosedError},
-    tls::TlsConfig,
-    SourceSender,
-};
-use vector_core::{internal_event::InternalEvent, ByteSizeOf};
+use vector::internal_events::{BytesReceived, EventsReceived, StreamClosedError};
+use vector::tls::TlsConfig;
+use vector::SourceSender;
+use vector_core::internal_event::InternalEvent;
+use vector_core::ByteSizeOf;
 
-use crate::{
-    shutdown::ShutdownSubscriber,
-    topology::{Component, InstanceType},
-    upstream::{
-        parser::UpstreamEventParser, tidb::TiDBUpstream, tikv::TiKVUpstream, utils::instance_event,
-    },
-};
+use crate::shutdown::ShutdownSubscriber;
+use crate::topology::{Component, InstanceType};
+use crate::upstream::parser::UpstreamEventParser;
+use crate::upstream::tidb::TiDBUpstream;
+use crate::upstream::tikv::TiKVUpstream;
+use crate::upstream::utils::instance_event;
 
 #[async_trait::async_trait]
 pub trait Upstream: Send {
@@ -183,7 +181,7 @@ impl TopSQLSource {
     async fn handle_response<U: Upstream>(&mut self, response: U::UpstreamEvent) {
         BytesReceived {
             byte_size: response.size_of(),
-            protocol: self.tls.is_none().then(|| "http").unwrap_or("https"),
+            protocol: if self.tls.is_none() { "http" } else { "https" },
         }
         .emit();
 

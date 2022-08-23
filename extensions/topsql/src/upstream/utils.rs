@@ -5,7 +5,9 @@ use chrono::{DateTime, Utc};
 use ordered_float::NotNan;
 use vector::event::{EventMetadata, LogEvent, Value};
 
-use super::consts::{LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, METRIC_NAME_INSTANCE};
+use crate::upstream::consts::{
+    LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, METRIC_NAME_INSTANCE,
+};
 
 pub fn make_metric_like_log_event(
     labels: &[(&'static str, String)],

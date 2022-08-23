@@ -7,14 +7,13 @@ mod utils;
 #[cfg(test)]
 mod mock;
 
-use std::{collections::HashSet, fs::read};
+use std::collections::HashSet;
+use std::fs::read;
 
 use snafu::{ResultExt, Snafu};
-use vector::{
-    config::ProxyConfig,
-    http::HttpClient,
-    tls::{MaybeTlsSettings, TlsConfig},
-};
+use vector::config::ProxyConfig;
+use vector::http::HttpClient;
+use vector::tls::{MaybeTlsSettings, TlsConfig};
 
 use crate::topology::Component;
 

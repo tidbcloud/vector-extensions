@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VECTOR_VERSION:-"$(scripts/version.sh)"}"
-REPO="${REPO:-"tidbcloud/vector"}"
-BASE=alpine
-
-TAG="$REPO:$VERSION-$BASE"
-DOCKERFILE="scripts/docker/Dockerfile"
+## set up working directory
 
 # the directory of the script
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -30,7 +25,17 @@ function cleanup {
 # register the cleanup function to be called on the EXIT signal
 trap cleanup EXIT
 
+
+## build docker image in the setup directory
+
 cp target/x86_64-unknown-linux-musl/release/vector "$WORK_DIR"
 cp config/vector.toml "$WORK_DIR"
+
+VERSION="${VECTOR_VERSION:-"$(scripts/version.sh)"}"
+REPO="${REPO:-"tidbcloud/vector"}"
+BASE=alpine
+
+TAG="$REPO:$VERSION-$BASE"
+DOCKERFILE="scripts/docker/Dockerfile"
 
 docker build -t "$TAG" -f "$DOCKERFILE" "$WORK_DIR"

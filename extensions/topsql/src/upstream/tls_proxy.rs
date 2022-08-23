@@ -1,9 +1,7 @@
 use std::pin::Pin;
 
-use tokio::{
-    io::AsyncWriteExt,
-    net::{TcpListener, TcpStream},
-};
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_openssl::SslStream;
 use tracing_futures::Instrument;
 use vector::tls::{tls_connector_builder, MaybeTlsSettings, TlsConfig};

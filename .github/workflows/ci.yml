@@ -31,10 +31,6 @@ jobs:
 
     - name: Set up toolchains
       uses: actions-rs/toolchain@v1
-      with:
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
 
     - name: Check format
       run: cargo fmt --all -- --check

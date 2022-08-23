@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use vector::{
-    config::{self, GenerateConfig, Output, SourceConfig, SourceContext, SourceDescription},
-    sources,
-    tls::TlsConfig,
+use vector::config::{
+    GenerateConfig, Output, SourceConfig, SourceContext, SourceDescription, {self},
 };
+use vector::sources;
+use vector::tls::TlsConfig;
 use vector_core::config::LogNamespace;
 
 use crate::controller::Controller;

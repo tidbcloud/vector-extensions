@@ -3,10 +3,8 @@ use std::collections::HashSet;
 use snafu::{ResultExt, Snafu};
 use vector::http::HttpClient;
 
-use crate::topology::{
-    fetch::{models, utils},
-    Component, InstanceType,
-};
+use crate::topology::fetch::{models, utils};
+use crate::topology::{Component, InstanceType};
 
 #[derive(Debug, Snafu)]
 pub enum FetchError {
