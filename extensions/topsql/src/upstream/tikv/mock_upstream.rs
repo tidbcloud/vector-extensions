@@ -4,13 +4,13 @@ use futures::Stream;
 use futures_util::stream;
 use prost::Message;
 use tonic::{transport::ServerTlsConfig, Request, Response, Status};
-use vector::sources::topsql::upstream::tidb::proto::ResourceGroupTag;
 
 use super::proto::{
     resource_metering_pub_sub_server::{ResourceMeteringPubSub, ResourceMeteringPubSubServer},
     resource_usage_record::RecordOneof,
     GroupTagRecord, GroupTagRecordItem, ResourceMeteringRequest, ResourceUsageRecord,
 };
+use crate::upstream::tidb::proto::ResourceGroupTag;
 
 pub struct MockResourceMeteringPubSubServer;
 

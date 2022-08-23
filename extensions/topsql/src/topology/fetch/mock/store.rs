@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[derive(Clone, Debug)]
 pub struct TiKVAddress {
     pub host: String,
