@@ -1,6 +1,9 @@
+#![allow(dead_code)]
+
 use rand::prelude::SliceRandom;
 use serde::{Deserialize, Serialize};
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Debug)]
 pub struct PDURL {
     pub client_url: String,

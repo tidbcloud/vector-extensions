@@ -4,24 +4,36 @@ extern crate tracing;
 use std::io::Write;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use flate2::{write::GzEncoder, Compression};
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use futures_util::{FutureExt, SinkExt};
 use http::{Request, Uri};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use vector::{
-    config::{self, AcknowledgementsConfig, GenerateConfig, Input, SinkConfig, SinkDescription},
-    event::Event,
-    http::HttpClient,
-    sinks::{
-        self,
-        util::{
-            http::{BatchedHttpSink, HttpEventEncoder, HttpSink},
-            BatchConfig, BoxedRawValue, JsonArrayBuffer, SinkBatchSettings, TowerRequestConfig,
-        },
-    },
-    tls::{TlsConfig, TlsSettings},
+use vector::config::{AcknowledgementsConfig, GenerateConfig, Input, SinkConfig, SinkDescription};
+use vector::event::Event;
+use vector::http::HttpClient;
+use vector::sinks::util::http::{BatchedHttpSink, HttpEventEncoder, HttpSink};
+use vector::sinks::util::{
+    BatchConfig, BoxedRawValue, JsonArrayBuffer, SinkBatchSettings, TowerRequestConfig,
 };
+use vector::tls::{TlsConfig, TlsSettings};
+use vector::{config, sinks};
+
+inventory::submit! {
+    SinkDescription::new::<VMImportConfig>("vm_import")
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct VMImportConfig {
+    pub endpoint: String,
+    pub tls: Option<TlsConfig>,
+
+    #[serde(default)]
+    pub request: TowerRequestConfig,
+    #[serde(default)]
+    pub batch: BatchConfig<VMImportDefaultBatchSettings>,
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VMImportDefaultBatchSettings;
@@ -32,29 +44,16 @@ impl SinkBatchSettings for VMImportDefaultBatchSettings {
     const TIMEOUT_SECS: f64 = 1.0;
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct VMImportConfig {
-    pub endpoint: String,
-
-    #[serde(default)]
-    pub batch: BatchConfig<VMImportDefaultBatchSettings>,
-    #[serde(default)]
-    pub request: TowerRequestConfig,
-
-    pub tls: Option<TlsConfig>,
-}
-
-inventory::submit! {
-    SinkDescription::new::<VMImportConfig>("vm_import")
-}
-
 impl GenerateConfig for VMImportConfig {
     fn generate_config() -> toml::Value {
+        let sample_url = "http://127.0.0.1:8428/api/v1/import";
+
         toml::Value::try_from(Self {
-            endpoint: "http://127.0.0.1:8428/api/v1/import".to_owned(),
-            batch: BatchConfig::default(),
-            request: TowerRequestConfig::default(),
-            tls: None,
+            tls: Default::default(),
+            batch: Default::default(),
+            request: Default::default(),
+
+            endpoint: sample_url.to_owned(),
         })
         .unwrap()
     }
@@ -70,21 +69,23 @@ impl SinkConfig for VMImportConfig {
         let endpoint = self.endpoint.parse::<Uri>()?;
         let tls_settings = TlsSettings::from_options(&self.tls)?;
         let batch_settings = self.batch.into_batch_settings()?;
-        let request_settings = self.request.unwrap_with(&TowerRequestConfig::default());
+        let request_settings = self.request.unwrap_with(&Default::default());
 
         let client = HttpClient::new(tls_settings, cx.proxy())?;
+        let sink = VMImportSink::new(endpoint.clone());
+        let buffer = JsonArrayBuffer::new(batch_settings.size);
 
-        let healthcheck = healthcheck(endpoint.clone(), client.clone()).boxed();
         let sink = BatchedHttpSink::new(
-            VMImportSink { endpoint },
-            JsonArrayBuffer::new(batch_settings.size),
+            sink,
+            buffer,
             request_settings,
             batch_settings.timeout,
-            client,
+            client.clone(),
         )
         .sink_map_err(|e| error!(message = "VM import sink error.", %e));
+        let hc = healthcheck(endpoint, client).boxed();
 
-        Ok((sinks::VectorSink::from_event_sink(sink), healthcheck))
+        Ok((sinks::VectorSink::from_event_sink(sink), hc))
     }
 
     fn input(&self) -> Input {
@@ -101,18 +102,13 @@ impl SinkConfig for VMImportConfig {
 }
 
 async fn healthcheck(endpoint: Uri, client: HttpClient) -> vector::Result<()> {
-    let request = http::Request::get(endpoint)
-        .body(hyper::Body::empty())
-        .unwrap();
-
+    let request = http::Request::get(endpoint).body(hyper::Body::empty())?;
     let response = client.send(request).await?;
-
     let status = response.status();
-    if status.is_success() {
-        Ok(())
-    } else {
-        Err(sinks::HealthcheckError::UnexpectedStatus { status }.into())
-    }
+    status
+        .is_success()
+        .then_some(())
+        .ok_or_else(move || sinks::HealthcheckError::UnexpectedStatus { status }.into())
 }
 
 struct VMImportSinkEventEncoder;
@@ -167,6 +163,12 @@ impl HttpEventEncoder<Value> for VMImportSinkEventEncoder {
 #[derive(Clone)]
 struct VMImportSink {
     endpoint: Uri,
+}
+
+impl VMImportSink {
+    const fn new(endpoint: Uri) -> Self {
+        Self { endpoint }
+    }
 }
 
 #[async_trait::async_trait]

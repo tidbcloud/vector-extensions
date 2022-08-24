@@ -1,12 +1,16 @@
-use std::{net::SocketAddr, pin::Pin};
+#![allow(dead_code)]
+
+use std::net::SocketAddr;
+use std::pin::Pin;
 
 use futures::Stream;
 use futures_util::stream;
-use tonic::{transport::ServerTlsConfig, Request, Response, Status};
+use tonic::transport::ServerTlsConfig;
+use tonic::{Request, Response, Status};
 
-use super::proto::{
-    top_sql_pub_sub_server::{TopSqlPubSub, TopSqlPubSubServer},
-    top_sql_sub_response::RespOneof,
+use crate::upstream::tidb::proto::top_sql_pub_sub_server::{TopSqlPubSub, TopSqlPubSubServer};
+use crate::upstream::tidb::proto::top_sql_sub_response::RespOneof;
+use crate::upstream::tidb::proto::{
     PlanMeta, SqlMeta, TopSqlRecord, TopSqlRecordItem, TopSqlSubRequest, TopSqlSubResponse,
 };
 

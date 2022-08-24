@@ -1,14 +1,18 @@
-use std::{net::SocketAddr, pin::Pin};
+use std::net::SocketAddr;
+use std::pin::Pin;
 
 use futures::Stream;
 use futures_util::stream;
 use prost::Message;
-use tonic::{transport::ServerTlsConfig, Request, Response, Status};
-use vector::sources::topsql::upstream::tidb::proto::ResourceGroupTag;
+use tonic::transport::ServerTlsConfig;
+use tonic::{Request, Response, Status};
 
-use super::proto::{
-    resource_metering_pub_sub_server::{ResourceMeteringPubSub, ResourceMeteringPubSubServer},
-    resource_usage_record::RecordOneof,
+use crate::upstream::tidb::proto::ResourceGroupTag;
+use crate::upstream::tikv::proto::resource_metering_pub_sub_server::{
+    ResourceMeteringPubSub, ResourceMeteringPubSubServer,
+};
+use crate::upstream::tikv::proto::resource_usage_record::RecordOneof;
+use crate::upstream::tikv::proto::{
     GroupTagRecord, GroupTagRecordItem, ResourceMeteringRequest, ResourceUsageRecord,
 };
 

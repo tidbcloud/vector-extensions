@@ -17,14 +17,20 @@ clean:
 .PHONY: check
 check:
 	@echo "Checking..."
-	@cargo check
+	@cargo check --workspace --all-targets
 	@echo "Done checking."
 
 .PHONY: clippy
 clippy:
 	@echo "Running clippy..."
-	@cargo clippy
+	@cargo clippy --workspace --all-targets
 	@echo "Done running clippy."
+
+.PHONY: test
+test:
+	@echo "Testing..."
+	@cargo test --workspace
+	@echo "Done testing."
 
 .PHONY: build
 build:

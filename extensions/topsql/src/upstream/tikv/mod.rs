@@ -6,22 +6,19 @@ mod proto;
 #[cfg(test)]
 pub mod mock_upstream;
 
-use std::{future::Future, pin::Pin};
+use std::future::Future;
+use std::pin::Pin;
 
-use tokio::{
-    io::AsyncWriteExt,
-    net::{TcpListener, TcpStream},
-};
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_openssl::SslStream;
-use tonic::{
-    transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity},
-    Status, Streaming,
-};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
+use tonic::{Status, Streaming};
 use tracing::Instrument;
 use vector::tls::{tls_connector_builder, MaybeTlsSettings, TlsConfig};
 
-use super::{tls_proxy, Upstream};
 use crate::shutdown::ShutdownSubscriber;
+use crate::upstream::{tls_proxy, Upstream};
 
 pub struct TiKVUpstream;
 

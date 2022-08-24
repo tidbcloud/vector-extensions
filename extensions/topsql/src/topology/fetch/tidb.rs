@@ -1,14 +1,10 @@
-use std::{
-    collections::HashSet,
-    time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH},
-};
+use std::collections::HashSet;
+use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
 use snafu::{ResultExt, Snafu};
 
-use crate::topology::{
-    fetch::{models, utils},
-    Component, InstanceType,
-};
+use crate::topology::fetch::{models, utils};
+use crate::topology::{Component, InstanceType};
 
 #[derive(Debug, Snafu)]
 pub enum FetchError {

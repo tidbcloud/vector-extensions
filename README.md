@@ -56,6 +56,11 @@ cargo clippy --no-default-features --features vm-import
 make fmt
 ```
 
+### Test
+```bash
+make test
+```
+
 ## Build
 
 ### Build Dev

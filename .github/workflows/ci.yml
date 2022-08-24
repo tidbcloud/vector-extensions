@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    env:
+      RUST_BACKTRACE: 1
+      RUSTFLAGS: "-D warnings"
+    steps:
+    - uses: actions/checkout@v2
+
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Set up toolchains
+      uses: actions-rs/toolchain@v1
+      with:
+          components: rustfmt, clippy
+
+    - name: Check format
+      run: cargo fmt --all -- --check
+
+    - name: Lint
+      run: make clippy
+
+    - name: Test
+      run: make test
