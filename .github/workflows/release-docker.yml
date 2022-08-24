@@ -24,6 +24,12 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
+    - name: Configure AWS Credentials for DBaaS Dev
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        role-to-assume: arn:aws:iam::385595570414:role/cicd-role
+        aws-region: us-east-1
+
     - uses: actions/cache@v2
       with:
         path: |
@@ -43,12 +49,6 @@ jobs:
       uses: actions-rs/toolchain@v1
       with:
           components: rustfmt, clippy
-
-    - name: Configure AWS Credentials for DBaaS Dev
-      uses: aws-actions/configure-aws-credentials@v1
-      with:
-        role-to-assume: arn:aws:iam::385595570414:role/dbaas-dev
-        aws-region: us-east-1
 
     - name: Install cross
       run: cargo install cross
