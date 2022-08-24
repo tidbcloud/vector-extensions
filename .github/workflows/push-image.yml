@@ -1,4 +1,4 @@
-name: release-docker
+name: push-image
 
 permissions:
   id-token: write
@@ -30,9 +30,10 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-${{ runner.name }}-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
-          ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          ${{ runner.os }}-cargo-${{ runner.name }}-${{ hashFiles('**/Cargo.lock') }}
+          ${{ runner.os }}-cargo-${{ runner.name }}-
           ${{ runner.os }}-cargo-
 
     - uses: satackey/action-docker-layer-caching@v0.0.11
