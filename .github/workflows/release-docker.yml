@@ -1,0 +1,51 @@
+name: release-docker
+
+on:
+  push:
+    branches: [ master ]
+
+  # TODO: remove this after debug is done
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Set up toolchains
+      uses: actions-rs/toolchain@v1
+      with:
+          components: rustfmt, clippy
+
+    - name: Build Docker Image
+      run: |
+        echo "TAG=tidbcloud/vector:nightly-$(git log -1 --pretty=%h)" >> $GITHUB_ENV
+        make build-docker
+
+    - name: Configure AWS Credentials for DBaaS Dev
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        role-to-assume: arn:aws:iam::385595570414:role/dbaas-dev
+        aws-region: us-east-1
+
+    - name: Push to DBaaS Dev ECR
+      run: |
+        aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 385595570414.dkr.ecr.us-east-1.amazonaws.com
+        docker tag $TAG 385595570414.dkr.ecr.us-east-1.amazonaws.com/$TAG
+        docker push 385595570414.dkr.ecr.us-east-1.amazonaws.com/$TAG
