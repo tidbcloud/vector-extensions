@@ -32,6 +32,8 @@ jobs:
       uses: actions-rs/toolchain@v1
       with:
           components: rustfmt, clippy
+
+    - name: Install cross
       run: cargo install cross
 
     - name: Build Docker Image
