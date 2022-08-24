@@ -152,32 +152,32 @@ impl TopologyFetcher {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use vector::tls::TlsConfig;
+// #[cfg(test)]
+// mod tests {
+//     use vector::tls::TlsConfig;
 
-    use super::*;
+//     use super::*;
 
-    #[tokio::test]
-    async fn t() {
-        let tls_config = Some(TlsConfig {
-            ca_file: Some("/home/zhongzc/.tiup/storage/cluster/clusters/tmp/tls/ca.crt".into()),
-            crt_file: Some(
-                "/home/zhongzc/.tiup/storage/cluster/clusters/tmp/tls/client.crt".into(),
-            ),
-            key_file: Some(
-                "/home/zhongzc/.tiup/storage/cluster/clusters/tmp/tls/client.pem".into(),
-            ),
-            ..Default::default()
-        });
+//     #[tokio::test]
+//     async fn t() {
+//         let tls_config = Some(TlsConfig {
+//             ca_file: Some("/home/zhongzc/.tiup/storage/cluster/clusters/tmp/tls/ca.crt".into()),
+//             crt_file: Some(
+//                 "/home/zhongzc/.tiup/storage/cluster/clusters/tmp/tls/client.crt".into(),
+//             ),
+//             key_file: Some(
+//                 "/home/zhongzc/.tiup/storage/cluster/clusters/tmp/tls/client.pem".into(),
+//             ),
+//             ..Default::default()
+//         });
 
-        let proxy_config = ProxyConfig::from_env();
-        let mut fetcher =
-            TopologyFetcher::new("localhost:2379".to_owned(), tls_config, &proxy_config)
-                .await
-                .unwrap();
-        let mut components = HashSet::new();
-        fetcher.get_up_components(&mut components).await.unwrap();
-        // println!("{:#?}", components);
-    }
-}
+//         let proxy_config = ProxyConfig::from_env();
+//         let mut fetcher =
+//             TopologyFetcher::new("localhost:2379".to_owned(), tls_config, &proxy_config)
+//                 .await
+//                 .unwrap();
+//         let mut components = HashSet::new();
+//         fetcher.get_up_components(&mut components).await.unwrap();
+//         // println!("{:#?}", components);
+//     }
+// }
