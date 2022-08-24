@@ -1,0 +1,63 @@
+name: push_image
+
+permissions:
+  id-token: write
+  contents: read
+
+on:
+  push:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  push-image:
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
+          ${{ runner.os }}-cargo-push_image-
+          ${{ runner.os }}-cargo-
+
+    - uses: satackey/action-docker-layer-caching@v0.0.11
+      # Ignore the failure of a step and avoid terminating the job.
+      continue-on-error: true
+
+    - name: Set up toolchains
+      uses: actions-rs/toolchain@v1
+      with:
+          components: rustfmt, clippy
+
+    - name: Install cross
+      run: cargo install cross
+
+    - name: Set Tag
+      run: echo "TAG=tidbcloud/vector:nightly-$(git log -1 --pretty=%h)" >> $GITHUB_ENV
+
+    - name: Build Docker Image
+      run: make build-docker
+
+    - name: Configure AWS Credentials for DBaaS Dev
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        role-to-assume: arn:aws:iam::385595570414:role/vector-cicd
+        aws-region: us-east-1
+
+    - name: Push to DBaaS Dev ECR
+      run: |
+        aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 385595570414.dkr.ecr.us-east-1.amazonaws.com
+        docker tag $TAG 385595570414.dkr.ecr.us-east-1.amazonaws.com/$TAG
+        docker push 385595570414.dkr.ecr.us-east-1.amazonaws.com/$TAG

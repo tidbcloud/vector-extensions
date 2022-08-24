@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [ master ]
+
   pull_request:
     branches: [ master ]
 
@@ -27,7 +28,11 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-ci-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-ci-${{ hashFiles('**/Cargo.lock') }}
+          ${{ runner.os }}-cargo-ci-
+          ${{ runner.os }}-cargo-
 
     - name: Set up toolchains
       uses: actions-rs/toolchain@v1

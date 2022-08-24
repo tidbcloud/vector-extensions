@@ -35,7 +35,8 @@ VERSION="${VECTOR_VERSION:-"$(scripts/version.sh)"}"
 REPO="${REPO:-"tidbcloud/vector"}"
 BASE=alpine
 
-TAG="$REPO:$VERSION-$BASE"
+TAG="${TAG:-$REPO:$VERSION-$BASE}"
 DOCKERFILE="scripts/docker/Dockerfile"
 
+echo "Building docker image: $TAG"
 docker build -t "$TAG" -f "$DOCKERFILE" "$WORK_DIR"
