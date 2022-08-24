@@ -1,5 +1,9 @@
 name: release-docker
 
+permissions:
+  id-token: write
+  contents: read
+
 on:
   push:
     branches: [ master ]
@@ -40,20 +44,20 @@ jobs:
       with:
           components: rustfmt, clippy
 
-    - name: Install cross
-      run: cargo install cross
-
-    - name: Build Docker Image
-      run: |
-        echo "TAG=tidbcloud/vector:nightly-$(git log -1 --pretty=%h)" >> $GITHUB_ENV
-        echo $TAG
-        make build-docker
-
     - name: Configure AWS Credentials for DBaaS Dev
       uses: aws-actions/configure-aws-credentials@v1
       with:
         role-to-assume: arn:aws:iam::385595570414:role/dbaas-dev
         aws-region: us-east-1
+
+    - name: Install cross
+      run: cargo install cross
+
+    - name: Set Tag
+      run: echo "TAG=tidbcloud/vector:nightly-$(git log -1 --pretty=%h)" >> $GITHUB_ENV
+
+    - name: Build Docker Image
+      run: make build-docker
 
     - name: Push to DBaaS Dev ECR
       run: |
