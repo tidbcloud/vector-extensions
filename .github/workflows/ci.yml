@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [ master ]
-  pull_request:
-    branches: [ master ]
+
+  # TODO: remove this after debug is done
+  # pull_request:
+  #   branches: [ master ]
 
 env:
   CARGO_TERM_COLOR: always

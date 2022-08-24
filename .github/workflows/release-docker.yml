@@ -31,11 +31,13 @@ jobs:
     - name: Set up toolchains
       uses: actions-rs/toolchain@v1
       with:
-          components: rustfmt, clippy, cross
+          components: rustfmt, clippy
+      run: cargo install cross
 
     - name: Build Docker Image
       run: |
         echo "TAG=tidbcloud/vector:nightly-$(git log -1 --pretty=%h)" >> $GITHUB_ENV
+        echo $TAG
         make build-docker
 
     - name: Configure AWS Credentials for DBaaS Dev
