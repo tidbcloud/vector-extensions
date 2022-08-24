@@ -18,6 +18,7 @@ jobs:
     env:
       RUST_BACKTRACE: 1
       RUSTFLAGS: "-D warnings"
+      AUTOINSTALL: "true"
     steps:
     - uses: actions/checkout@v2
 

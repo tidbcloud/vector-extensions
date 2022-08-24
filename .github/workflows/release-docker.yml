@@ -12,10 +12,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
     env:
       RUST_BACKTRACE: 1
+      AUTOINSTALL: "true"
 
     steps:
     - uses: actions/checkout@v2
