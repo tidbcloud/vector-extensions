@@ -1,4 +1,4 @@
-name: push-image
+name: push_image
 
 permissions:
   id-token: write
@@ -16,7 +16,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
+  push-image:
     runs-on: ubuntu-latest
     env:
       RUST_BACKTRACE: 1
@@ -30,10 +30,10 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
           target
-        key: ${{ runner.os }}-cargo-${{ runner.name }}-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
-          ${{ runner.os }}-cargo-${{ runner.name }}-${{ hashFiles('**/Cargo.lock') }}
-          ${{ runner.os }}-cargo-${{ runner.name }}-
+          ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
+          ${{ runner.os }}-cargo-push_image-
           ${{ runner.os }}-cargo-
 
     - uses: satackey/action-docker-layer-caching@v0.0.11
