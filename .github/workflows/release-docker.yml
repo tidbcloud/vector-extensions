@@ -27,7 +27,7 @@ jobs:
     - name: Configure AWS Credentials for DBaaS Dev
       uses: aws-actions/configure-aws-credentials@v1
       with:
-        role-to-assume: arn:aws:iam::385595570414:role/cicd-role
+        role-to-assume: arn:aws:iam::385595570414:role/vector-cicd
         aws-region: us-east-1
 
     - uses: actions/cache@v2
