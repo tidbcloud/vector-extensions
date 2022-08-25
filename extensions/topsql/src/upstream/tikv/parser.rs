@@ -33,7 +33,7 @@ impl ResourceUsageRecordParser {
         let mut logs = vec![];
 
         let (sql_digest, plan_digest, tag_label) = decoded.unwrap();
-        let mut buf = Buf::new();
+        let mut buf = Buf::default();
         buf.instance(instance)
             .instance_type(INSTANCE_TYPE_TIKV)
             .sql_digest(sql_digest)

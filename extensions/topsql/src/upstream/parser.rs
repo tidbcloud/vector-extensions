@@ -19,8 +19,8 @@ pub struct Buf {
     values: Vec<f64>,
 }
 
-impl Buf {
-    pub fn new() -> Self {
+impl Default for Buf {
+    fn default() -> Self {
         Self {
             labels: vec![
                 (LABEL_NAME, String::new()),
@@ -34,7 +34,9 @@ impl Buf {
             values: vec![],
         }
     }
+}
 
+impl Buf {
     pub fn label_name(&mut self, label_name: impl Into<String>) -> &mut Self {
         self.labels[0].1 = label_name.into();
         self
