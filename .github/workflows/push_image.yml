@@ -32,10 +32,6 @@ jobs:
           ${{ runner.os }}-cargo-push_image-
           ${{ runner.os }}-cargo-
 
-    - uses: satackey/action-docker-layer-caching@v0.0.11
-      # Ignore the failure of a step and avoid terminating the job.
-      continue-on-error: true
-
     - name: Set up toolchains
       uses: actions-rs/toolchain@v1
       with:
@@ -44,7 +40,7 @@ jobs:
     - name: Install cross
       run: cargo install cross
 
-    - name: Set Tag
+    - name: Set Image Tag
       run: echo "TAG=tidbcloud/vector:nightly-$(git log -1 --pretty=%h)" >> $GITHUB_ENV
 
     - name: Build Docker Image
