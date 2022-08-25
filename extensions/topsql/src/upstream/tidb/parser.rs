@@ -33,7 +33,7 @@ impl TopSqlSubResponseParser {
     fn parse_tidb_record(record: TopSqlRecord, instance: String) -> Vec<LogEvent> {
         let mut logs = vec![];
 
-        let mut buf = Buf::new();
+        let mut buf = Buf::default();
         buf.instance(instance)
             .instance_type(INSTANCE_TYPE_TIDB)
             .sql_digest(hex::encode_upper(record.sql_digest))

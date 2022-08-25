@@ -4,6 +4,9 @@ version = "0.0.1"
 edition = "2021"
 publish = false
 
+[features]
+vm-test = []
+
 [dependencies]
 vector = { git = "https://github.com/tidbcloud/vector", default-features = false }
 vector_core = { git = "https://github.com/tidbcloud/vector", default-features = false, features = ["vrl", "test"] }

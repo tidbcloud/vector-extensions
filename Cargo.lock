@@ -4607,6 +4607,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+ "topsql",
  "tracing 0.1.36",
  "typetag",
  "vector",
