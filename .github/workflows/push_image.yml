@@ -44,8 +44,10 @@ jobs:
     - name: Install cross
       run: cargo install cross
 
-    - name: Set Tag
-      run: echo "TAG=tidbcloud/vector:nightly-$(git log -1 --pretty=%h)" >> $GITHUB_ENV
+    - name: Set Meta
+      run: |
+        echo "TAG=tidbcloud/vector:nightly-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+        echo "VECTOR_BUILD_DESC=$(git rev-parse --short HEAD) $(date +%Y-%m-%d)" >> $GITHUB_ENV
 
     - name: Build Docker Image
       run: make build-docker
