@@ -114,9 +114,9 @@ dependencies = [
 
 [[package]]
 name = "async-graphql"
-version = "4.0.10"
+version = "4.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0f570077882d069295e01719d65dc623551629738cf178f66bbdb244be4b0cd"
+checksum = "c7b02e998ce53a096f604ba445c184c5c36e9b6b4481932ffe8ab957ee66fd8a"
 dependencies = [
  "async-graphql-derive",
  "async-graphql-parser",
@@ -143,9 +143,9 @@ dependencies = [
 
 [[package]]
 name = "async-graphql-derive"
-version = "4.0.10"
+version = "4.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcea28b07ab74109662df27b008fb97251340dcadd0e2fe589ebca5bd2b6f443"
+checksum = "ae1398cbdd9c9a6aeb9ccccf97403a8df4e8700e2277edea8492f85087216ec5"
 dependencies = [
  "Inflector",
  "async-graphql-parser",
@@ -159,9 +159,9 @@ dependencies = [
 
 [[package]]
 name = "async-graphql-parser"
-version = "4.0.10"
+version = "4.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be05e1d1c34f479c424c4986c5e67fc33c2e92624012d63876439ed6cce0de12"
+checksum = "834e268ed45d8e339d0317b5befe322921aa8a3a086b2f4dde8cd4ccc8564b1d"
 dependencies = [
  "async-graphql-value",
  "pest",
@@ -173,9 +173,9 @@ dependencies = [
 
 [[package]]
 name = "async-graphql-value"
-version = "4.0.10"
+version = "4.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9c973faf966c7e834a028ac6e0d1022d71f71296e88dae18030fa25eb461818"
+checksum = "95f7138ffe88caeb752676bb462d15eedd772cbf9e02e0da2e2daae2fab11c9c"
 dependencies = [
  "bytes 1.2.1",
  "indexmap",
@@ -623,7 +623,7 @@ dependencies = [
 [[package]]
 name = "codecs"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "avro-rs",
  "bytes 1.2.1",
@@ -886,7 +886,7 @@ dependencies = [
 [[package]]
 name = "datadog-filter"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "datadog-search-syntax",
  "dyn-clone",
@@ -896,7 +896,7 @@ dependencies = [
 [[package]]
 name = "datadog-grok"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "bytes 1.2.1",
  "chrono",
@@ -921,7 +921,7 @@ dependencies = [
 [[package]]
 name = "datadog-search-syntax"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "itertools",
  "once_cell",
@@ -1070,7 +1070,7 @@ checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 [[package]]
 name = "enrichment"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -1112,9 +1112,9 @@ dependencies = [
 
 [[package]]
 name = "erased-serde"
-version = "0.3.22"
+version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "003000e712ad0f95857bd4d2ef8d1890069e06554101697d12050668b2f6f020"
+checksum = "54558e0ba96fbe24280072642eceb9d7d442e32c7ec0ea9e7ecd7b4ea2cf4e11"
 dependencies = [
  "serde",
 ]
@@ -1973,7 +1973,7 @@ dependencies = [
 [[package]]
 name = "lookup"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "inherent",
  "lalrpop",
@@ -2708,7 +2708,7 @@ checksum = "b303a15aeda678da614ab23306232dbd282d532f8c5919cedd41b66b9dc96560"
 [[package]]
 name = "portpicker"
 version = "1.0.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "rand 0.8.5",
 ]
@@ -4044,7 +4044,7 @@ dependencies = [
 [[package]]
 name = "tracing-limit"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "dashmap",
  "tracing-core 0.1.29",
@@ -4297,7 +4297,7 @@ checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
 [[package]]
 name = "value"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "async-graphql",
  "bytes 1.2.1",
@@ -4322,7 +4322,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "vector"
 version = "0.24.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4426,7 +4426,7 @@ dependencies = [
 [[package]]
 name = "vector-vrl-functions"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "lookup",
  "value",
@@ -4436,7 +4436,7 @@ dependencies = [
 [[package]]
 name = "vector_buffers"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "async-recursion",
  "async-stream",
@@ -4467,7 +4467,7 @@ dependencies = [
 [[package]]
 name = "vector_common"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "async-stream",
  "bytes 1.2.1",
@@ -4494,7 +4494,7 @@ dependencies = [
 [[package]]
 name = "vector_config"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "encoding_rs",
  "indexmap",
@@ -4511,7 +4511,7 @@ dependencies = [
 [[package]]
 name = "vector_config_common"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
@@ -4523,7 +4523,7 @@ dependencies = [
 [[package]]
 name = "vector_config_macros"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
@@ -4536,7 +4536,7 @@ dependencies = [
 [[package]]
 name = "vector_core"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "async-trait",
  "bitmask-enum",
@@ -4616,7 +4616,7 @@ dependencies = [
 [[package]]
 name = "vrl"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "bytes 1.2.1",
  "indoc",
@@ -4632,7 +4632,7 @@ dependencies = [
 [[package]]
 name = "vrl-compiler"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "anymap",
  "bytes 1.2.1",
@@ -4657,7 +4657,7 @@ dependencies = [
 [[package]]
 name = "vrl-core"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "lookup",
  "value",
@@ -4667,7 +4667,7 @@ dependencies = [
 [[package]]
 name = "vrl-diagnostic"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "codespan-reporting",
  "termcolor",
@@ -4676,7 +4676,7 @@ dependencies = [
 [[package]]
 name = "vrl-parser"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "lalrpop",
  "lalrpop-util",
@@ -4690,7 +4690,7 @@ dependencies = [
 [[package]]
 name = "vrl-stdlib"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extendability#6b870fd31ae478061166e44bd684f74350f7b5bf"
+source = "git+https://github.com/zhongzc/vector?branch=extendability#02446c5050cb6dbd6cb7b9fec104c915855794fb"
 dependencies = [
  "aes",
  "base64",
