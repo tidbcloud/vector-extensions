@@ -22,31 +22,31 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
-          ${{ runner.os }}-cargo-push_image-
-          ${{ runner.os }}-cargo-
+    # - uses: actions/cache@v2
+    #   with:
+    #     path: |
+    #       ~/.cargo/registry
+    #       ~/.cargo/git
+    #       target
+    #     key: ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
+    #     restore-keys: |
+    #       ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
+    #       ${{ runner.os }}-cargo-push_image-
+    #       ${{ runner.os }}-cargo-
 
-    - uses: satackey/action-docker-layer-caching@v0.0.11
-      # Ignore the failure of a step and avoid terminating the job.
-      continue-on-error: true
+    # - uses: satackey/action-docker-layer-caching@v0.0.11
+    #   # Ignore the failure of a step and avoid terminating the job.
+    #   continue-on-error: true
 
-    - name: Set up toolchains
-      uses: actions-rs/toolchain@v1
-      with:
-          components: rustfmt, clippy
+    # - name: Set up toolchains
+    #   uses: actions-rs/toolchain@v1
+    #   with:
+    #       components: rustfmt, clippy
 
-    - name: Install cross
-      run: cargo install cross
+    # - name: Install cross
+    #   run: cargo install cross
 
-    - name: Set Image Tag
+    - name: Set Meta
       run: |
         echo "TAG=tidbcloud/vector:nightly-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
         echo "VECTOR_BUILD_DESC=$(git rev-parse --short HEAD) $(date +%Y-%m-%d)" >> $GITHUB_ENV
