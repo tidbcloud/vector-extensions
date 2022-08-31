@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use ordered_float::NotNan;
-use vector::event::{EventMetadata, LogEvent, Value};
+use vector::event::{LogEvent, Value};
 
 use crate::upstream::consts::{
     LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, METRIC_NAME_INSTANCE,
@@ -32,7 +32,7 @@ pub fn make_metric_like_log_event(
     log.insert("labels".to_owned(), Value::Object(labels_map));
     log.insert("timestamps".to_owned(), Value::Array(timestamps_vec));
     log.insert("values".to_owned(), Value::Array(values_vec));
-    LogEvent::from_map(log, EventMetadata::default())
+    log.into()
 }
 
 pub fn instance_event(instance: String, instance_type: String) -> LogEvent {
