@@ -71,6 +71,7 @@ impl SinkConfig for VMImportConfig {
             request_settings,
             batch_settings.timeout,
             client.clone(),
+            cx.acker(),
         )
         .sink_map_err(|e| error!(message = "VM import sink error.", %e));
         let hc = healthcheck(endpoint, client).boxed();
