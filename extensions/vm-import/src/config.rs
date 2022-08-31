@@ -1,10 +1,11 @@
 use futures_util::{FutureExt, SinkExt};
-use http::Uri;
 use serde::{Deserialize, Serialize};
 use vector::config::{AcknowledgementsConfig, GenerateConfig, Input, SinkConfig, SinkDescription};
 use vector::http::HttpClient;
-use vector::sinks::util::http::BatchedHttpSink;
-use vector::sinks::util::{BatchConfig, JsonArrayBuffer, SinkBatchSettings, TowerRequestConfig};
+use vector::sinks::util::http::PartitionHttpSink;
+use vector::sinks::util::{
+    BatchConfig, JsonArrayBuffer, PartitionBuffer, SinkBatchSettings, TowerRequestConfig,
+};
 use vector::tls::{TlsConfig, TlsSettings};
 use vector::{config, sinks};
 
@@ -17,6 +18,7 @@ inventory::submit! {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct VMImportConfig {
     pub endpoint: String,
+    pub healthcheck_endpoint: Option<String>,
     pub tls: Option<TlsConfig>,
 
     #[serde(default)]
@@ -42,6 +44,7 @@ impl GenerateConfig for VMImportConfig {
             tls: Default::default(),
             batch: Default::default(),
             request: Default::default(),
+            healthcheck_endpoint: Default::default(),
 
             endpoint: sample_url.to_owned(),
         })
@@ -56,16 +59,17 @@ impl SinkConfig for VMImportConfig {
         &self,
         cx: config::SinkContext,
     ) -> vector::Result<(sinks::VectorSink, sinks::Healthcheck)> {
-        let endpoint = self.endpoint.parse::<Uri>()?;
+        let endpoint_tmp = self.endpoint.clone().try_into()?;
+
         let tls_settings = TlsSettings::from_options(&self.tls)?;
         let batch_settings = self.batch.into_batch_settings()?;
         let request_settings = self.request.unwrap_with(&Default::default());
 
         let client = HttpClient::new(tls_settings, cx.proxy())?;
-        let sink = VMImportSink::new(endpoint.clone());
-        let buffer = JsonArrayBuffer::new(batch_settings.size);
+        let sink = VMImportSink::new(endpoint_tmp);
+        let buffer = PartitionBuffer::new(JsonArrayBuffer::new(batch_settings.size));
 
-        let sink = BatchedHttpSink::new(
+        let sink = PartitionHttpSink::new(
             sink,
             buffer,
             request_settings,
@@ -74,7 +78,7 @@ impl SinkConfig for VMImportConfig {
             cx.acker(),
         )
         .sink_map_err(|e| error!(message = "VM import sink error.", %e));
-        let hc = healthcheck(endpoint, client).boxed();
+        let hc = healthcheck(self.healthcheck_endpoint.clone(), client).boxed();
 
         Ok((sinks::VectorSink::from_event_sink(sink), hc))
     }
@@ -92,7 +96,11 @@ impl SinkConfig for VMImportConfig {
     }
 }
 
-async fn healthcheck(endpoint: Uri, client: HttpClient) -> vector::Result<()> {
+async fn healthcheck(endpoint: Option<String>, client: HttpClient) -> vector::Result<()> {
+    let endpoint = match endpoint {
+        Some(endpoint) => endpoint,
+        None => return Ok(()),
+    };
     let request = http::Request::get(endpoint).body(hyper::Body::empty())?;
     let response = client.send(request).await?;
     let status = response.status();

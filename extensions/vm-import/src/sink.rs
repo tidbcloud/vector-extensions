@@ -4,34 +4,39 @@ use bytes::{BufMut, Bytes, BytesMut};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use http::{Request, Uri};
-use serde_json::Value;
 use vector::sinks::util::http::HttpSink;
-use vector::sinks::util::BoxedRawValue;
+use vector::sinks::util::{BoxedRawValue, PartitionInnerBuffer};
+use vector::template::Template;
 
 use crate::encoder::VMImportSinkEventEncoder;
+use crate::partition::PartitionKey;
 
 #[derive(Clone)]
 pub struct VMImportSink {
-    endpoint: Uri,
+    endpoint_template: Template,
 }
 
 impl VMImportSink {
-    pub const fn new(endpoint: Uri) -> Self {
-        Self { endpoint }
+    pub const fn new(endpoint_template: Template) -> Self {
+        Self { endpoint_template }
     }
 }
 
 #[async_trait::async_trait]
 impl HttpSink for VMImportSink {
-    type Input = Value;
-    type Output = Vec<BoxedRawValue>;
+    type Input = PartitionInnerBuffer<serde_json::Value, PartitionKey>;
+    type Output = PartitionInnerBuffer<Vec<BoxedRawValue>, PartitionKey>;
     type Encoder = VMImportSinkEventEncoder;
 
     fn build_encoder(&self) -> Self::Encoder {
-        VMImportSinkEventEncoder
+        VMImportSinkEventEncoder::new(self.endpoint_template.clone())
     }
 
-    async fn build_request(&self, events: Self::Output) -> vector::Result<Request<Bytes>> {
+    async fn build_request(&self, output: Self::Output) -> vector::Result<Request<Bytes>> {
+        let (events, key) = output.into_parts();
+
+        let uri = key.endpoint.parse::<Uri>()?;
+
         let buffer = BytesMut::new();
         let mut w = GzEncoder::new(buffer.writer(), Compression::default());
 
@@ -41,7 +46,7 @@ impl HttpSink for VMImportSink {
         }
         let body = w.finish()?.into_inner().freeze();
 
-        let builder = Request::post(self.endpoint.clone()).header("Content-Encoding", "gzip");
+        let builder = Request::post(uri).header("Content-Encoding", "gzip");
         let request = builder.body(body).unwrap();
 
         Ok(request)

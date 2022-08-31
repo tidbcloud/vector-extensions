@@ -3,6 +3,7 @@ extern crate tracing;
 
 mod config;
 mod encoder;
+mod partition;
 mod sink;
 
 // #[cfg(test)]
