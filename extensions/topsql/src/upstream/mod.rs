@@ -60,6 +60,8 @@ enum State {
     RetryDelay,
 }
 
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+
 impl TopSQLSource {
     pub fn new(
         component: Component,
@@ -107,6 +109,9 @@ impl TopSQLSource {
                 State::RetryNow => debug!("Retrying immediately."),
                 State::RetryDelay => {
                     self.retry_delay *= 2;
+                    if self.retry_delay > MAX_RETRY_DELAY {
+                        self.retry_delay = MAX_RETRY_DELAY;
+                    }
                     info!(
                         timeout_secs = self.retry_delay.as_secs_f64(),
                         "Retrying after timeout."
@@ -206,5 +211,6 @@ impl TopSQLSource {
 
     fn on_connected(&mut self) {
         self.retry_delay = self.init_retry_delay;
+        info!("Connected to the upstream.");
     }
 }
