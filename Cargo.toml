@@ -1,6 +1,6 @@
 [package]
 name = "vector-extensions"
-version = "0.22.3"
+version = "0.23.3"
 edition = "2021"
 readme = "README.md"
 publish = false
@@ -17,7 +17,7 @@ topsql = ["dep:topsql"]
 vm-import = ["dep:vm-import"]
 
 [dependencies]
-vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.22.3", default-features = false }
+vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false }
 
 # Extensions
 topsql = { path = "extensions/topsql", optional = true }
