@@ -149,7 +149,7 @@ mod tests {
                 .unwrap();
             let labels = event.get_mut("labels").unwrap();
             labels
-                .insert("cluster_id".to_owned(), Value::Bytes(Bytes::from("10086")))
+                .insert("cluster_id", Value::Bytes(Bytes::from("10086")))
                 .unwrap();
 
             let value = encoder.encode_event(event.into()).unwrap();

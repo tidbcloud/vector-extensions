@@ -2,10 +2,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use vector::config::{
-    GenerateConfig, Output, SourceConfig, SourceContext, SourceDescription, {self},
+    self, GenerateConfig, Output, SourceConfig, SourceContext, SourceDescription,
 };
 use vector::sources;
 use vector::tls::TlsConfig;
+use vector_core::config::LogNamespace;
 
 use crate::controller::Controller;
 
@@ -72,7 +73,7 @@ impl SourceConfig for TopSQLConfig {
         }))
     }
 
-    fn outputs(&self) -> Vec<Output> {
+    fn outputs(&self, _: LogNamespace) -> Vec<Output> {
         vec![Output::default(config::DataType::Log)]
     }
 
