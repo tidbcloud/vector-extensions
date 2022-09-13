@@ -148,8 +148,7 @@ mod tests {
                 .build_event()
                 .unwrap();
             let labels = event.get_mut("labels").unwrap();
-            labels
-                .insert("cluster_id", Value::Bytes(Bytes::from("10086")));
+            labels.insert("cluster_id", Value::Bytes(Bytes::from("10086")));
 
             let value = encoder.encode_event(event.into()).unwrap();
             let (json, key) = value.into_parts();
