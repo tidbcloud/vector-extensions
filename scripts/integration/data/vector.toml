@@ -1,0 +1,8 @@
+[sources.topsql]
+type = "topsql"
+pd_address = "127.0.0.1:2379"
+
+[sinks.vm]
+type = "vm_import"
+inputs = ["topsql"]
+endpoint = "http://127.0.0.1:8428/api/v1/import"
