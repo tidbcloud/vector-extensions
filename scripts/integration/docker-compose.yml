@@ -5,14 +5,14 @@ services:
     image: docker.io/victoriametrics/victoria-metrics:latest
     network_mode: host
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8428/health"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8428/health"]
   tidb-cluster:
     build:
       context: ${PWD}
       dockerfile: scripts/integration/tiup-playground.dockerfile
     network_mode: host
     healthcheck:
-      test: ["CMD", "curl", "http://localhost:10080/status"]
+      test: ["CMD", "curl", "http://127.0.0.1:10080/status"]
   vector:
     image: vector-build
     build:
@@ -46,5 +46,7 @@ services:
     command:
       - "cargo"
       - "test"
+      - "--test"
+      - "${CASE}"
     depends_on:
       - vector
