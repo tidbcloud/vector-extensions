@@ -4,9 +4,6 @@
 //
 // Please run `make test-integration` to set up environment and run the test cases.
 
-use std::future::Future;
-use std::time::Duration;
-
 use hyper::client::HttpConnector;
 use hyper::Client;
 
@@ -18,33 +15,18 @@ const VM_BASE_URL: &str = "http://127.0.0.1:8428/prometheus/api/v1";
 async fn topsql_vm() {
     let client = Client::new();
 
-    // wait for setup
-    wait_until(
-        retry_with_interval(
-            || async {
-                let body = request(&client, format!("{}/label/__name__/values", VM_BASE_URL))
-                    .await
-                    .unwrap();
-
-                Ok(body.contains("topsql_instance")
-                    && body.contains("topsql_sql_meta")
-                    && body.contains("topsql_plan_meta")
-                    && body.contains("topsql_cpu_time_ms")
-                    && body.contains("topsql_read_keys")
-                    && body.contains("topsql_stmt_exec_count")
-                    && body.contains("topsql_stmt_duration_sum_ns")
-                    && body.contains("topsql_stmt_duration_count"))
-            },
-            Duration::from_secs(10),
-        ),
-        Duration::from_secs(120),
-    )
-    .await
-    .expect("Timeout")
-    .unwrap();
-
-    // wait for data
-    tokio::time::sleep(Duration::from_secs(120)).await;
+    // assert series
+    let body = request(&client, format!("{}/label/__name__/values", VM_BASE_URL))
+        .await
+        .unwrap();
+    assert!(body.contains("topsql_instance"));
+    assert!(body.contains("topsql_sql_meta"));
+    assert!(body.contains("topsql_plan_meta"));
+    assert!(body.contains("topsql_cpu_time_ms"));
+    assert!(body.contains("topsql_read_keys"));
+    assert!(body.contains("topsql_stmt_exec_count"));
+    assert!(body.contains("topsql_stmt_duration_sum_ns"));
+    assert!(body.contains("topsql_stmt_duration_count"));
 
     // check instances
     let body = request(
@@ -153,41 +135,6 @@ async fn request(client: &Client<HttpConnector>, url: String) -> Result<String, 
     let bytes = hyper::body::to_bytes(body).await.unwrap();
     let result = String::from_utf8(bytes.into_iter().collect()).unwrap();
     Ok(result)
-}
-
-async fn retry_with_interval<F, Fut>(mut f: F, interval: Duration) -> Result<(), Error>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<bool, Error>>,
-{
-    let mut interval = tokio::time::interval(interval);
-    loop {
-        match f().await {
-            Ok(v) if v => return Ok(()),
-            Err(e) => return Err(e),
-            Ok(_) => {
-                interval.tick().await;
-            }
-        }
-    }
-}
-
-async fn wait_until<F, T>(f: F, timeout: Duration) -> Option<T>
-where
-    F: Future<Output = T>,
-{
-    let mut f = Box::pin(f);
-    let mut timeout = Box::pin(tokio::time::sleep(timeout));
-    loop {
-        tokio::select! {
-            res = &mut f => {
-                return Some(res);
-            }
-            _ = &mut timeout => {
-                return None;
-            }
-        }
-    }
 }
 
 fn build_url(url: String, queries: &[(&str, &str)]) -> String {

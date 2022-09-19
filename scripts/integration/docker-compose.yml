@@ -43,10 +43,10 @@ services:
   runner:
     image: vector-build
     network_mode: host
-    command:
-      - "cargo"
-      - "test"
-      - "--test"
-      - "${CASE}"
+    environment:
+      - CASE=${CASE}
+    command: /run-test.sh
+    volumes:
+      - ${PWD}/scripts/integration/data/run-test.sh:/run-test.sh
     depends_on:
       - vector
