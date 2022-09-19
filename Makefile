@@ -31,7 +31,7 @@ clippy:
 .PHONY: test
 test:
 	@echo "Testing..."
-	@cargo test --workspace
+	@cargo test --workspace --lib
 	@echo "Done testing."
 
 .PHONY: build
