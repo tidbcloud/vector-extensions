@@ -1,0 +1,22 @@
+name: integration_test
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+      RUSTFLAGS: "-D warnings"
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Integration Test
+      run: make test-integration
