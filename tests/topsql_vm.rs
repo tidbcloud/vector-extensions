@@ -74,7 +74,7 @@ async fn check_top(
 
     let meta_url = meta_url(&sql_digests);
     let body = request(client, meta_url).await.unwrap();
-    assert!(all_point_get(&body, k));
+    check_all_point_get(&body, k);
 }
 
 fn top_url(k: u32, metric: &str, instance: &str, instance_type: &str) -> String {
@@ -111,7 +111,7 @@ fn extract_sql_digests(body: &str) -> String {
         .join("|")
 }
 
-fn all_point_get(body: &str, count: u32) -> bool {
+fn check_all_point_get(body: &str, count: u32) {
     lazy_static::lazy_static! {
         static ref EXTRA_RE: regex::Regex = regex::Regex::new(r#""normalized_sql":"([^"]*)""#).unwrap();
         static ref MATCH_RE: regex::Regex = regex::Regex::new("select `c` from `sbtest\\d+` where `id` = ?").unwrap();
@@ -120,12 +120,16 @@ fn all_point_get(body: &str, count: u32) -> bool {
     let mut matched_count = 0;
     for cap in EXTRA_RE.captures_iter(body) {
         let sql = cap.get(1).unwrap().as_str();
-        if !MATCH_RE.is_match(sql) {
-            return false;
-        }
+        assert!(
+            MATCH_RE.is_match(sql),
+            "unexpected sql: {}, body: {}",
+            sql,
+            body
+        );
         matched_count += 1;
     }
-    matched_count == count
+
+    assert_eq!(matched_count, count, "body: {}", body);
 }
 
 async fn request(client: &Client<HttpConnector>, url: String) -> Result<String, Error> {
