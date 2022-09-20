@@ -54,7 +54,6 @@ async fn topsql_vm() {
         (5, "topsql_stmt_duration_sum_ns", "127.0.0.1:10080", "tidb"),
         (5, "topsql_cpu_time_ms", "127.0.0.1:20160", "tikv"),
         (5, "topsql_stmt_exec_count", "127.0.0.1:20160", "tikv"),
-        (5, "topsql_read_keys", "127.0.0.1:20160", "tikv"),
     ];
     for (top, metric, instance, instance_type) in cases {
         check_top(&client, top, metric, instance, instance_type).await;
