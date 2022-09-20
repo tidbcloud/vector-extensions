@@ -69,12 +69,12 @@ async fn check_top(
     instance_type: &str,
 ) {
     let url = top_url(k, metric, instance, instance_type);
-    let body = request(client, url).await.unwrap();
-    let sql_digests = extract_sql_digests(&body);
+    let top_body = request(client, url).await.unwrap();
+    let sql_digests = extract_sql_digests(&top_body);
 
     let meta_url = meta_url(&sql_digests);
-    let body = request(client, meta_url).await.unwrap();
-    check_all_point_get(&body, k);
+    let sql_body = request(client, meta_url).await.unwrap();
+    check_all_point_get(&sql_body, k, metric, instance, instance_type, &top_body);
 }
 
 fn top_url(k: u32, metric: &str, instance: &str, instance_type: &str) -> String {
@@ -111,7 +111,14 @@ fn extract_sql_digests(body: &str) -> String {
         .join("|")
 }
 
-fn check_all_point_get(body: &str, count: u32) {
+fn check_all_point_get(
+    body: &str,
+    count: u32,
+    metric: &str,
+    instance: &str,
+    instance_type: &str,
+    top_body: &str,
+) {
     lazy_static::lazy_static! {
         static ref EXTRA_RE: regex::Regex = regex::Regex::new(r#""normalized_sql":"([^"]*)""#).unwrap();
         static ref MATCH_RE: regex::Regex = regex::Regex::new("select `c` from `sbtest\\d+` where `id` = ?").unwrap();
@@ -122,14 +129,22 @@ fn check_all_point_get(body: &str, count: u32) {
         let sql = cap.get(1).unwrap().as_str();
         assert!(
             MATCH_RE.is_match(sql),
-            "unexpected sql: {}, body: {}",
+            "unexpected sql: {}, body: {}, metric: {}, instance: {}, instance_type: {}, top_body: {}",
             sql,
-            body
+            body,
+            metric,
+            instance,
+            instance_type,
+            top_body,
         );
         matched_count += 1;
     }
 
-    assert_eq!(matched_count, count, "body: {}", body);
+    assert_eq!(
+        matched_count, count,
+        "body: {}, metric: {}, instance: {}, instance_type: {}, top_body: {}",
+        body, metric, instance, instance_type, top_body
+    );
 }
 
 async fn request(client: &Client<HttpConnector>, url: String) -> Result<String, Error> {
