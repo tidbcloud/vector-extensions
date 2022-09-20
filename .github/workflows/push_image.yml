@@ -20,22 +20,6 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-push_image-${{ hashFiles('**/Cargo.lock') }}
-          ${{ runner.os }}-cargo-push_image-
-          ${{ runner.os }}-cargo-
-
-    - uses: satackey/action-docker-layer-caching@v0.0.11
-      # Ignore the failure of a step and avoid terminating the job.
-      continue-on-error: true
-
     - name: Set up toolchains
       uses: actions-rs/toolchain@v1
       with:
