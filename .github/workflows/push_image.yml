@@ -7,8 +7,6 @@ permissions:
 on:
   push:
     branches: [ master ]
-  pull_request:
-    branches: [ master ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -38,14 +36,14 @@ jobs:
     - name: Build Docker Image
       run: make build-docker
 
-    # - name: Configure AWS Credentials for DBaaS Dev
-    #   uses: aws-actions/configure-aws-credentials@v1
-    #   with:
-    #     role-to-assume: arn:aws:iam::385595570414:role/vector-cicd
-    #     aws-region: us-west-2
+    - name: Configure AWS Credentials for DBaaS Dev
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        role-to-assume: arn:aws:iam::385595570414:role/vector-cicd
+        aws-region: us-west-2
 
-    # - name: Push to DBaaS Dev ECR
-    #   run: |
-    #     aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 385595570414.dkr.ecr.us-west-2.amazonaws.com
-    #     docker tag $TAG 385595570414.dkr.ecr.us-west-2.amazonaws.com/$TAG
-    #     docker push 385595570414.dkr.ecr.us-west-2.amazonaws.com/$TAG
+    - name: Push to DBaaS Dev ECR
+      run: |
+        aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 385595570414.dkr.ecr.us-west-2.amazonaws.com
+        docker tag $TAG 385595570414.dkr.ecr.us-west-2.amazonaws.com/$TAG
+        docker push 385595570414.dkr.ecr.us-west-2.amazonaws.com/$TAG
