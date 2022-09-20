@@ -23,6 +23,13 @@ vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", defa
 topsql = { path = "extensions/topsql", optional = true }
 vm-import = { path = "extensions/vm-import", optional = true }
 
+[dev-dependencies]
+hyper = { version = "0.14.20", default-features = false, features = ["client", "runtime", "http1", "http2", "server", "stream"] }
+tokio = { version = "1.20.1", default-features = false, features = ["full"] }
+url = "2.3.1"
+regex = "1.6.0"
+lazy_static = "1.4.0"
+
 [workspace]
 members = [
     "extensions/topsql",

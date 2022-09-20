@@ -1,0 +1,52 @@
+version: "3"
+
+services:
+  vm:
+    image: docker.io/victoriametrics/victoria-metrics:latest
+    network_mode: host
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8428/health"]
+  tidb-cluster:
+    build:
+      context: ${PWD}
+      dockerfile: scripts/integration/tiup-playground.dockerfile
+    network_mode: host
+    healthcheck:
+      test: ["CMD", "curl", "http://127.0.0.1:10080/status"]
+  vector:
+    image: vector-build
+    build:
+      context: ${PWD}
+      dockerfile: scripts/integration/vector.dockerfile
+      args:
+        - RUST_VERSION=${RUST_VERSION}
+    network_mode: host
+    command: /target/debug/vector --config /etc/vector/vector.toml
+    volumes:
+      - ${PWD}/scripts/integration/data/vector.toml:/etc/vector/vector.toml
+    depends_on:
+      vm:
+        condition: service_healthy
+      tidb-cluster:
+        condition: service_healthy
+      sysbench:
+        condition: service_started
+  sysbench:
+    image: docker.io/severalnines/sysbench:latest
+    network_mode: host
+    command: /sysbench.sh
+    volumes:
+      - ${PWD}/scripts/integration/data/sysbench.sh:/sysbench.sh
+    depends_on:
+      tidb-cluster:
+        condition: service_healthy
+  runner:
+    image: vector-build
+    network_mode: host
+    environment:
+      - CASE=${CASE}
+    command: /run-test.sh
+    volumes:
+      - ${PWD}/scripts/integration/data/run-test.sh:/run-test.sh
+    depends_on:
+      - vector

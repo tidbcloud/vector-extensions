@@ -1,0 +1,8 @@
+*
+!extensions
+!scripts
+!src
+!tests
+!Cargo.lock
+!Cargo.toml
+!rust-toolchain

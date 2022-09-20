@@ -1,5 +1,7 @@
 export AUTOINSTALL ?= false
 
+export RUST_VERSION ?= $(shell cat rust-toolchain)
+
 EMPTY:=
 
 .PHONY: fmt
@@ -29,7 +31,7 @@ clippy:
 .PHONY: test
 test:
 	@echo "Testing..."
-	@cargo test --workspace
+	@cargo test --workspace --lib
 	@echo "Done testing."
 
 .PHONY: build
@@ -103,3 +105,11 @@ build-docker: target/x86_64-unknown-linux-musl/release/vector
 	@echo "Building docker image..."
 	@scripts/build-docker.sh
 	@echo "Done building docker image."
+
+.PHONY: test-integration
+test-integration:
+	@echo "Running integration tests..."
+	RUST_VERSION=${RUST_VERSION} CASE=topsql_vm docker-compose -f scripts/integration/docker-compose.yml build
+	RUST_VERSION=${RUST_VERSION} CASE=topsql_vm docker-compose -f scripts/integration/docker-compose.yml run --rm runner
+	RUST_VERSION=${RUST_VERSION} CASE=topsql_vm docker-compose -f scripts/integration/docker-compose.yml rm --force --stop -v
+	@echo "Done running integration tests."
