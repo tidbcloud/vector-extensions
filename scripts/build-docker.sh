@@ -28,12 +28,12 @@ trap cleanup EXIT
 
 ## build docker image in the setup directory
 
-cp target/x86_64-unknown-linux-musl/release/vector "$WORK_DIR"
+cp target/x86_64-unknown-linux-gnu/release/vector "$WORK_DIR"
 cp config/vector.toml "$WORK_DIR"
 
 VERSION="${VECTOR_VERSION:-"$(scripts/version.sh)"}"
 REPO="${REPO:-"tidbcloud/vector"}"
-BASE=alpine
+BASE=debian
 
 TAG="${TAG:-$REPO:$VERSION-$BASE}"
 DOCKERFILE="scripts/docker/Dockerfile"

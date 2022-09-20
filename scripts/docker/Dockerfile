@@ -1,10 +1,10 @@
-FROM docker.io/alpine:3.14
-RUN apk --no-cache add ca-certificates tzdata
+FROM docker.io/debian:bullseye-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata systemd
 
-COPY vector /usr/local/bin/
+COPY vector /usr/bin/vector
 COPY vector.toml /etc/vector/vector.toml
 
 # Smoke test
 RUN ["vector", "--version"]
 
-ENTRYPOINT ["/usr/local/bin/vector"]
+ENTRYPOINT ["/usr/bin/vector"]

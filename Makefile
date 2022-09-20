@@ -101,7 +101,7 @@ cargo-install-%:
 	$(if $(findstring true,$(AUTOINSTALL)),cargo install ${TOOL} --quiet; cargo clean,)
 
 .PHONY: build-docker
-build-docker: target/x86_64-unknown-linux-musl/release/vector
+build-docker: target/x86_64-unknown-linux-gnu/release/vector
 	@echo "Building docker image..."
 	@scripts/build-docker.sh
 	@echo "Done building docker image."
