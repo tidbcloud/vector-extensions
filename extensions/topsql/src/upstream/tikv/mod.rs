@@ -1,21 +1,11 @@
-#![allow(warnings)]
-
 mod parser;
 mod proto;
 
 #[cfg(test)]
 pub mod mock_upstream;
 
-use std::future::Future;
-use std::pin::Pin;
-
-use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream};
-use tokio_openssl::SslStream;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
+use tonic::transport::{Channel, Endpoint};
 use tonic::{Status, Streaming};
-use tracing::Instrument;
-use vector::tls::{tls_connector_builder, MaybeTlsSettings, TlsConfig};
 
 use crate::shutdown::ShutdownSubscriber;
 use crate::upstream::{tls_proxy, Upstream};
