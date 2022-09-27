@@ -2,8 +2,6 @@ export AUTOINSTALL ?= false
 
 export RUST_VERSION ?= $(shell cat rust-toolchain)
 
-EMPTY:=
-
 .PHONY: fmt
 fmt:
 	@echo "Formatting..."
@@ -70,10 +68,6 @@ build-aarch64-unknown-linux-musl: target/aarch64-unknown-linux-musl/release/vect
 build-armv7-unknown-linux-musleabihf: target/armv7-unknown-linux-musleabihf/release/vector
 	@echo "Output to ${<}"
 
-.PHONY: CARGO_HANDLES_FRESHNESS
-CARGO_HANDLES_FRESHNESS:
-	${EMPTY}
-
 .PHONY: cross-image-%
 cross-image-%: export TRIPLE =$($(strip @):cross-image-%=%)
 cross-image-%:
@@ -86,7 +80,7 @@ target/%/vector: export PAIR =$(subst /, ,$(@:target/%/vector=%))
 target/%/vector: export TRIPLE ?=$(word 1,${PAIR})
 target/%/vector: export PROFILE ?=$(word 2,${PAIR})
 target/%/vector: export CFLAGS += -g0 -O3
-target/%/vector: cargo-install-cross CARGO_HANDLES_FRESHNESS
+target/%/vector: cargo-install-cross
 	$(MAKE) -k cross-image-${TRIPLE}
 	cross build \
 		$(if $(findstring release,$(PROFILE)),--release,) \
