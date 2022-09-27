@@ -101,11 +101,13 @@ make build-armv7-unknown-linux-gnueabihf
 make build-armv7-unknown-linux-musleabihf
 ```
 
-### Build Docker Image
+### Release Docker Image
 
 ```bash
-make build-docker
+make target/x86_64-unknown-linux-gnu/release/vector
+JEMALLOC_SYS_WITH_LG_PAGE=16 make target/aarch64-unknown-linux-gnu/release/vector
+make release-docker
 
 # build with given version and repo
-REPO=tidbcloud/vector VERSION=0.24.0 make build-docker
+REPO=tidbcloud/vector VERSION=0.23.3 make release-docker
 ```
