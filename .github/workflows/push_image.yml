@@ -22,19 +22,25 @@ jobs:
 
     - name: Set up toolchains
       uses: actions-rs/toolchain@v1
-      with:
-          components: rustfmt, clippy
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v2
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
 
     - name: Install cross
       run: cargo install cross
 
-    - name: Set Meta
-      run: |
-        echo "TAG=tidbcloud/vector:nightly-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-        echo "VECTOR_BUILD_DESC=$(git rev-parse --short HEAD) $(date +%Y-%m-%d)" >> $GITHUB_ENV
+    - name: Set Build Meta
+      run: echo "VECTOR_BUILD_DESC=$(git rev-parse --short HEAD) $(date +%Y-%m-%d)" >> $GITHUB_ENV
 
-    - name: Build Docker Image
-      run: make build-docker
+    - name: Build amd64 binary
+      run: make target/x86_64-unknown-linux-gnu/release/vector
+
+    - name : Build arm64 binary
+      env:
+        JEMALLOC_SYS_WITH_LG_PAGE: 16
+      run: make target/aarch64-unknown-linux-gnu/release/vector
 
     - name: Configure AWS Credentials for DBaaS Dev
       uses: aws-actions/configure-aws-credentials@v1
@@ -42,8 +48,11 @@ jobs:
         role-to-assume: arn:aws:iam::385595570414:role/vector-cicd
         aws-region: us-west-2
 
+    - name: Set Release Meta
+      run: |
+        echo "TAG=385595570414.dkr.ecr.us-west-2.amazonaws.com/tidbcloud/vector:nightly-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
     - name: Push to DBaaS Dev ECR
       run: |
         aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 385595570414.dkr.ecr.us-west-2.amazonaws.com
-        docker tag $TAG 385595570414.dkr.ecr.us-west-2.amazonaws.com/$TAG
-        docker push 385595570414.dkr.ecr.us-west-2.amazonaws.com/$TAG
+        make release-docker

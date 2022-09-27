@@ -54,16 +54,16 @@ build-x86_64-unknown-linux-gnu: target/x86_64-unknown-linux-gnu/release/vector
 build-aarch64-unknown-linux-gnu: target/aarch64-unknown-linux-gnu/release/vector
 	@echo "Output to ${<}"
 
+.PHONY: build-armv7-unknown-linux-gnueabihf
+build-armv7-unknown-linux-gnueabihf: target/armv7-unknown-linux-gnueabihf/release/vector
+	@echo "Output to ${<}"
+
 .PHONY: build-x86_64-unknown-linux-musl
 build-x86_64-unknown-linux-musl: target/x86_64-unknown-linux-musl/release/vector
 	@echo "Output to ${<}"
 
 .PHONY: build-aarch64-unknown-linux-musl
 build-aarch64-unknown-linux-musl: target/aarch64-unknown-linux-musl/release/vector
-	@echo "Output to ${<}"
-
-.PHONY: build-armv7-unknown-linux-gnueabihf
-build-armv7-unknown-linux-gnueabihf: target/armv7-unknown-linux-gnueabihf/release/vector
 	@echo "Output to ${<}"
 
 .PHONY: build-armv7-unknown-linux-musleabihf
@@ -82,7 +82,6 @@ cross-image-%:
 		--file scripts/cross/${TRIPLE}.dockerfile \
 		scripts/cross
 
-.PHONY: target/%/vector
 target/%/vector: export PAIR =$(subst /, ,$(@:target/%/vector=%))
 target/%/vector: export TRIPLE ?=$(word 1,${PAIR})
 target/%/vector: export PROFILE ?=$(word 2,${PAIR})
@@ -100,11 +99,12 @@ cargo-install-%: override TOOL = $(@:cargo-install-%=%)
 cargo-install-%:
 	$(if $(findstring true,$(AUTOINSTALL)),cargo install ${TOOL} --quiet; cargo clean,)
 
-.PHONY: build-docker
-build-docker: target/x86_64-unknown-linux-gnu/release/vector
-	@echo "Building docker image..."
-	@scripts/build-docker.sh
-	@echo "Done building docker image."
+.PHONY: release-docker
+release-docker: target/x86_64-unknown-linux-gnu/release/vector
+release-docker: target/aarch64-unknown-linux-gnu/release/vector
+	@echo "Releasing docker image..."
+	@scripts/release-docker.sh
+	@echo "Done releasing docker image."
 
 .PHONY: test-integration
 test-integration:

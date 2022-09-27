@@ -25,10 +25,9 @@ function cleanup {
 # register the cleanup function to be called on the EXIT signal
 trap cleanup EXIT
 
-
-## build docker image in the setup directory
-
-cp target/x86_64-unknown-linux-gnu/release/vector "$WORK_DIR"
+# Prepare in the setup directory
+cp target/x86_64-unknown-linux-gnu/release/vector "$WORK_DIR"/vector-amd64
+cp target/aarch64-unknown-linux-gnu/release/vector "$WORK_DIR"/vector-arm64
 cp config/vector.toml "$WORK_DIR"
 
 VERSION="${VECTOR_VERSION:-"$(scripts/version.sh)"}"
@@ -38,5 +37,6 @@ BASE=debian
 TAG="${TAG:-$REPO:$VERSION-$BASE}"
 DOCKERFILE="scripts/docker/Dockerfile"
 
-echo "Building docker image: $TAG"
-docker build -t "$TAG" -f "$DOCKERFILE" "$WORK_DIR"
+PLATFORMS="linux/amd64,linux/arm64"
+echo "Building docker image: $TAG for $PLATFORMS"
+docker buildx build --push --platform="$PLATFORMS" -t "$TAG" -f "$DOCKERFILE" "$WORK_DIR"
