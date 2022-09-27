@@ -7,8 +7,6 @@ permissions:
 on:
   push:
     branches: [ master ]
-  pull_request:
-    branches: [ master ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -54,7 +52,7 @@ jobs:
       run: |
         echo "TAG=385595570414.dkr.ecr.us-west-2.amazonaws.com/tidbcloud/vector:nightly-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-    - name: Build and Push to DBaaS Dev ECR
+    - name: Push to DBaaS Dev ECR
       run: |
         aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 385595570414.dkr.ecr.us-west-2.amazonaws.com
         make release-docker

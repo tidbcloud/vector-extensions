@@ -82,7 +82,6 @@ cross-image-%:
 		--file scripts/cross/${TRIPLE}.dockerfile \
 		scripts/cross
 
-.PHONY: target/%/vector
 target/%/vector: export PAIR =$(subst /, ,$(@:target/%/vector=%))
 target/%/vector: export TRIPLE ?=$(word 1,${PAIR})
 target/%/vector: export PROFILE ?=$(word 2,${PAIR})
