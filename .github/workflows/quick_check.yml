@@ -11,10 +11,7 @@ env:
 
 jobs:
   check:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [macos-latest, ubuntu-latest]
+    runs-on: ubuntu-latest
     env:
       RUST_BACKTRACE: 1
       RUSTFLAGS: "-D warnings"
