@@ -650,7 +650,7 @@ dependencies = [
 [[package]]
 name = "codecs"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "avro-rs",
  "bytes 1.2.1",
@@ -912,7 +912,7 @@ dependencies = [
 [[package]]
 name = "datadog-filter"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "datadog-search-syntax",
  "dyn-clone",
@@ -922,7 +922,7 @@ dependencies = [
 [[package]]
 name = "datadog-grok"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "bytes 1.2.1",
  "chrono",
@@ -947,7 +947,7 @@ dependencies = [
 [[package]]
 name = "datadog-search-syntax"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "itertools",
  "once_cell",
@@ -1105,7 +1105,7 @@ checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 [[package]]
 name = "enrichment"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -2021,7 +2021,7 @@ dependencies = [
 [[package]]
 name = "lookup"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "inherent",
  "lalrpop",
@@ -2790,7 +2790,7 @@ checksum = "763095e04dcbeb889b2ab35296ecb18a20fe16b4e9877ce64aab73d8fd05a8c3"
 [[package]]
 name = "portpicker"
 version = "1.0.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "rand 0.8.5",
 ]
@@ -4161,7 +4161,7 @@ dependencies = [
 [[package]]
 name = "tracing-limit"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "dashmap",
  "tracing-core 0.1.28",
@@ -4413,7 +4413,7 @@ checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
 [[package]]
 name = "value"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "async-graphql",
  "bytes 1.2.1",
@@ -4438,7 +4438,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "vector"
 version = "0.24.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4547,7 +4547,7 @@ dependencies = [
 [[package]]
 name = "vector-vrl-functions"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "lookup",
  "value",
@@ -4557,7 +4557,7 @@ dependencies = [
 [[package]]
 name = "vector_buffers"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "async-recursion",
  "async-stream",
@@ -4588,7 +4588,7 @@ dependencies = [
 [[package]]
 name = "vector_common"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "async-stream",
  "bytes 1.2.1",
@@ -4615,7 +4615,7 @@ dependencies = [
 [[package]]
 name = "vector_config"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "encoding_rs",
  "indexmap",
@@ -4633,7 +4633,7 @@ dependencies = [
 [[package]]
 name = "vector_config_common"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
@@ -4645,7 +4645,7 @@ dependencies = [
 [[package]]
 name = "vector_config_macros"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
@@ -4658,7 +4658,7 @@ dependencies = [
 [[package]]
 name = "vector_core"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "async-trait",
  "bitmask-enum",
@@ -4739,7 +4739,7 @@ dependencies = [
 [[package]]
 name = "vrl"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "bytes 1.2.1",
  "indoc",
@@ -4755,7 +4755,7 @@ dependencies = [
 [[package]]
 name = "vrl-compiler"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "anymap",
  "bytes 1.2.1",
@@ -4780,7 +4780,7 @@ dependencies = [
 [[package]]
 name = "vrl-core"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "lookup",
  "value",
@@ -4790,7 +4790,7 @@ dependencies = [
 [[package]]
 name = "vrl-diagnostic"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "codespan-reporting",
  "termcolor",
@@ -4799,7 +4799,7 @@ dependencies = [
 [[package]]
 name = "vrl-parser"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "lalrpop",
  "lalrpop-util",
@@ -4813,7 +4813,7 @@ dependencies = [
 [[package]]
 name = "vrl-stdlib"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#a8cacb0910682d4818cadebb43badb9a08de2222"
+source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
 dependencies = [
  "aes",
  "base64",
