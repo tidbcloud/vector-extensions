@@ -6,7 +6,6 @@ use vector::config::{
 };
 use vector::sources;
 use vector::tls::TlsConfig;
-use vector_core::config::LogNamespace;
 
 use crate::controller::Controller;
 
@@ -73,7 +72,7 @@ impl SourceConfig for TopSQLConfig {
         }))
     }
 
-    fn outputs(&self, _: LogNamespace) -> Vec<Output> {
+    fn outputs(&self) -> Vec<Output> {
         vec![Output::default(config::DataType::Log)]
     }
 
