@@ -225,6 +225,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic-shim"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67cd4b51d303cf3501c301e8125df442128d3c6d7c69f71b27833d253de47e77"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -384,9 +393,9 @@ dependencies = [
 
 [[package]]
 name = "bollard"
-version = "0.13.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d82e7850583ead5f8bbef247e2a3c37a19bd576e8420cd262a6711921827e1e5"
+checksum = "1b1d4b9e55620571c2200f4be87db2a9a69e2a107fc7d206a6accad58c3536cb"
 dependencies = [
  "base64",
  "bollard-stubs",
@@ -404,7 +413,7 @@ dependencies = [
  "pin-project-lite",
  "rustls",
  "rustls-native-certs",
- "rustls-pemfile",
+ "rustls-pemfile 0.3.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -420,13 +429,13 @@ dependencies = [
 
 [[package]]
 name = "bollard-stubs"
-version = "1.42.0-rc.3"
+version = "1.42.0-rc.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed59b5c00048f48d7af971b71f800fdf23e858844a6f9e4d32ca72e9399e7864"
+checksum = "4295240332c78d04291f3ac857a281d5534a8e036f3dfcdaa294b22c0d424427"
 dependencies = [
  "chrono",
  "serde",
- "serde_with 1.14.0",
+ "serde_with",
 ]
 
 [[package]]
@@ -552,7 +561,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "serde",
- "time 0.1.43",
+ "time",
  "wasm-bindgen",
  "winapi 0.3.9",
 ]
@@ -650,7 +659,7 @@ dependencies = [
 [[package]]
 name = "codecs"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "avro-rs",
  "bytes 1.2.1",
@@ -659,14 +668,10 @@ dependencies = [
  "dyn-clone",
  "lookup",
  "memchr",
- "once_cell",
- "ordered-float 3.0.0",
  "prost",
- "regex",
  "serde",
  "serde_json",
  "smallvec",
- "snafu",
  "tokio-util 0.7.3",
  "tracing 0.1.34",
  "value",
@@ -900,19 +905,29 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
+version = "4.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e77a43b28d0668df09411cb0bc9a8c2adc40f9a048afe863e05fd43251e8e39c"
+dependencies = [
+ "cfg-if 1.0.0",
+ "num_cpus",
+]
+
+[[package]]
+name = "dashmap"
 version = "5.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c8858831f7781322e539ea39e72449c46b059638250c14344fec8d0aa6e539c"
 dependencies = [
  "cfg-if 1.0.0",
  "num_cpus",
- "parking_lot",
+ "parking_lot 0.12.1",
 ]
 
 [[package]]
 name = "datadog-filter"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "datadog-search-syntax",
  "dyn-clone",
@@ -922,7 +937,7 @@ dependencies = [
 [[package]]
 name = "datadog-grok"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "bytes 1.2.1",
  "chrono",
@@ -947,7 +962,7 @@ dependencies = [
 [[package]]
 name = "datadog-search-syntax"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "itertools",
  "once_cell",
@@ -1105,7 +1120,7 @@ checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 [[package]]
 name = "enrichment"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -1506,6 +1521,15 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
+dependencies = [
+ "ahash",
+]
+
+[[package]]
+name = "hashbrown"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c21d40587b92fa6a6c6e3c1bdbf87d75511db5672f9c93175574b3a00df1758"
@@ -1655,7 +1679,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-sys",
- "parking_lot",
+ "parking_lot 0.12.1",
  "tokio",
  "tokio-openssl",
  "tower-layer",
@@ -1754,7 +1778,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10a35a97730320ffe8e2d410b5d3b69279b98d2c14bdb8b70ea89ecf7888d41e"
 dependencies = [
  "autocfg",
- "hashbrown",
+ "hashbrown 0.12.0",
  "serde",
 ]
 
@@ -1816,12 +1840,34 @@ dependencies = [
 
 [[package]]
 name = "inventory"
-version = "0.3.1"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30a61b8101d87996f82d725ba701b1987b7afc72f481c13513a30b855b9c9133"
+checksum = "f0eb5160c60ba1e809707918ee329adb99d222888155835c6feedba19f6c3fd4"
 dependencies = [
  "ctor",
  "ghost",
+ "inventory-impl",
+]
+
+[[package]]
+name = "inventory"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84344c6e0b90a9e2b6f3f9abe5cc74402684e348df7b32adca28747e0cef091a"
+dependencies = [
+ "ctor",
+ "ghost",
+]
+
+[[package]]
+name = "inventory-impl"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e41b53715c6f0c4be49510bb82dee2c1e51c8586d885abe65396e82ed518548"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2021,7 +2067,7 @@ dependencies = [
 [[package]]
 name = "lookup"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "inherent",
  "lalrpop",
@@ -2031,8 +2077,6 @@ dependencies = [
  "regex",
  "serde",
  "snafu",
- "vector_config",
- "vector_config_macros",
 ]
 
 [[package]]
@@ -2124,33 +2168,34 @@ dependencies = [
 
 [[package]]
 name = "metrics"
-version = "0.20.1"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b9b8653cec6897f73b519a43fba5ee3d50f62fe9af80b428accdcc093b4a849"
+checksum = "55586aa936c35f34ba8aa5d97356d554311206e1ce1f9e68fe7b07288e5ad827"
 dependencies = [
  "ahash",
  "metrics-macros",
- "portable-atomic",
 ]
 
 [[package]]
 name = "metrics-macros"
-version = "0.6.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "731f8ecebd9f3a4aa847dfe75455e4757a45da40a7793d2f0b1f9b6ed18b23f3"
+checksum = "0daa0ab3a0ae956d0e2c1f42511422850e577d36a255357d1a7d08d45ee3a2f1"
 dependencies = [
+ "lazy_static",
  "proc-macro2",
  "quote",
+ "regex",
  "syn",
 ]
 
 [[package]]
 name = "metrics-tracing-context"
-version = "0.12.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6097e2772147f332c9aedba572e9cd334b7946e1762d8ae4d05db0faf962542a"
+checksum = "7927d28bccc322a3f48fc445bffe7cb491ab8a43ea28f7c5f75bc16fc4e5d6bd"
 dependencies = [
- "itoa 1.0.1",
+ "itoa 0.4.8",
  "lockfree-object-pool",
  "metrics",
  "metrics-util",
@@ -2162,20 +2207,22 @@ dependencies = [
 
 [[package]]
 name = "metrics-util"
-version = "0.14.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7d24dc2dbae22bff6f1f9326ffce828c9f07ef9cc1e8002e5279f845432a30a"
+checksum = "1174223789e331d9d47a4a953dac36e397db60fa8d2a111ac505388c6c7fe32e"
 dependencies = [
+ "ahash",
  "aho-corasick",
+ "atomic-shim",
  "crossbeam-epoch",
  "crossbeam-utils",
- "hashbrown",
+ "dashmap 4.0.2",
+ "hashbrown 0.11.2",
  "indexmap",
  "metrics",
  "num_cpus",
  "ordered-float 2.10.0",
- "parking_lot",
- "portable-atomic",
+ "parking_lot 0.11.2",
  "quanta",
  "radix_trie",
  "sketches-ddsketch",
@@ -2456,15 +2503,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num_threads"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aba1801fb138d8e85e11d0fc70baf4fe1cdfffda7c6cd34a854905df588e5ed0"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "ofb"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2588,12 +2626,37 @@ checksum = "8e22443d1643a904602595ba1cd8f7d896afe56d26712531c5ff73a15b2fbf64"
 
 [[package]]
 name = "parking_lot"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
+dependencies = [
+ "instant",
+ "lock_api",
+ "parking_lot_core 0.8.5",
+]
+
+[[package]]
+name = "parking_lot"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3742b2c103b9f06bc9fff0a37ff4912935851bee6d36f3c02bcc755bcfec228f"
 dependencies = [
  "lock_api",
- "parking_lot_core",
+ "parking_lot_core 0.9.2",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d76e8e1493bcac0d2766c42737f34458f1c8c50c0d23bcb24ea953affb273216"
+dependencies = [
+ "cfg-if 1.0.0",
+ "instant",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -2782,15 +2845,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1df8c4ec4b0627e53bdf214615ad287367e482558cf84b109250b37464dc03ae"
 
 [[package]]
-name = "portable-atomic"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "763095e04dcbeb889b2ab35296ecb18a20fe16b4e9877ce64aab73d8fd05a8c3"
-
-[[package]]
 name = "portpicker"
 version = "1.0.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "rand 0.8.5",
 ]
@@ -2937,9 +2994,9 @@ dependencies = [
 
 [[package]]
 name = "quanta"
-version = "0.10.1"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7e31331286705f455e56cca62e0e717158474ff02b7936c1fa596d983f4ae27"
+checksum = "20afe714292d5e879d8b12740aa223c6a88f118af41870e8b6196e39a02238a8"
 dependencies = [
  "crossbeam-utils",
  "libc",
@@ -3157,7 +3214,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cec2b3485b07d96ddfd3134767b8a447b45ea4eb91448d0a35180ec0ffd5ed15"
 dependencies = [
  "bytecheck",
- "hashbrown",
+ "hashbrown 0.12.0",
  "ptr_meta",
  "rend",
  "rkyv_derive",
@@ -3235,9 +3292,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0167bac7a9f490495f3c33013e7722b53cb087ecbe082fb0c6387c96f634ea50"
 dependencies = [
  "openssl-probe",
- "rustls-pemfile",
+ "rustls-pemfile 1.0.0",
  "schannel",
  "security-framework",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ee86d63972a7c661d1536fefe8c3c8407321c3df668891286de28abcd087360"
+dependencies = [
+ "base64",
 ]
 
 [[package]]
@@ -3436,21 +3502,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_with"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89df7a26519371a3cce44fbb914c2819c84d9b897890987fa3ab096491cc0ea8"
-dependencies = [
- "base64",
- "chrono",
- "hex",
- "indexmap",
- "serde",
- "serde_json",
- "time 0.3.9",
-]
-
-[[package]]
 name = "serde_with_macros"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3544,9 +3595,9 @@ checksum = "7bd3e3206899af3f8b12af284fafc038cc1dc2b41d1b89dd17297221c5d225de"
 
 [[package]]
 name = "sketches-ddsketch"
-version = "0.2.0"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ceb945e54128e09c43d8e4f1277851bd5044c6fc540bbaa2ad888f60b3da9ae7"
+checksum = "04d2ecae5fcf33b122e2e6bd520a57ccf152d2dde3b38c71039df1a6867264ee"
 
 [[package]]
 name = "slab"
@@ -3631,7 +3682,7 @@ checksum = "213494b7a2b503146286049378ce02b482200519accc31872ee8be91fa820a08"
 dependencies = [
  "new_debug_unreachable",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.1",
  "phf_shared 0.10.0",
  "precomputed-hash",
 ]
@@ -3788,18 +3839,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "time"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2702e08a7a860f005826c6815dcac101b19b5eb330c27fe4a5928fec1d20ddd"
-dependencies = [
- "itoa 1.0.1",
- "libc",
- "num_threads",
- "serde",
-]
-
-[[package]]
 name = "tiny-keccak"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3836,7 +3875,7 @@ dependencies = [
  "mio 0.8.2",
  "num_cpus",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.1",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -3973,7 +4012,7 @@ dependencies = [
  "prost",
  "prost-derive",
  "rustls-native-certs",
- "rustls-pemfile",
+ "rustls-pemfile 1.0.0",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -4012,7 +4051,7 @@ dependencies = [
  "hex",
  "http",
  "hyper",
- "inventory",
+ "inventory 0.1.11",
  "ordered-float 3.0.0",
  "prost",
  "prost-build",
@@ -4161,9 +4200,9 @@ dependencies = [
 [[package]]
 name = "tracing-limit"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
- "dashmap",
+ "dashmap 5.2.0",
  "tracing-core 0.1.28",
  "tracing-subscriber",
 ]
@@ -4255,12 +4294,12 @@ checksum = "dcf81ac59edc17cc8697ff311e8f5ef2d99fcbd9817b34cec66f90b6c3dfd987"
 
 [[package]]
 name = "typetag"
-version = "0.2.3"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23c8909f61359cac318f10dc9a3f9a7ee2155b6511f2a0c973460222ae5a00bb"
+checksum = "4080564c5b2241b5bff53ab610082234e0c57b0417f4bd10596f183001505b8a"
 dependencies = [
  "erased-serde",
- "inventory",
+ "inventory 0.2.3",
  "once_cell",
  "serde",
  "typetag-impl",
@@ -4268,9 +4307,9 @@ dependencies = [
 
 [[package]]
 name = "typetag-impl"
-version = "0.2.3"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd4d8ff674190866d3437d2f725355d49e99e3b1a513bf7ee43dcfe7effc36f4"
+checksum = "e60147782cc30833c05fba3bab1d9b5771b2685a2557672ac96fa5d154099c0e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4413,7 +4452,7 @@ checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
 [[package]]
 name = "value"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "async-graphql",
  "bytes 1.2.1",
@@ -4437,8 +4476,8 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vector"
-version = "0.24.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+version = "0.23.3"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4472,7 +4511,7 @@ dependencies = [
  "hyper-proxy",
  "indexmap",
  "indoc",
- "inventory",
+ "inventory 0.1.11",
  "lookup",
  "metrics",
  "metrics-tracing-context",
@@ -4481,7 +4520,6 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-probe",
- "openssl-src",
  "ordered-float 3.0.0",
  "percent-encoding",
  "pin-project",
@@ -4521,7 +4559,6 @@ dependencies = [
  "vector_buffers",
  "vector_common",
  "vector_config",
- "vector_config_common",
  "vector_config_macros",
  "vector_core",
  "vrl",
@@ -4547,7 +4584,7 @@ dependencies = [
 [[package]]
 name = "vector-vrl-functions"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "lookup",
  "value",
@@ -4557,7 +4594,7 @@ dependencies = [
 [[package]]
 name = "vector_buffers"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "async-recursion",
  "async-stream",
@@ -4574,7 +4611,7 @@ dependencies = [
  "memmap2",
  "metrics",
  "num-traits",
- "parking_lot",
+ "parking_lot 0.12.1",
  "pin-project",
  "rkyv",
  "serde",
@@ -4588,9 +4625,8 @@ dependencies = [
 [[package]]
 name = "vector_common"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
- "async-stream",
  "bytes 1.2.1",
  "chrono",
  "chrono-tz",
@@ -4615,17 +4651,14 @@ dependencies = [
 [[package]]
 name = "vector_config"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "encoding_rs",
  "indexmap",
- "no-proxy",
  "num-traits",
  "schemars",
  "serde",
  "serde_json",
- "serde_with 2.0.0",
- "toml",
  "vector_config_common",
  "vector_config_macros",
 ]
@@ -4633,7 +4666,7 @@ dependencies = [
 [[package]]
 name = "vector_config_common"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
@@ -4645,7 +4678,7 @@ dependencies = [
 [[package]]
 name = "vector_config_macros"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
@@ -4658,7 +4691,7 @@ dependencies = [
 [[package]]
 name = "vector_core"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "async-trait",
  "bitmask-enum",
@@ -4686,7 +4719,6 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "quanta",
  "regex",
  "serde",
  "serde_json",
@@ -4726,7 +4758,7 @@ dependencies = [
  "futures-util",
  "http",
  "hyper",
- "inventory",
+ "inventory 0.1.11",
  "serde",
  "serde_json",
  "toml",
@@ -4739,7 +4771,7 @@ dependencies = [
 [[package]]
 name = "vrl"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "bytes 1.2.1",
  "indoc",
@@ -4755,7 +4787,7 @@ dependencies = [
 [[package]]
 name = "vrl-compiler"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "anymap",
  "bytes 1.2.1",
@@ -4770,8 +4802,6 @@ dependencies = [
  "thiserror",
  "value",
  "vector_common",
- "vector_config",
- "vector_config_macros",
  "vrl-core",
  "vrl-diagnostic",
  "vrl-parser",
@@ -4780,7 +4810,7 @@ dependencies = [
 [[package]]
 name = "vrl-core"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "lookup",
  "value",
@@ -4790,7 +4820,7 @@ dependencies = [
 [[package]]
 name = "vrl-diagnostic"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "codespan-reporting",
  "termcolor",
@@ -4799,7 +4829,7 @@ dependencies = [
 [[package]]
 name = "vrl-parser"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "lalrpop",
  "lalrpop-util",
@@ -4813,7 +4843,7 @@ dependencies = [
 [[package]]
 name = "vrl-stdlib"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#64ab8468b54c9e3c4a7aaa437907b2006588797f"
+source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
 dependencies = [
  "aes",
  "base64",
@@ -5044,9 +5074,9 @@ dependencies = [
 
 [[package]]
 name = "widestring"
-version = "1.0.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "653f141f39ec16bba3c5abe400a0c60da7468261cc2cbf36805022876bc721a8"
+checksum = "c168940144dd21fd8046987c16a46a33d5fc84eec29ef9dcddc2ac9e31526b7c"
 
 [[package]]
 name = "winapi"
@@ -5093,14 +5123,14 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-service"
-version = "0.5.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "917fdb865e7ff03af9dd86609f8767bc88fefba89e8efd569de8e208af8724b3"
+checksum = "0c643e10139d127d30d6d753398c8a6f0a43532e8370f6c9d29ebbff29b984ab"
 dependencies = [
  "bitflags",
  "err-derive",
  "widestring",
- "windows-sys 0.36.1",
+ "winapi 0.3.9",
 ]
 
 [[package]]

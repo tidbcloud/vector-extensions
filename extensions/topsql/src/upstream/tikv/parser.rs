@@ -73,7 +73,6 @@ impl ResourceUsageRecordParser {
         match ResourceGroupTag::decode(tag) {
             Ok(resource_tag) => {
                 if resource_tag.sql_digest.is_none() {
-                    warn!(message = "Unexpected resource tag without sql digest", tag = %hex::encode(tag));
                     None
                 } else {
                     Some((
