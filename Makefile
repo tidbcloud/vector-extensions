@@ -96,6 +96,7 @@ cargo-install-%:
 .PHONY: release-docker
 release-docker: target/x86_64-unknown-linux-gnu/release/vector
 release-docker: target/aarch64-unknown-linux-gnu/release/vector
+release-docker: target/armv7-unknown-linux-gnueabihf/release/vector
 	@echo "Releasing docker image..."
 	@scripts/release-docker.sh
 	@echo "Done releasing docker image."
