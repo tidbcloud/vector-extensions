@@ -23,13 +23,17 @@ jobs:
     - name: Generate Build Meta
       id: build_meta
       run: |
-        echo "::set-output name=vector_build_desc::$(git rev-parse --short HEAD) $(date +%Y-%m-%d)"
-        echo "::set-output name=vector_build_sha::$(git rev-parse HEAD)"
+        echo "vector_build_desc=$(git rev-parse --short HEAD) $(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+        echo "vector_build_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+    outputs:
+      vector_build_desc: ${{ steps.build_meta.outputs.vector_build_desc }}
+      vector_build_sha: ${{ steps.build_meta.outputs.vector_build_sha }}
 
   build-x86_64-unknown-linux-gnu-binary:
     name: Build x86_64-unknown-linux-gnu
     runs-on: ubuntu-latest
-    needs: generate-build-meta
+    needs:
+      - generate-build-meta
     env:
       VECTOR_BUILD_DESC: ${{ needs.generate-build-meta.outputs.vector_build_desc }}
       VECTOR_BUILD_SHA: ${{ needs.generate-build-meta.outputs.vector_build_sha }}
@@ -50,7 +54,8 @@ jobs:
   build-aarch64-unknown-linux-gnu-binary:
     name: Build aarch64-unknown-linux-gnu
     runs-on: ubuntu-latest
-    needs: generate-build-meta
+    needs:
+      - generate-build-meta
     env:
       VECTOR_BUILD_DESC: ${{ needs.generate-build-meta.outputs.vector_build_desc }}
       VECTOR_BUILD_SHA: ${{ needs.generate-build-meta.outputs.vector_build_sha }}
@@ -61,9 +66,9 @@ jobs:
       uses: actions-rs/toolchain@v1
     - name: Install cross
       run: cargo install cross
-    - name: Build aaarch64-unknown-linux-gnu
-      run: make build-aaarch64-unknown-linux-gnu
-    - name: Upload aaarch64-unknown-linux-gnu
+    - name: Build aarch64-unknown-linux-gnu
+      run: make build-aarch64-unknown-linux-gnu
+    - name: Upload aarch64-unknown-linux-gnu
       uses: actions/upload-artifact@v2
       with:
         name: vector-${{ env.VECTOR_BUILD_SHA }}-aarch64-unknown-linux-gnu
@@ -72,7 +77,8 @@ jobs:
   build-armv7-unknown-linux-gnueabihf-binary:
     name: Build armv7-unknown-linux-gnueabihf
     runs-on: ubuntu-latest
-    needs: generate-build-meta
+    needs:
+      - generate-build-meta
     env:
       VECTOR_BUILD_DESC: ${{ needs.generate-build-meta.outputs.vector_build_desc }}
       VECTOR_BUILD_SHA: ${{ needs.generate-build-meta.outputs.vector_build_sha }}
@@ -117,17 +123,17 @@ jobs:
       uses: actions/download-artifact@v2
       with:
         name: vector-${{ env.VECTOR_BUILD_SHA }}-x86_64-unknown-linux-gnu
-        path: target/x86_64-unknown-linux-gnu/release/vector
+        path: target/x86_64-unknown-linux-gnu/release
     - name: Download staged binary (aarch64-unknown-linux-gnu)
       uses: actions/download-artifact@v2
       with:
         name: vector-${{ env.VECTOR_BUILD_SHA }}-aarch64-unknown-linux-gnu
-        path: target/aarch64-unknown-linux-gnu/release/vector
+        path: target/aarch64-unknown-linux-gnu/release
     - name: Download staged binary (armv7-unknown-linux-gnueabihf)
       uses: actions/download-artifact@v2
       with:
         name: vector-${{ env.VECTOR_BUILD_SHA }}-armv7-unknown-linux-gnueabihf
-        path: target/armv7-unknown-linux-gnueabihf/release/vector
+        path: target/armv7-unknown-linux-gnueabihf/release
     - name: Set Release Meta
       run: |
         echo "TAG=385595570414.dkr.ecr.us-west-2.amazonaws.com/tidbcloud/vector:nightly-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
