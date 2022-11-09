@@ -7,6 +7,7 @@ COPY vector.toml /etc/vector/vector.toml
 
 ENV VECTOR_LOG="info"
 
+RUN ["chmod", "+x", "/usr/bin/vector"]
 # Smoke test
 RUN ["vector", "--version"]
 
