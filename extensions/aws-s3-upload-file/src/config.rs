@@ -5,9 +5,7 @@ use aws_sdk_s3::Client as S3Client;
 use common::checkpointer::Checkpointer;
 use serde::{Deserialize, Serialize};
 use vector::aws::{AwsAuthentication, RegionOrEndpoint};
-use vector::config::{
-    AcknowledgementsConfig, GenerateConfig, SinkConfig, SinkContext, SinkDescription,
-};
+use vector::config::{AcknowledgementsConfig, GenerateConfig, SinkConfig, SinkContext};
 use vector::sinks::s3_common::config::S3Options;
 use vector::sinks::s3_common::service::S3Service;
 use vector::sinks::{s3_common, Healthcheck};
@@ -74,10 +72,6 @@ impl GenerateConfig for S3UploadFileConfig {
         })
         .unwrap()
     }
-}
-
-inventory::submit! {
-    SinkDescription::new::<S3UploadFileConfig>("aws_s3_upload_file")
 }
 
 #[async_trait::async_trait]

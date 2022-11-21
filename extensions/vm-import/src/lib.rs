@@ -6,6 +6,8 @@ mod encoder;
 mod partition;
 mod sink;
 
+pub use config::VMImportConfig;
+
 // #[cfg(test)]
 // mod tests {
 //     use std::{collections::BTreeMap, future::ready};

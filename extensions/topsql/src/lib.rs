@@ -7,6 +7,7 @@ mod shutdown;
 mod topology;
 mod upstream;
 
+pub use config::TopSQLConfig;
 // Since topsql is highly associated with vm_import,
 // expose the event builder to vm_import for test.
 #[cfg(feature = "vm-test")]

@@ -20,6 +20,7 @@ filename = ["dep:filename"]
 
 [dependencies]
 vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false }
+inventory = { version = "0.1.10", default-features = false }
 
 # Extensions
 topsql = { path = "extensions/topsql", optional = true }

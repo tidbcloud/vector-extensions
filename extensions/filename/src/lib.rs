@@ -9,7 +9,7 @@ use file_source::paths_provider::glob::{Glob, MatchOptions};
 use file_source::paths_provider::PathsProvider;
 use file_source::FileSourceInternalEvents;
 use metrics::counter;
-use vector::config::{DataType, Output, SourceConfig, SourceContext, SourceDescription};
+use vector::config::{DataType, Output, SourceConfig, SourceContext};
 use vector::internal_events::prelude::{error_stage, error_type};
 use vector::internal_events::StreamClosedError;
 use vector::sources::Source;
@@ -48,10 +48,6 @@ impl Default for FilenameConfig {
             glob_minimum_cooldown_ms: 1000,
         }
     }
-}
-
-inventory::submit! {
-    SourceDescription::new::<FilenameConfig>("filename")
 }
 
 impl_generate_config_from_default!(FilenameConfig);

@@ -329,7 +329,6 @@ dependencies = [
  "futures 0.3.21",
  "futures-util",
  "hex",
- "inventory 0.1.11",
  "md-5",
  "serde",
  "tokio",
@@ -1605,7 +1604,6 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "file-source",
- "inventory 0.1.11",
  "metrics",
  "serde",
  "tokio",
@@ -4517,7 +4515,6 @@ dependencies = [
  "hex",
  "http",
  "hyper",
- "inventory 0.1.11",
  "ordered-float 3.0.0",
  "prost",
  "prost-build",
@@ -4737,7 +4734,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 
@@ -5056,6 +5053,7 @@ dependencies = [
  "aws-s3-upload-file",
  "filename",
  "hyper",
+ "inventory 0.1.11",
  "lazy_static",
  "regex",
  "tokio",
@@ -5282,7 +5280,6 @@ dependencies = [
  "futures-util",
  "http",
  "hyper",
- "inventory 0.1.11",
  "serde",
  "serde_json",
  "toml",
