@@ -1,9 +1,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use vector::config::{
-    self, GenerateConfig, Output, SourceConfig, SourceContext, SourceDescription,
-};
+use vector::config::{self, GenerateConfig, Output, SourceConfig, SourceContext};
 use vector::sources;
 use vector::tls::TlsConfig;
 
@@ -26,10 +24,6 @@ pub const fn default_init_retry_delay() -> f64 {
 
 pub const fn default_topology_fetch_interval() -> f64 {
     30.0
-}
-
-inventory::submit! {
-    SourceDescription::new::<TopSQLConfig>("topsql")
 }
 
 impl GenerateConfig for TopSQLConfig {

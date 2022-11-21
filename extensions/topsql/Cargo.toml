@@ -9,7 +9,7 @@ vm-test = []
 
 [dependencies]
 vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false }
-vector_core = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["vrl", "test"] }
+vector_core = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["vrl"] }
 
 async-recursion = "1.0.0"
 etcd-client = { version = "0.9", features = ["tls-roots"] }
@@ -17,7 +17,6 @@ etcd-client = { version = "0.9", features = ["tls-roots"] }
 prost-types = { version = "0.10.1", default-features = false }
 tonic = { version = "0.7.2", default-features = false, features = ["transport", "codegen", "prost", "tls", "tls-roots", "compression"] }
 hex = { version = "0.4.3", default-features = false }
-inventory = { version = "0.1.10", default-features = false }
 snafu = { version = "0.7.1", default-features = false, features = ["futures"] }
 hyper = { version = "0.14.19", default-features = false, features = ["client", "runtime", "http1", "http2", "server", "stream"] }
 serde = { version = "1.0.137", default-features = false, features = ["derive"] }

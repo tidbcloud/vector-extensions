@@ -16,7 +16,7 @@ Steps in general:
     * add a feature depends on the dependency introduced in step 2
     * extend the `features.default` to include the feature
 4. Declare the component in `src/main.rs`
-    * add a line of code `extern crate ${YOUR_COMPONENT_NAME}`
+    * submit the config of the component via `inventory::submit!`
     * add an attribute `#[cfg(feature = "${FEATURE_ADD_IN_STEP_3}")]` above the delcaration
 
 ### Clean

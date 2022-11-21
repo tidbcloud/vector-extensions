@@ -56,15 +56,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "android_system_properties"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "819e7219dbd41043ac279b19830f2efc897156490d7fd6ea916720117ee66311"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "ansi_term"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -273,6 +264,324 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-config"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a8c0628604c0a0afcd417548f085fd52e4ad54cacbf96437db4f45a27a47636"
+dependencies = [
+ "aws-http",
+ "aws-sdk-sso",
+ "aws-sdk-sts",
+ "aws-smithy-async",
+ "aws-smithy-client",
+ "aws-smithy-http",
+ "aws-smithy-http-tower",
+ "aws-smithy-json",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes 1.2.1",
+ "hex",
+ "http",
+ "hyper",
+ "ring",
+ "tokio",
+ "tower",
+ "tracing 0.1.34",
+ "zeroize",
+]
+
+[[package]]
+name = "aws-endpoint"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bae67aca7c551d061a06606ad445d717ee28ac08f70d0f2358096c70118bdfe"
+dependencies = [
+ "aws-smithy-http",
+ "aws-types",
+ "http",
+ "regex",
+ "tracing 0.1.34",
+]
+
+[[package]]
+name = "aws-http"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2145230145123a3308c09a9f8aac2e2213c5540dd0e3a77200c32b20575cbcb"
+dependencies = [
+ "aws-smithy-http",
+ "aws-smithy-types",
+ "aws-types",
+ "http",
+ "lazy_static",
+ "percent-encoding",
+ "tracing 0.1.34",
+]
+
+[[package]]
+name = "aws-s3-upload-file"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "aws-sdk-s3",
+ "base64",
+ "common",
+ "futures 0.3.21",
+ "futures-util",
+ "hex",
+ "md-5",
+ "serde",
+ "tokio",
+ "tokio-util 0.7.1",
+ "toml",
+ "tracing 0.1.34",
+ "typetag",
+ "url",
+ "vector",
+ "vector_core",
+]
+
+[[package]]
+name = "aws-sdk-s3"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a07d057138e3e02a486890fba4abb737470e80bc8069cd596f0d318acc7f0aea"
+dependencies = [
+ "aws-endpoint",
+ "aws-http",
+ "aws-sig-auth",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-client",
+ "aws-smithy-eventstream",
+ "aws-smithy-http",
+ "aws-smithy-http-tower",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "bytes 1.2.1",
+ "http",
+ "md-5",
+ "tokio-stream",
+ "tower",
+]
+
+[[package]]
+name = "aws-sdk-sso"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d3df9fc9d07b0d1dc897a5e9aee924fd8527ff3d8a15677ca4dbb14969aacf0"
+dependencies = [
+ "aws-endpoint",
+ "aws-http",
+ "aws-sig-auth",
+ "aws-smithy-async",
+ "aws-smithy-client",
+ "aws-smithy-http",
+ "aws-smithy-http-tower",
+ "aws-smithy-json",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes 1.2.1",
+ "http",
+ "tokio-stream",
+ "tower",
+]
+
+[[package]]
+name = "aws-sdk-sts"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479f057a876f04ae8594d6f6633572ce7946fda5f1ae420cdfde653d61841bbe"
+dependencies = [
+ "aws-endpoint",
+ "aws-http",
+ "aws-sig-auth",
+ "aws-smithy-async",
+ "aws-smithy-client",
+ "aws-smithy-http",
+ "aws-smithy-http-tower",
+ "aws-smithy-query",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "bytes 1.2.1",
+ "http",
+ "tower",
+]
+
+[[package]]
+name = "aws-sig-auth"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffea94eb16f7f14153d4ff086aa075e0725050ee89ac6c1538cc1b229c64b420"
+dependencies = [
+ "aws-sigv4",
+ "aws-smithy-eventstream",
+ "aws-smithy-http",
+ "aws-types",
+ "http",
+ "tracing 0.1.34",
+]
+
+[[package]]
+name = "aws-sigv4"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "543ad4870152e9850fcbbaec1e1c746c4905682053866848af99681227198cab"
+dependencies = [
+ "aws-smithy-eventstream",
+ "aws-smithy-http",
+ "bytes 1.2.1",
+ "form_urlencoded",
+ "hex",
+ "http",
+ "once_cell",
+ "percent-encoding",
+ "regex",
+ "ring",
+ "time",
+ "tracing 0.1.34",
+]
+
+[[package]]
+name = "aws-smithy-async"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5a05f0f76616a4495999f4132287b4a0ebbb4e733aedbae0e120294f336faf1"
+dependencies = [
+ "futures-util",
+ "pin-project-lite",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "aws-smithy-client"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7a1f41d103bc313190a2af4bb8ff67311ae2e673e3701202fe707fc9597da4c"
+dependencies = [
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-http-tower",
+ "aws-smithy-types",
+ "bytes 1.2.1",
+ "fastrand",
+ "http",
+ "http-body",
+ "hyper",
+ "hyper-rustls 0.22.1",
+ "lazy_static",
+ "pin-project-lite",
+ "tokio",
+ "tower",
+ "tracing 0.1.34",
+]
+
+[[package]]
+name = "aws-smithy-eventstream"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e74c8018f2a7bac3714a63d380f12469349f15ae55bff02ae03e44d5e85c4e79"
+dependencies = [
+ "aws-smithy-types",
+ "bytes 1.2.1",
+ "crc32fast",
+]
+
+[[package]]
+name = "aws-smithy-http"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17bf583ba80ee4ef0fbae4fd1bce07567a03411ac2f82f80d2cfb41ea263c172"
+dependencies = [
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
+ "bytes 1.2.1",
+ "bytes-utils",
+ "futures-core",
+ "http",
+ "http-body",
+ "hyper",
+ "once_cell",
+ "percent-encoding",
+ "pin-project-lite",
+ "tracing 0.1.34",
+]
+
+[[package]]
+name = "aws-smithy-http-tower"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8845020b3875bcaf61c4174430975a07dc9ca9653f1029fcbbf61d197cbe593"
+dependencies = [
+ "aws-smithy-http",
+ "bytes 1.2.1",
+ "http",
+ "http-body",
+ "pin-project-lite",
+ "tower",
+ "tracing 0.1.34",
+]
+
+[[package]]
+name = "aws-smithy-json"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "748702917f9c54f8300710cb7284152fdba6881741654880bfd5c11ecf230425"
+dependencies = [
+ "aws-smithy-types",
+]
+
+[[package]]
+name = "aws-smithy-query"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ca90dfe7151841de25e9e0d1862605aec4fe63fbfdf81417d3dc4baef562350"
+dependencies = [
+ "aws-smithy-types",
+ "urlencoding",
+]
+
+[[package]]
+name = "aws-smithy-types"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83b74dbb59d20bf29d62772c99dfb8b32377a101c0b03879138f34b3e9b15bdc"
+dependencies = [
+ "itoa 1.0.1",
+ "num-integer",
+ "ryu",
+ "time",
+]
+
+[[package]]
+name = "aws-smithy-xml"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4bff2d07dd531709cd1e9153c15a859ca394c9d6b2bb8e91d16960ea1fc8ae6"
+dependencies = [
+ "xmlparser",
+]
+
+[[package]]
+name = "aws-types"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15d31c4af87ae335c41a1ce7d6d699ef274551444e920e93afca3e008aee8f89"
+dependencies = [
+ "aws-smithy-async",
+ "aws-smithy-client",
+ "aws-smithy-http",
+ "aws-smithy-types",
+ "http",
+ "rustc_version",
+ "tracing 0.1.34",
+ "zeroize",
+]
+
+[[package]]
 name = "axum"
 version = "0.5.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -407,12 +716,12 @@ dependencies = [
  "hex",
  "http",
  "hyper",
- "hyper-rustls",
+ "hyper-rustls 0.23.0",
  "hyperlocal",
  "log",
  "pin-project-lite",
- "rustls",
- "rustls-native-certs",
+ "rustls 0.20.4",
+ "rustls-native-certs 0.6.2",
  "rustls-pemfile 0.3.0",
  "serde",
  "serde_derive",
@@ -420,9 +729,9 @@ dependencies = [
  "serde_urlencoded",
  "thiserror",
  "tokio",
- "tokio-util 0.7.3",
+ "tokio-util 0.7.1",
  "url",
- "webpki",
+ "webpki 0.22.0",
  "webpki-roots",
  "winapi 0.3.9",
 ]
@@ -509,6 +818,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytes-utils"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e47d3a8076e283f3acd27400535992edb3ba4b5bb72f8891ad8fbe7932a7d4b9"
+dependencies = [
+ "bytes 1.2.1",
+ "either",
+]
+
+[[package]]
 name = "bytesize"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -552,17 +871,13 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chrono"
-version = "0.4.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfd4d1b31faaa3a89d7934dbded3111da0d2ef28e3ebccdb4f0179f5929d1ef1"
+version = "0.4.19"
+source = "git+https://github.com/vectordotdev/chrono.git?branch=no-default-time#b7abfc3fcd7ffc95ad340f584fbcbe0c2d61e1e9"
 dependencies = [
- "iana-time-zone",
- "js-sys",
+ "libc",
  "num-integer",
  "num-traits",
  "serde",
- "time",
- "wasm-bindgen",
  "winapi 0.3.9",
 ]
 
@@ -659,7 +974,7 @@ dependencies = [
 [[package]]
 name = "codecs"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "avro-rs",
  "bytes 1.2.1",
@@ -672,12 +987,12 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
- "tokio-util 0.7.3",
+ "tokio-util 0.7.1",
  "tracing 0.1.34",
  "value",
  "vector_common",
- "vector_config",
- "vector_config_macros",
+ "vector_config 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+ "vector_config_macros 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
  "vector_core",
 ]
 
@@ -700,6 +1015,16 @@ dependencies = [
  "atty",
  "lazy_static",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "common"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tracing 0.1.34",
 ]
 
 [[package]]
@@ -732,6 +1057,21 @@ checksum = "59a6001667ab124aebae2a495118e11d30984c3a653e99d86d58971708cf5e4b"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "crc"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53757d12b596c16c78b83458d732a5d1a17ab3f53f2f7412f6fb57cc8a140ab3"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d0165d2900ae6778e36e80bbc4da3b5eefccee9ba939761f9c2882a5d9af3ff"
 
 [[package]]
 name = "crc32fast"
@@ -812,6 +1152,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b2466559f260f48ad25fe6317b3c8dac77b5bdb5763ac7d9d6103530663bc90"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "ct-logs"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1a816186fa68d9e426e3cb4ae4dff1fcd8e4a2c34b781bf7a822574a0d0aac8"
+dependencies = [
+ "sct 0.6.1",
 ]
 
 [[package]]
@@ -927,7 +1276,7 @@ dependencies = [
 [[package]]
 name = "datadog-filter"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "datadog-search-syntax",
  "dyn-clone",
@@ -937,7 +1286,7 @@ dependencies = [
 [[package]]
 name = "datadog-grok"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "bytes 1.2.1",
  "chrono",
@@ -962,7 +1311,7 @@ dependencies = [
 [[package]]
 name = "datadog-search-syntax"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "itertools",
  "once_cell",
@@ -1120,7 +1469,7 @@ checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 [[package]]
 name = "enrichment"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -1225,6 +1574,47 @@ name = "ffi-opaque"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec54ac60a7f2ee9a97cad9946f9bf629a3bc6a7ae59e68983dc9318f5a54b81a"
+
+[[package]]
+name = "file-source"
+version = "0.1.0"
+source = "git+https://github.com/vectordotdev/vector?tag=v0.23.3#af8c9e1f2561b3d2b32903e03acab9dc1bf44be4"
+dependencies = [
+ "bstr",
+ "bytes 1.2.1",
+ "chrono",
+ "crc",
+ "dashmap 5.2.0",
+ "flate2",
+ "futures 0.3.21",
+ "glob",
+ "indexmap",
+ "libc",
+ "scan_fmt",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing 0.1.34",
+ "winapi 0.3.9",
+]
+
+[[package]]
+name = "filename"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "file-source",
+ "metrics",
+ "serde",
+ "tokio",
+ "toml",
+ "tracing 0.1.34",
+ "typetag",
+ "vector",
+ "vector_config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
+ "vector_config_macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
+ "vector_core",
+]
 
 [[package]]
 name = "filetime"
@@ -1515,7 +1905,7 @@ dependencies = [
  "indexmap",
  "slab",
  "tokio",
- "tokio-util 0.7.3",
+ "tokio-util 0.7.1",
  "tracing 0.1.34",
 ]
 
@@ -1704,6 +2094,23 @@ dependencies = [
 
 [[package]]
 name = "hyper-rustls"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f9f7a97316d44c0af9b0301e65010573a853a9fc97046d7331d7f6bc0fd5a64"
+dependencies = [
+ "ct-logs",
+ "futures-util",
+ "hyper",
+ "log",
+ "rustls 0.19.1",
+ "rustls-native-certs 0.5.0",
+ "tokio",
+ "tokio-rustls 0.22.0",
+ "webpki 0.21.4",
+]
+
+[[package]]
+name = "hyper-rustls"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d87c48c02e0dc5e3b849a2041db3029fd066650f8f717c07bf8ed78ccb895cac"
@@ -1711,10 +2118,10 @@ dependencies = [
  "http",
  "hyper",
  "log",
- "rustls",
- "rustls-native-certs",
+ "rustls 0.20.4",
+ "rustls-native-certs 0.6.2",
  "tokio",
- "tokio-rustls",
+ "tokio-rustls 0.23.3",
 ]
 
 [[package]]
@@ -1740,19 +2147,6 @@ dependencies = [
  "hyper",
  "pin-project",
  "tokio",
-]
-
-[[package]]
-name = "iana-time-zone"
-version = "0.1.46"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad2bfd338099682614d3ee3fe0cd72e0b6a41ca6a87f6a74a3bd593c91650501"
-dependencies = [
- "android_system_properties",
- "core-foundation-sys",
- "js-sys",
- "wasm-bindgen",
- "winapi 0.3.9",
 ]
 
 [[package]]
@@ -2067,7 +2461,7 @@ dependencies = [
 [[package]]
 name = "lookup"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "inherent",
  "lalrpop",
@@ -2847,7 +3241,7 @@ checksum = "1df8c4ec4b0627e53bdf214615ad287367e482558cf84b109250b37464dc03ae"
 [[package]]
 name = "portpicker"
 version = "1.0.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "rand 0.8.5",
 ]
@@ -3275,14 +3669,39 @@ dependencies = [
 
 [[package]]
 name = "rustls"
+version = "0.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35edb675feee39aec9c99fa5ff985081995a06d594114ae14cbe797ad7b7a6d7"
+dependencies = [
+ "base64",
+ "log",
+ "ring",
+ "sct 0.6.1",
+ "webpki 0.21.4",
+]
+
+[[package]]
+name = "rustls"
 version = "0.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fbfeb8d0ddb84706bc597a5574ab8912817c52a397f819e5b614e2265206921"
 dependencies = [
  "log",
  "ring",
- "sct",
- "webpki",
+ "sct 0.7.0",
+ "webpki 0.22.0",
+]
+
+[[package]]
+name = "rustls-native-certs"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a07b7c1885bd8ed3831c289b7870b13ef46fe0e856d288c30d9cc17d75a2092"
+dependencies = [
+ "openssl-probe",
+ "rustls 0.19.1",
+ "schannel",
+ "security-framework",
 ]
 
 [[package]]
@@ -3337,6 +3756,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scan_fmt"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b53b0a5db882a8e2fdaae0a43f7b39e7e9082389e978398bdf223a55b581248"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3382,6 +3810,16 @@ name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
+
+[[package]]
+name = "sct"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b362b83898e0e69f38515b82ee15aa80636befe47c3b6d3d89a911e78fc228ce"
+dependencies = [
+ "ring",
+ "untrusted",
+]
 
 [[package]]
 name = "sct"
@@ -3830,12 +4268,28 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.1.43"
+version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca8a50ef2360fbd1eeb0ecd46795a87a19024eb4b53c5dc916ca1fd95fe62438"
+checksum = "a561bf4617eebd33bca6434b988f39ed798e527f51a1e797d0ee4f61c0a38376"
 dependencies = [
- "libc",
- "winapi 0.3.9",
+ "serde",
+ "time-core",
+ "time-macros",
+]
+
+[[package]]
+name = "time-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e153e1f1acaef8acc537e68b44906d2db6436e2b35ac2c6b42640fff91f00fd"
+
+[[package]]
+name = "time-macros"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d967f99f534ca7e495c575c62638eebc2898a8c84c119b89e250477bc4ba16b2"
+dependencies = [
+ "time-core",
 ]
 
 [[package]]
@@ -3929,13 +4383,24 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc6844de72e57df1980054b38be3a9f4702aba4858be64dd700181a8a6d0e1b6"
+dependencies = [
+ "rustls 0.19.1",
+ "tokio",
+ "webpki 0.21.4",
+]
+
+[[package]]
+name = "tokio-rustls"
 version = "0.23.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4151fda0cf2798550ad0b34bcfc9b9dcc2a9d2471c895c68f3a8818e54f2389e"
 dependencies = [
- "rustls",
+ "rustls 0.20.4",
  "tokio",
- "webpki",
+ "webpki 0.22.0",
 ]
 
 [[package]]
@@ -3947,7 +4412,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util 0.7.3",
+ "tokio-util 0.7.1",
 ]
 
 [[package]]
@@ -3966,9 +4431,8 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc463cd8deddc3770d20f9852143d50bf6094e640b485cb2e189a2099085ff45"
+version = "0.7.1"
+source = "git+https://github.com/vectordotdev/tokio?rev=3aa231cf6f33f74ca29077163879f0de9a207ad8#3aa231cf6f33f74ca29077163879f0de9a207ad8"
 dependencies = [
  "bytes 1.2.1",
  "futures-core",
@@ -4011,12 +4475,12 @@ dependencies = [
  "pin-project",
  "prost",
  "prost-derive",
- "rustls-native-certs",
+ "rustls-native-certs 0.6.2",
  "rustls-pemfile 1.0.0",
  "tokio",
- "tokio-rustls",
+ "tokio-rustls 0.23.3",
  "tokio-stream",
- "tokio-util 0.7.3",
+ "tokio-util 0.7.1",
  "tower",
  "tower-layer",
  "tower-service",
@@ -4051,7 +4515,6 @@ dependencies = [
  "hex",
  "http",
  "hyper",
- "inventory 0.1.11",
  "ordered-float 3.0.0",
  "prost",
  "prost-build",
@@ -4087,7 +4550,7 @@ dependencies = [
  "rand 0.8.5",
  "slab",
  "tokio",
- "tokio-util 0.7.3",
+ "tokio-util 0.7.1",
  "tower-layer",
  "tower-service",
  "tracing 0.1.34",
@@ -4200,7 +4663,7 @@ dependencies = [
 [[package]]
 name = "tracing-limit"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "dashmap 5.2.0",
  "tracing-core 0.1.28",
@@ -4412,6 +4875,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "urlencoding"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8db7427f936968176eaa7cdf81b7f98b980b18495ec28f1b5791ac3bfe3eea9"
+
+[[package]]
 name = "utf8-width"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4452,7 +4921,7 @@ checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
 [[package]]
 name = "value"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "async-graphql",
  "bytes 1.2.1",
@@ -4477,12 +4946,21 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "vector"
 version = "0.23.3"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "async-stream",
  "async-trait",
  "atty",
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-smithy-async",
+ "aws-smithy-client",
+ "aws-smithy-http",
+ "aws-smithy-http-tower",
+ "aws-smithy-types",
+ "aws-types",
  "axum",
+ "base64",
  "bollard",
  "bytes 1.2.1",
  "bytesize",
@@ -4513,6 +4991,7 @@ dependencies = [
  "indoc",
  "inventory 0.1.11",
  "lookup",
+ "md-5",
  "metrics",
  "metrics-tracing-context",
  "nix",
@@ -4542,7 +5021,7 @@ dependencies = [
  "tokio",
  "tokio-openssl",
  "tokio-stream",
- "tokio-util 0.7.3",
+ "tokio-util 0.7.1",
  "toml",
  "tower",
  "tracing 0.1.34",
@@ -4558,8 +5037,8 @@ dependencies = [
  "vector-vrl-functions",
  "vector_buffers",
  "vector_common",
- "vector_config",
- "vector_config_macros",
+ "vector_config 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+ "vector_config_macros 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
  "vector_core",
  "vrl",
  "vrl-stdlib",
@@ -4571,7 +5050,10 @@ dependencies = [
 name = "vector-extensions"
 version = "0.23.3"
 dependencies = [
+ "aws-s3-upload-file",
+ "filename",
  "hyper",
+ "inventory 0.1.11",
  "lazy_static",
  "regex",
  "tokio",
@@ -4584,7 +5066,7 @@ dependencies = [
 [[package]]
 name = "vector-vrl-functions"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "lookup",
  "value",
@@ -4594,7 +5076,7 @@ dependencies = [
 [[package]]
 name = "vector_buffers"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "async-recursion",
  "async-stream",
@@ -4617,7 +5099,7 @@ dependencies = [
  "serde",
  "snafu",
  "tokio",
- "tokio-util 0.7.3",
+ "tokio-util 0.7.1",
  "tracing 0.1.34",
  "vector_common",
 ]
@@ -4625,7 +5107,7 @@ dependencies = [
 [[package]]
 name = "vector_common"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "bytes 1.2.1",
  "chrono",
@@ -4645,13 +5127,13 @@ dependencies = [
  "tokio",
  "tracing 0.1.34",
  "value",
- "vector_config",
+ "vector_config 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
 ]
 
 [[package]]
 name = "vector_config"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/vectordotdev/vector?tag=v0.23.3#af8c9e1f2561b3d2b32903e03acab9dc1bf44be4"
 dependencies = [
  "encoding_rs",
  "indexmap",
@@ -4659,14 +5141,41 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "vector_config_common",
- "vector_config_macros",
+ "vector_config_common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
+ "vector_config_macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
+]
+
+[[package]]
+name = "vector_config"
+version = "0.1.0"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
+dependencies = [
+ "encoding_rs",
+ "indexmap",
+ "num-traits",
+ "schemars",
+ "serde",
+ "serde_json",
+ "vector_config_common 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+ "vector_config_macros 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
 ]
 
 [[package]]
 name = "vector_config_common"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/vectordotdev/vector?tag=v0.23.3#af8c9e1f2561b3d2b32903e03acab9dc1bf44be4"
+dependencies = [
+ "darling 0.13.4",
+ "proc-macro2",
+ "quote",
+ "schemars",
+ "syn",
+]
+
+[[package]]
+name = "vector_config_common"
+version = "0.1.0"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
@@ -4678,20 +5187,33 @@ dependencies = [
 [[package]]
 name = "vector_config_macros"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/vectordotdev/vector?tag=v0.23.3#af8c9e1f2561b3d2b32903e03acab9dc1bf44be4"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
  "quote",
  "serde_derive_internals",
  "syn",
- "vector_config_common",
+ "vector_config_common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
+]
+
+[[package]]
+name = "vector_config_macros"
+version = "0.1.0"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
+dependencies = [
+ "darling 0.13.4",
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn",
+ "vector_config_common 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
 ]
 
 [[package]]
 name = "vector_core"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "async-trait",
  "bitmask-enum",
@@ -4724,7 +5246,7 @@ dependencies = [
  "serde_json",
  "snafu",
  "tokio",
- "tokio-util 0.7.3",
+ "tokio-util 0.7.1",
  "toml",
  "tower",
  "tracing 0.1.34",
@@ -4737,8 +5259,8 @@ dependencies = [
  "value",
  "vector_buffers",
  "vector_common",
- "vector_config",
- "vector_config_macros",
+ "vector_config 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+ "vector_config_macros 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
  "vrl",
 ]
 
@@ -4758,7 +5280,6 @@ dependencies = [
  "futures-util",
  "http",
  "hyper",
- "inventory 0.1.11",
  "serde",
  "serde_json",
  "toml",
@@ -4771,7 +5292,7 @@ dependencies = [
 [[package]]
 name = "vrl"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "bytes 1.2.1",
  "indoc",
@@ -4787,7 +5308,7 @@ dependencies = [
 [[package]]
 name = "vrl-compiler"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "anymap",
  "bytes 1.2.1",
@@ -4810,7 +5331,7 @@ dependencies = [
 [[package]]
 name = "vrl-core"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "lookup",
  "value",
@@ -4820,7 +5341,7 @@ dependencies = [
 [[package]]
 name = "vrl-diagnostic"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "codespan-reporting",
  "termcolor",
@@ -4829,7 +5350,7 @@ dependencies = [
 [[package]]
 name = "vrl-parser"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "lalrpop",
  "lalrpop-util",
@@ -4843,7 +5364,7 @@ dependencies = [
 [[package]]
 name = "vrl-stdlib"
 version = "0.1.0"
-source = "git+https://github.com/zhongzc/vector?branch=extend#9a3f970e5869d47a0a76515a2443542d236ebd4b"
+source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "aes",
  "base64",
@@ -5044,6 +5565,16 @@ dependencies = [
 
 [[package]]
 name = "webpki"
+version = "0.21.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8e38c0608262c46d4a56202ebabdeb094cef7e560ca7a226c6bf055188aa4ea"
+dependencies = [
+ "ring",
+ "untrusted",
+]
+
+[[package]]
+name = "webpki"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f095d78192e208183081cc07bc5515ef55216397af48b873e5edcd72637fa1bd"
@@ -5058,7 +5589,7 @@ version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44d8de8415c823c8abd270ad483c6feeac771fad964890779f9a8cb24fbbc1bf"
 dependencies = [
- "webpki",
+ "webpki 0.22.0",
 ]
 
 [[package]]
@@ -5274,3 +5805,9 @@ dependencies = [
  "syn",
  "synstructure",
 ]
+
+[[package]]
+name = "zeroize"
+version = "1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c394b5bd0c6f669e7275d9c20aa90ae064cb22e75a1cad54e1b34088034b149f"

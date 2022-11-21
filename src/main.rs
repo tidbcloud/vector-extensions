@@ -1,13 +1,26 @@
 #![deny(warnings)]
 
-// Extensions
-#[cfg(feature = "topsql")]
-extern crate topsql;
-#[cfg(feature = "vm-import")]
-extern crate vm_import;
-
-extern crate vector;
 use vector::app::Application;
+#[allow(unused_imports)]
+use vector::config::{SinkDescription, SourceDescription};
+
+// Extensions
+#[cfg(feature = "filename")]
+inventory::submit! {
+    SourceDescription::new::<filename::FilenameConfig>("filename")
+}
+#[cfg(feature = "aws-s3-upload-file")]
+inventory::submit! {
+    SinkDescription::new::<aws_s3_upload_file::S3UploadFileConfig>("aws_s3_upload_file")
+}
+#[cfg(feature = "topsql")]
+inventory::submit! {
+    SourceDescription::new::<topsql::TopSQLConfig>("topsql")
+}
+#[cfg(feature = "vm-import")]
+inventory::submit! {
+    SinkDescription::new::<vm_import::VMImportConfig>("vm_import")
+}
 
 #[cfg(unix)]
 fn main() {

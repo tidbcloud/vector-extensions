@@ -1,6 +1,6 @@
 use futures_util::{FutureExt, SinkExt};
 use serde::{Deserialize, Serialize};
-use vector::config::{AcknowledgementsConfig, GenerateConfig, Input, SinkConfig, SinkDescription};
+use vector::config::{AcknowledgementsConfig, GenerateConfig, Input, SinkConfig};
 use vector::http::HttpClient;
 use vector::sinks::util::http::PartitionHttpSink;
 use vector::sinks::util::{
@@ -10,10 +10,6 @@ use vector::tls::{TlsConfig, TlsSettings};
 use vector::{config, sinks};
 
 use crate::sink::VMImportSink;
-
-inventory::submit! {
-    SinkDescription::new::<VMImportConfig>("vm_import")
-}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct VMImportConfig {
@@ -104,10 +100,11 @@ async fn healthcheck(endpoint: Option<String>, client: HttpClient) -> vector::Re
     let request = http::Request::get(endpoint).body(hyper::Body::empty())?;
     let response = client.send(request).await?;
     let status = response.status();
-    status
-        .is_success()
-        .then_some(())
-        .ok_or_else(move || sinks::HealthcheckError::UnexpectedStatus { status }.into())
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(sinks::HealthcheckError::UnexpectedStatus { status }.into())
+    }
 }
 
 #[cfg(test)]
