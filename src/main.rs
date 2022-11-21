@@ -1,6 +1,8 @@
 #![deny(warnings)]
 
 // Extensions
+#[cfg(feature = "aws-s3-upload-file")]
+extern crate aws_s3_upload_file;
 #[cfg(feature = "topsql")]
 extern crate topsql;
 #[cfg(feature = "vm-import")]
