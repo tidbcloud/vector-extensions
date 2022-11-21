@@ -9,7 +9,7 @@ vm-test = []
 
 [dependencies]
 vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false }
-vector_core = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["vrl", "test"] }
+vector_core = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["vrl"] }
 
 async-recursion = "1.0.0"
 etcd-client = { version = "0.9", features = ["tls-roots"] }

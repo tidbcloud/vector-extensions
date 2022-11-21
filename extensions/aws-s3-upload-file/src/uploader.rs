@@ -97,7 +97,7 @@ impl S3Uploader {
         let tagging = self.options.tags.as_ref().map(|tags| {
             let mut tagging = url::form_urlencoded::Serializer::new(String::new());
             for (p, v) in tags {
-                tagging.append_pair(&p, &v);
+                tagging.append_pair(p, v);
             }
             tagging.finish()
         });
@@ -252,7 +252,7 @@ impl<'a, 'b> MultipartUploader<'a, 'b> {
         let tagging = self.options.tags.as_ref().map(|tags| {
             let mut tagging = url::form_urlencoded::Serializer::new(String::new());
             for (p, v) in tags {
-                tagging.append_pair(&p, &v);
+                tagging.append_pair(p, v);
             }
             tagging.finish()
         });

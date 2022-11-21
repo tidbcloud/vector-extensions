@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["aws-config", "sinks-aws_s3"] }
-vector_core = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["vrl", "test"] }
+vector_core = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["vrl"] }
 
 common = { path = "../common" }
 

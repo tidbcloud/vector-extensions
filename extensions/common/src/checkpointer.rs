@@ -74,14 +74,12 @@ impl Checkpointer {
                 info!(message = "Loaded checkpoint data.");
                 self.checkpoints.set_state(&state);
                 self.last = state;
-                return;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 // This is expected, so no warning needed
             }
             Err(error) => {
                 warn!(message = "Unable to load checkpoint data.", %error);
-                return;
             }
         }
     }
@@ -174,7 +172,7 @@ impl CheckPointsView {
 
     pub fn update(&mut self, key: UploadKey, upload_at: DateTime<Utc>, expire_at: DateTime<Utc>) {
         self.upload_times.insert(key.clone(), upload_at);
-        self.expire_times.insert(key.clone(), expire_at);
+        self.expire_times.insert(key, expire_at);
     }
 
     pub fn remove_expired(&mut self) {

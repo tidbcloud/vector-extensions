@@ -992,8 +992,8 @@ dependencies = [
  "tracing 0.1.34",
  "value",
  "vector_common",
- "vector_config",
- "vector_config_macros",
+ "vector_config 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+ "vector_config_macros 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
  "vector_core",
 ]
 
@@ -1058,6 +1058,21 @@ checksum = "59a6001667ab124aebae2a495118e11d30984c3a653e99d86d58971708cf5e4b"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "crc"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53757d12b596c16c78b83458d732a5d1a17ab3f53f2f7412f6fb57cc8a140ab3"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d0165d2900ae6778e36e80bbc4da3b5eefccee9ba939761f9c2882a5d9af3ff"
 
 [[package]]
 name = "crc32fast"
@@ -1560,6 +1575,48 @@ name = "ffi-opaque"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec54ac60a7f2ee9a97cad9946f9bf629a3bc6a7ae59e68983dc9318f5a54b81a"
+
+[[package]]
+name = "file-source"
+version = "0.1.0"
+source = "git+https://github.com/vectordotdev/vector?tag=v0.23.3#af8c9e1f2561b3d2b32903e03acab9dc1bf44be4"
+dependencies = [
+ "bstr",
+ "bytes 1.2.1",
+ "chrono",
+ "crc",
+ "dashmap 5.2.0",
+ "flate2",
+ "futures 0.3.21",
+ "glob",
+ "indexmap",
+ "libc",
+ "scan_fmt",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing 0.1.34",
+ "winapi 0.3.9",
+]
+
+[[package]]
+name = "filename"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "file-source",
+ "inventory 0.1.11",
+ "metrics",
+ "serde",
+ "tokio",
+ "toml",
+ "tracing 0.1.34",
+ "typetag",
+ "vector",
+ "vector_config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
+ "vector_config_macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
+ "vector_core",
+]
 
 [[package]]
 name = "filetime"
@@ -3701,6 +3758,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scan_fmt"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b53b0a5db882a8e2fdaae0a43f7b39e7e9082389e978398bdf223a55b581248"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4974,8 +5040,8 @@ dependencies = [
  "vector-vrl-functions",
  "vector_buffers",
  "vector_common",
- "vector_config",
- "vector_config_macros",
+ "vector_config 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+ "vector_config_macros 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
  "vector_core",
  "vrl",
  "vrl-stdlib",
@@ -4988,6 +5054,7 @@ name = "vector-extensions"
 version = "0.23.3"
 dependencies = [
  "aws-s3-upload-file",
+ "filename",
  "hyper",
  "lazy_static",
  "regex",
@@ -5062,7 +5129,22 @@ dependencies = [
  "tokio",
  "tracing 0.1.34",
  "value",
- "vector_config",
+ "vector_config 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+]
+
+[[package]]
+name = "vector_config"
+version = "0.1.0"
+source = "git+https://github.com/vectordotdev/vector?tag=v0.23.3#af8c9e1f2561b3d2b32903e03acab9dc1bf44be4"
+dependencies = [
+ "encoding_rs",
+ "indexmap",
+ "num-traits",
+ "schemars",
+ "serde",
+ "serde_json",
+ "vector_config_common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
+ "vector_config_macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
 ]
 
 [[package]]
@@ -5076,8 +5158,20 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "vector_config_common",
- "vector_config_macros",
+ "vector_config_common 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+ "vector_config_macros 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+]
+
+[[package]]
+name = "vector_config_common"
+version = "0.1.0"
+source = "git+https://github.com/vectordotdev/vector?tag=v0.23.3#af8c9e1f2561b3d2b32903e03acab9dc1bf44be4"
+dependencies = [
+ "darling 0.13.4",
+ "proc-macro2",
+ "quote",
+ "schemars",
+ "syn",
 ]
 
 [[package]]
@@ -5095,6 +5189,19 @@ dependencies = [
 [[package]]
 name = "vector_config_macros"
 version = "0.1.0"
+source = "git+https://github.com/vectordotdev/vector?tag=v0.23.3#af8c9e1f2561b3d2b32903e03acab9dc1bf44be4"
+dependencies = [
+ "darling 0.13.4",
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn",
+ "vector_config_common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.23.3)",
+]
+
+[[package]]
+name = "vector_config_macros"
+version = "0.1.0"
 source = "git+https://github.com/zhongzc/vector?branch=extend-0.23#64033ea9a9a2252232b8df069925975d5b22c9c5"
 dependencies = [
  "darling 0.13.4",
@@ -5102,7 +5209,7 @@ dependencies = [
  "quote",
  "serde_derive_internals",
  "syn",
- "vector_config_common",
+ "vector_config_common 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
 ]
 
 [[package]]
@@ -5154,8 +5261,8 @@ dependencies = [
  "value",
  "vector_buffers",
  "vector_common",
- "vector_config",
- "vector_config_macros",
+ "vector_config 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
+ "vector_config_macros 0.1.0 (git+https://github.com/zhongzc/vector?branch=extend-0.23)",
  "vrl",
 ]
 
