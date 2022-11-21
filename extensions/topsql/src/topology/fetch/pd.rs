@@ -51,7 +51,8 @@ impl<'a> PDTopologyFetcher<'a> {
 
         let health_members = health_resp
             .iter()
-            .filter_map(|h| h.health.then_some(h.member_id))
+            .filter(|h| h.health)
+            .map(|h| h.member_id)
             .collect::<HashSet<_>>();
         for member in members_resp.members {
             if health_members.contains(&member.member_id) {
