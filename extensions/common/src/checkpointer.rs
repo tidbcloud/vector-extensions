@@ -5,6 +5,7 @@ use std::{fs, io};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use vector_core::event::Event;
 
 const TMP_FILE_NAME: &str = "checkpoints.new.json";
 const CHECKPOINT_FILE_NAME: &str = "checkpoints.json";
@@ -126,6 +127,23 @@ pub struct UploadKey {
     pub filename: String,
     pub bucket: String,
     pub object_key: String,
+}
+
+impl UploadKey {
+    pub fn from_event(event: &Event, bucket: &str) -> Option<Self> {
+        let log = event.maybe_as_log()?;
+        let filename_val = log.get("message")?;
+        let filename = String::from_utf8_lossy(filename_val.as_bytes()?);
+
+        let object_key_val = log.get("key")?;
+        let object_key = String::from_utf8_lossy(object_key_val.as_bytes()?);
+
+        Some(UploadKey {
+            bucket: bucket.to_owned(),
+            object_key: object_key.to_string(),
+            filename: filename.to_string(),
+        })
+    }
 }
 
 #[derive(Default)]

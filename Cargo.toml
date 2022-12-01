@@ -11,11 +11,12 @@ path = "src/main.rs"
 name = "vector"
 
 [features]
-default = ["topsql", "vm-import", "aws-s3-upload-file", "filename"]
+default = ["topsql", "vm-import", "aws-s3-upload-file", "gcp-cloud-storage-upload-file", "filename"]
 
 topsql = ["dep:topsql"]
 vm-import = ["dep:vm-import"]
 aws-s3-upload-file = ["dep:aws-s3-upload-file"]
+gcp-cloud-storage-upload-file = ["dep:gcp-cloud-storage-upload-file"]
 filename = ["dep:filename"]
 
 [dependencies]
@@ -26,6 +27,7 @@ inventory = { version = "0.1.10", default-features = false }
 topsql = { path = "extensions/topsql", optional = true }
 vm-import = { path = "extensions/vm-import", optional = true }
 aws-s3-upload-file = { path = "extensions/aws-s3-upload-file", optional = true }
+gcp-cloud-storage-upload-file = { path = "extensions/gcp-cloud-storage-upload-file", optional = true }
 filename = { path = "extensions/filename", optional = true }
 
 [dev-dependencies]

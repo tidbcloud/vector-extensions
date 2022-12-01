@@ -13,6 +13,10 @@ inventory::submit! {
 inventory::submit! {
     SinkDescription::new::<aws_s3_upload_file::S3UploadFileConfig>("aws_s3_upload_file")
 }
+#[cfg(feature = "gcp-cloud-storage-upload-file")]
+inventory::submit! {
+    SinkDescription::new::<gcp_cloud_storage_upload_file::GcsUploadFileSinkConfig>("gcp_cloud_storage_upload_file")
+}
 #[cfg(feature = "topsql")]
 inventory::submit! {
     SourceDescription::new::<topsql::TopSQLConfig>("topsql")

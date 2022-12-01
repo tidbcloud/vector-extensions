@@ -3,44 +3,47 @@ use std::io;
 use std::time::{Duration, SystemTime};
 
 use common::checkpointer::{Checkpointer, UploadKey};
-use futures::stream::BoxStream;
+use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use tokio_util::time::DelayQueue;
 use vector::emit;
 use vector::event::Finalizable;
-use vector::sinks::s3_common::config::S3Options;
-use vector::sinks::s3_common::service::S3Service;
+use vector::gcp::GcpAuthenticator;
+use vector::http::HttpClient;
 use vector_core::event::{Event, EventStatus};
 use vector_core::internal_event::EventsSent;
 use vector_core::sink::StreamSink;
 
-use crate::uploader::S3Uploader;
+use crate::uploader::{GCSUploader, RequestSettings};
 
-pub struct S3UploadFileSink {
-    pub service: S3Service,
-    pub bucket: String,
-    pub options: S3Options,
-    pub delay_upload: Duration,
-    pub expire_after: Duration,
-    pub checkpointer: Checkpointer,
+pub struct GcsUploadFileSink {
+    client: HttpClient,
+    bucket: String,
+    auth: GcpAuthenticator,
+    delay_upload: Duration,
+    expire_after: Duration,
+    checkpointer: Checkpointer,
+    request_settings: RequestSettings,
 }
 
-impl S3UploadFileSink {
-    pub fn new(
+impl GcsUploadFileSink {
+    pub const fn new(
+        client: HttpClient,
         bucket: String,
-        options: S3Options,
+        auth: GcpAuthenticator,
         delay_upload: Duration,
         expire_after: Duration,
-        service: S3Service,
         checkpointer: Checkpointer,
+        request_settings: RequestSettings,
     ) -> Self {
         Self {
+            client,
             bucket,
-            options,
+            auth,
             delay_upload,
             expire_after,
-            service,
             checkpointer,
+            request_settings,
         }
     }
 
@@ -50,20 +53,21 @@ impl S3UploadFileSink {
 }
 
 #[async_trait::async_trait]
-impl StreamSink<Event> for S3UploadFileSink {
+impl StreamSink<Event> for GcsUploadFileSink {
     async fn run(self: Box<Self>, mut input: BoxStream<'_, Event>) -> Result<(), ()> {
         let Self {
-            service,
+            client,
             bucket,
-            options,
+            auth,
             delay_upload,
             expire_after,
             mut checkpointer,
+            request_settings,
         } = *self;
 
         let mut delay_queue = DelayQueue::new();
         let mut pending_uploads = HashSet::new();
-        let mut uploader = S3Uploader::new(service.client(), options);
+        let mut uploader = GCSUploader::new(client, auth, request_settings);
 
         loop {
             tokio::select! {
@@ -129,7 +133,7 @@ impl StreamSink<Event> for S3UploadFileSink {
                         }
                         Err(error) => {
                             error!(
-                                message = "Failed to upload file to S3.",
+                                message = "Failed to upload file to GCS.",
                                 %error,
                                 filename = %upload_key.filename,
                                 bucket = %upload_key.bucket,
