@@ -1,0 +1,28 @@
+[package]
+name = "gcp-cloud-storage-upload-file"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["gcp", "sinks-gcp"] }
+vector_core = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["vrl"] }
+
+common = { path = "../common" }
+
+tracing = { version = "0.1.34", default-features = false }
+serde = { version = "1.0.137", default-features = false, features = ["derive"] }
+toml = { version = "0.5.9", default-features = false }
+tokio = { version = "1.19.2", default-features = false, features = ["full"] }
+async-trait = { version = "0.1.56", default-features = false }
+tokio-util = { version = "0.7", default-features = false, features = ["io", "time"] }
+futures = { version = "0.3.21", default-features = false, features = ["compat", "io-compat"], package = "futures" }
+md-5 = { version = "0.10", default-features = false }
+base64 = { version = "0.13.0", default-features = false }
+futures-util = { version = "0.3.21", default-features = false }
+typetag = { version = "0.1.8", default-features = false }
+hex = { version = "0.4.3", default-features = false }
+http = { version = "0.2.8", default-features = false }
+hyper = { version = "0.14.19", default-features = false, features = ["client", "runtime", "http1", "http2", "server", "stream"] }
+chrono = { version = "0.4.19", default-features = false,  features = ["clock", "serde"] }
+goauth = { version = "0.13.0" }
