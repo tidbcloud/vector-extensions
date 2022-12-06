@@ -22,10 +22,6 @@ impl EtagCalculator {
         }
     }
 
-    pub fn part(chunk: &[u8]) -> String {
-        format!("\"{:x}\"", md5::Md5::digest(chunk))
-    }
-
     pub fn content_md5(chunk: &[u8]) -> String {
         base64::encode(md5::Md5::digest(chunk))
     }
