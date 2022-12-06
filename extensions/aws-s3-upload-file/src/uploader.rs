@@ -1,6 +1,6 @@
 use std::io;
 
-use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart, MultipartUpload, Part};
+use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use common::checkpointer::UploadKey;
@@ -82,8 +82,6 @@ impl S3Uploader {
             .read_to_end(&mut chunk)
             .await?;
         if n < S3_MULTIPART_UPLOAD_CHUNK_SIZE {
-            let uploader = self.multipart_uploader(upload_key, vec![], file);
-            uploader.abort_all_uploads().await?;
             self.put_object(upload_key, chunk).await
         } else {
             let uploader = self.multipart_uploader(upload_key, chunk, file);
@@ -161,7 +159,19 @@ struct MultipartUploader<'a, 'b> {
 
 impl<'a, 'b> MultipartUploader<'a, 'b> {
     async fn upload(mut self) -> io::Result<usize> {
-        self.initiate_upload().await?;
+        match self.do_upload().await {
+            Ok(size) => Ok(size),
+            Err(e) => {
+                if !self.upload_id.is_empty() {
+                    self.abort_upload().await?;
+                }
+                Err(e)
+            }
+        }
+    }
+
+    async fn do_upload(&mut self) -> io::Result<usize> {
+        self.upload_id = self.create_upload().await?;
 
         let mut uploaded_size = 0;
         while !self.chunk.is_empty() {
@@ -183,69 +193,6 @@ impl<'a, 'b> MultipartUploader<'a, 'b> {
 
         self.complete_upload().await?;
         Ok(uploaded_size)
-    }
-
-    async fn initiate_upload(&mut self) -> io::Result<()> {
-        let uploads = self.list_existing_uploads().await?;
-        if uploads.is_empty() {
-            self.upload_id = self.create_upload().await?;
-            return Ok(());
-        }
-
-        // only recover the latest multipart upload, abort others
-        let upload_id = self.cleanup_uploads_except_latest(uploads).await?;
-        let parts = self.list_parts(&upload_id).await?;
-        if parts.is_empty() {
-            self.upload_id = upload_id;
-            return Ok(());
-        }
-
-        if self.verify_and_advance(parts, &upload_id).await? {
-            self.upload_id = upload_id;
-            return Ok(());
-        }
-
-        self.abort_upload(upload_id).await?;
-        self.upload_id = self.create_upload().await?;
-        // `verify_and_advance` modified these fields, reset them
-        self.file = File::open(&self.upload_key.filename).await?;
-        self.chunk.clear();
-        (&mut self.file)
-            .take(S3_MULTIPART_UPLOAD_CHUNK_SIZE as u64)
-            .read_to_end(&mut self.chunk)
-            .await?;
-        self.part_number = 1;
-        self.completed_parts.clear();
-        Ok(())
-    }
-
-    async fn abort_all_uploads(&self) -> io::Result<()> {
-        let uploads = self.list_existing_uploads().await?;
-        for upload in uploads {
-            let upload_id = upload.upload_id.unwrap_or_default();
-            info!(
-                message = "Cleaned up unused multipart upload",
-                filename = %self.upload_key.filename,
-                bucket = %self.upload_key.bucket,
-                key = %self.upload_key.object_key,
-                %upload_id,
-            );
-            self.abort_upload(upload_id).await?;
-        }
-        Ok(())
-    }
-
-    async fn list_existing_uploads(&self) -> io::Result<Vec<MultipartUpload>> {
-        let uploads = self
-            .client
-            .list_multipart_uploads()
-            .bucket(&self.upload_key.bucket)
-            .prefix(&self.upload_key.object_key)
-            .send()
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-        Ok(uploads.uploads.unwrap_or_default())
     }
 
     async fn create_upload(&mut self) -> io::Result<String> {
@@ -280,125 +227,17 @@ impl<'a, 'b> MultipartUploader<'a, 'b> {
         Ok(response.upload_id.unwrap_or_default())
     }
 
-    async fn cleanup_uploads_except_latest(
-        &self,
-        mut uploads: Vec<MultipartUpload>,
-    ) -> io::Result<String> {
-        uploads.sort_unstable_by_key(|a| {
-            a.initiated
-                .as_ref()
-                .map(|a| a.as_nanos())
-                .unwrap_or_default()
-        });
-        let upload = uploads.pop().unwrap();
-
-        // abort older uploads
-        for upload in uploads {
-            let upload_id = upload.upload_id.unwrap_or_default();
-            info!(
-                message = "Cleaned up unused multipart upload",
-                filename = %self.upload_key.filename,
-                bucket = %self.upload_key.bucket,
-                key = %self.upload_key.object_key,
-                %upload_id,
-            );
-            self.abort_upload(upload_id).await?;
-        }
-
-        Ok(upload.upload_id.unwrap_or_default())
-    }
-
-    async fn abort_upload(&self, upload_id: String) -> io::Result<()> {
+    async fn abort_upload(&self) -> io::Result<()> {
         self.client
             .abort_multipart_upload()
             .bucket(&self.upload_key.bucket)
             .key(&self.upload_key.object_key)
-            .upload_id(upload_id)
+            .upload_id(&self.upload_id)
             .send()
             .await
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         Ok(())
-    }
-
-    async fn verify_and_advance(
-        &mut self,
-        mut parts: Vec<Part>,
-        upload_id: &str,
-    ) -> io::Result<bool> {
-        let mut recovered_part_size = 0;
-        parts.sort_unstable_by_key(|a| a.part_number);
-        for part in parts {
-            // check part number
-            let part_number = part.part_number;
-            let expected_part_number = self.part_number;
-            if part_number != expected_part_number {
-                warn!(
-                    message = "Unexpected part number, aborted multipart upload.",
-                    filename = %self.upload_key.filename,
-                    bucket = %self.upload_key.bucket,
-                    key = %self.upload_key.object_key,
-                    %part_number,
-                    %expected_part_number,
-                    %upload_id,
-                );
-                return Ok(false);
-            }
-
-            // check etag
-            let expected_part_etag = EtagCalculator::part(&self.chunk);
-            let part_etag = part.e_tag.unwrap_or_default();
-            if part_etag != expected_part_etag {
-                warn!(
-                    message = "Unexpected part etag, aborted multipart upload.",
-                    filename = %self.upload_key.filename,
-                    bucket = %self.upload_key.bucket,
-                    key = %self.upload_key.object_key,
-                    %part_etag,
-                    %expected_part_etag,
-                    %upload_id,
-                );
-                return Ok(false);
-            }
-
-            let completed_part = CompletedPart::builder()
-                .e_tag(part_etag)
-                .part_number(part_number)
-                .build();
-            self.completed_parts.push(completed_part);
-            recovered_part_size += part.size;
-
-            self.chunk.clear();
-            (&mut self.file)
-                .take(S3_MULTIPART_UPLOAD_CHUNK_SIZE as u64)
-                .read_to_end(&mut self.chunk)
-                .await?;
-            self.part_number += 1;
-        }
-
-        info!(
-            message = "Resumed upload",
-            filename = %self.upload_key.filename,
-            bucket = %self.upload_key.bucket,
-            key = %self.upload_key.object_key,
-            %recovered_part_size,
-            %upload_id,
-        );
-        Ok(true)
-    }
-
-    async fn list_parts(&self, upload_id: &str) -> io::Result<Vec<Part>> {
-        let res = self
-            .client
-            .list_parts()
-            .bucket(&self.upload_key.bucket)
-            .key(&self.upload_key.object_key)
-            .upload_id(upload_id)
-            .send()
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-        Ok(res.parts.unwrap_or_default())
     }
 
     async fn upload_part(&mut self) -> io::Result<usize> {
