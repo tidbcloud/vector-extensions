@@ -32,7 +32,7 @@ filename = { path = "extensions/filename", optional = true }
 
 [dev-dependencies]
 hyper = { version = "0.14.20", default-features = false, features = ["client", "runtime", "http1", "http2", "server", "stream"] }
-tokio = { version = "1.20.1", default-features = false, features = ["full"] }
+tokio = { version = "1.20.4", default-features = false, features = ["full"] }
 url = "2.3.1"
 regex = "1.6.0"
 lazy_static = "1.4.0"
