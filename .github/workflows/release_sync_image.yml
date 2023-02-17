@@ -23,8 +23,8 @@ jobs:
         run: |
           echo "::set-output name=source_image::385595570414.dkr.ecr.us-west-2.amazonaws.com/tidbcloud/vector:nightly-$(git rev-parse --short HEAD)"
           echo "::set-output name=target_registry::gcr.io/pingcap-public"
-          # remove the leading "v" from the tag name and set target image
-          echo "::set-output name=target_image::dbaas/vector:${{ github.ref_name:1 }}-debian"
+          # remove the leading "v" of the ref name
+          ref_name=${{ github.ref_name }} echo "::set-output name=target_image::dbaas/vector:${ref_name:1}-debian"
           echo "::set-output name=is_override::true"
 
       - name: Run Dispatch on tidbcloud/cloud-release-management
