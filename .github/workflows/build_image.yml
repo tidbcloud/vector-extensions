@@ -1,12 +1,11 @@
-name: push_image
+name: build_image
 
 permissions:
   id-token: write
   contents: read
 
 on:
-  push:
-    branches: [ master ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
