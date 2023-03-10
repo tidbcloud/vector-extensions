@@ -1,5 +1,4 @@
 use futures_util::{FutureExt, SinkExt};
-use serde::{Deserialize, Serialize};
 use vector::config::{AcknowledgementsConfig, GenerateConfig, Input, SinkConfig};
 use vector::http::HttpClient;
 use vector::sinks::util::http::PartitionHttpSink;
@@ -8,17 +7,25 @@ use vector::sinks::util::{
 };
 use vector::tls::{TlsConfig, TlsSettings};
 use vector::{config, sinks};
+use vector_config::configurable_component;
 
 use crate::sink::VMImportSink;
 
-#[derive(Debug, Deserialize, Serialize)]
+/// Configuration for the `vm_import` sink.
+#[configurable_component(sink("vm_import"))]
+#[derive(Debug)]
 pub struct VMImportConfig {
+    /// The endpoint to send events to.
     pub endpoint: String,
+    /// The endpoint to use for healthchecks.
     pub healthcheck_endpoint: Option<String>,
+    /// The TLS settings.
     pub tls: Option<TlsConfig>,
 
+    /// The request settings.
     #[serde(default)]
     pub request: TowerRequestConfig,
+    /// The batch settings.
     #[serde(default)]
     pub batch: BatchConfig<VMImportDefaultBatchSettings>,
 }
@@ -49,7 +56,6 @@ impl GenerateConfig for VMImportConfig {
 }
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "vm_import")]
 impl SinkConfig for VMImportConfig {
     async fn build(
         &self,
@@ -71,7 +77,6 @@ impl SinkConfig for VMImportConfig {
             request_settings,
             batch_settings.timeout,
             client.clone(),
-            cx.acker(),
         )
         .sink_map_err(|e| error!(message = "VM import sink error.", %e));
         let hc = healthcheck(self.healthcheck_endpoint.clone(), client).boxed();
@@ -83,12 +88,8 @@ impl SinkConfig for VMImportConfig {
         Input::log()
     }
 
-    fn sink_type(&self) -> &'static str {
-        "vm_import"
-    }
-
-    fn acknowledgements(&self) -> Option<&AcknowledgementsConfig> {
-        None
+    fn acknowledgements(&self) -> &AcknowledgementsConfig {
+        &AcknowledgementsConfig::DEFAULT
     }
 }
 

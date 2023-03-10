@@ -8,37 +8,41 @@ publish = false
 vm-test = []
 
 [dependencies]
-vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false }
-vector_core = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["vrl"] }
+vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.25.2", default-features = false }
+vector-core = { git = "https://github.com/vectordotdev/vector", tag = "v0.25.2", default-features = false, features = ["vrl"] }
+vector-common = { git = "https://github.com/vectordotdev/vector", tag = "v0.25.2" }
+vector-config = { git = "https://github.com/vectordotdev/vector", tag = "v0.25.2" }
+vector-config-macros = { git = "https://github.com/vectordotdev/vector", tag = "v0.25.2" }
+vector-config-common = { git = "https://github.com/vectordotdev/vector", tag = "v0.25.2" }
 
 async-recursion = "1.0.0"
 etcd-client = { version = "0.9", features = ["tls-roots"] }
 
-prost-types = { version = "0.10.1", default-features = false }
-tonic = { version = "0.7.2", default-features = false, features = ["transport", "codegen", "prost", "tls", "tls-roots", "compression"] }
+prost-types = { version = "0.11.0", default-features = false }
+tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost", "tls", "tls-roots", "gzip"] }
 hex = { version = "0.4.3", default-features = false }
 snafu = { version = "0.7.1", default-features = false, features = ["futures"] }
-hyper = { version = "0.14.19", default-features = false, features = ["client", "runtime", "http1", "http2", "server", "stream"] }
-serde = { version = "1.0.137", default-features = false, features = ["derive"] }
+hyper = { version = "0.14.20", default-features = false, features = ["client", "runtime", "http1", "http2", "server", "stream"] }
+serde = { version = "1.0.145", default-features = false, features = ["derive"] }
 http = { version = "0.2.8", default-features = false }
 toml = { version = "0.5.9", default-features = false }
-prost = { version = "0.10.4", default-features = false, features = ["std"] }
-tokio = { version = "1.20.4", default-features = false, features = ["full"] }
-serde_json = { version = "1.0.81", default-features = false, features = ["raw_value"] }
-async-trait = { version = "0.1.56", default-features = false }
+prost = { version = "0.11.0", default-features = false, features = ["std"] }
+tokio = { version = "1.21.2", default-features = false, features = ["full"] }
+serde_json = { version = "1.0.85", default-features = false, features = ["raw_value"] }
+async-trait = { version = "0.1.57", default-features = false }
 tracing = { version = "0.1.34", default-features = false }
 tracing-futures = { version = "0.2.5", default-features = false, features = ["futures-03"] }
 tokio-openssl = { version = "0.6.3", default-features = false }
-typetag = { version = "0.1.8", default-features = false }
-futures = { version = "0.3.21", default-features = false, features = ["compat", "io-compat"], package = "futures" }
-tokio-stream = { version = "0.1.9", default-features = false, features = ["net", "sync", "time"] }
-ordered-float = { version = "3.0.0", default-features = false }
-chrono = { version = "0.4.19", default-features = false, features = ["serde"] }
-bytes = { version = "1.1.0", default-features = false, features = ["serde"] }
+futures = { version = "0.3.24", default-features = false, features = ["compat", "io-compat"], package = "futures" }
+tokio-stream = { version = "0.1.10", default-features = false, features = ["net", "sync", "time"] }
+ordered-float = { version = "3.1.0", default-features = false }
+chrono = { version = "0.4.22", default-features = false, features = ["serde"] }
+bytes = { version = "1.2.1", default-features = false, features = ["serde"] }
+inventory = { version = "0.3.2", default-features = false }
 
 [build-dependencies]
-prost-build = { version = "0.10.4", default-features = false }
-tonic-build = { version = "0.7", default-features = false, features = ["transport", "prost", "compression"] }
+prost-build = { version = "0.11.1", default-features = false }
+tonic-build = { version = "0.8", default-features = false, features = ["transport", "prost"] }
 
 [dev-dependencies]
 rand = "0.8"

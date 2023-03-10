@@ -16,7 +16,7 @@ Steps in general:
     * add a feature depends on the dependency introduced in step 2
     * extend the `features.default` to include the feature
 4. Declare the component in `src/main.rs`
-    * submit the config of the component via `inventory::submit!`
+    * submit the config of the component via `use ${YOUR_COMPONENT_NAME} as _;`
     * add an attribute `#[cfg(feature = "${FEATURE_ADD_IN_STEP_3}")]` above the delcaration
 
 ### Clean
@@ -110,5 +110,5 @@ JEMALLOC_SYS_WITH_LG_PAGE=16 make target/armv7-unknown-linux-gnueabihf/release/v
 make release-docker
 
 # build with given version and repo
-REPO=tidbcloud/vector VERSION=0.23.3 make release-docker
+REPO=tidbcloud/vector VERSION=0.25.2 make release-docker
 ```

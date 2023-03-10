@@ -1,30 +1,19 @@
 #![deny(warnings)]
+#![allow(unused_imports)]
 
 use vector::app::Application;
-#[allow(unused_imports)]
-use vector::config::{SinkDescription, SourceDescription};
 
 // Extensions
-#[cfg(feature = "filename")]
-inventory::submit! {
-    SourceDescription::new::<filename::FilenameConfig>("filename")
-}
 #[cfg(feature = "aws-s3-upload-file")]
-inventory::submit! {
-    SinkDescription::new::<aws_s3_upload_file::S3UploadFileConfig>("aws_s3_upload_file")
-}
+use aws_s3_upload_file::S3UploadFileConfig as _;
+#[cfg(feature = "filename")]
+use filename::FilenameConfig as _;
 #[cfg(feature = "gcp-cloud-storage-upload-file")]
-inventory::submit! {
-    SinkDescription::new::<gcp_cloud_storage_upload_file::GcsUploadFileSinkConfig>("gcp_cloud_storage_upload_file")
-}
+use gcp_cloud_storage_upload_file::GcsUploadFileSinkConfig as _;
 #[cfg(feature = "topsql")]
-inventory::submit! {
-    SourceDescription::new::<topsql::TopSQLConfig>("topsql")
-}
+use topsql::TopSQLConfig as _;
 #[cfg(feature = "vm-import")]
-inventory::submit! {
-    SinkDescription::new::<vm_import::VMImportConfig>("vm_import")
-}
+use vm_import::VMImportConfig as _;
 
 #[cfg(unix)]
 fn main() {

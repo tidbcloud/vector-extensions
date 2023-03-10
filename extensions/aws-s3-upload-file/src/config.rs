@@ -3,30 +3,42 @@ use std::time::Duration;
 
 use aws_sdk_s3::Client as S3Client;
 use common::checkpointer::Checkpointer;
-use serde::{Deserialize, Serialize};
 use vector::aws::{AwsAuthentication, RegionOrEndpoint};
 use vector::config::{AcknowledgementsConfig, GenerateConfig, SinkConfig, SinkContext};
 use vector::sinks::s3_common::config::S3Options;
 use vector::sinks::s3_common::service::S3Service;
 use vector::sinks::{s3_common, Healthcheck};
 use vector::tls::TlsConfig;
+use vector_config::{configurable_component, NamedComponent as _};
 use vector_core::config::proxy::ProxyConfig;
 use vector_core::config::{DataType, Input};
 use vector_core::sink::VectorSink;
 
 use crate::processor::S3UploadFileSink;
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+/// Configuration for the `aws_s3_upload_file` sink.
+#[configurable_component(sink("aws_s3_upload_file"))]
+#[derive(Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct S3UploadFileConfig {
+    /// The name of the S3 bucket to upload files to.
     pub bucket: String,
+
+    /// The options for the S3 client.
     #[serde(flatten)]
     pub options: S3Options,
+
+    /// The region of the S3 bucket.
     #[serde(flatten)]
     pub region: RegionOrEndpoint,
+
+    /// The TLS settings.
     pub tls: Option<TlsConfig>,
+
+    /// The authentication method to use.
     #[serde(default)]
     pub auth: AwsAuthentication,
+    /// The acknowledgements settings.
     #[serde(
         default,
         deserialize_with = "vector::serde::bool_or_struct",
@@ -75,7 +87,6 @@ impl GenerateConfig for S3UploadFileConfig {
 }
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "aws_s3_upload_file")]
 impl SinkConfig for S3UploadFileConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
         let service = self.create_service(&cx.proxy).await?;
@@ -88,12 +99,8 @@ impl SinkConfig for S3UploadFileConfig {
         Input::new(DataType::Log)
     }
 
-    fn sink_type(&self) -> &'static str {
-        "aws_s3_upload_file"
-    }
-
-    fn acknowledgements(&self) -> Option<&AcknowledgementsConfig> {
-        Some(&self.acknowledgements)
+    fn acknowledgements(&self) -> &AcknowledgementsConfig {
+        &self.acknowledgements
     }
 }
 
@@ -105,7 +112,7 @@ impl S3UploadFileConfig {
     ) -> vector::Result<VectorSink> {
         let data_dir = cx
             .globals
-            .resolve_and_make_data_subdir(self.data_dir.as_ref(), self.sink_type())?;
+            .resolve_and_make_data_subdir(self.data_dir.as_ref(), self.get_component_name())?;
         let mut checkpointer = Checkpointer::new(data_dir);
         checkpointer.read_checkpoints();
 

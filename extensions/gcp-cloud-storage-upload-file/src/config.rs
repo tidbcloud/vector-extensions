@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use common::checkpointer::Checkpointer;
 use goauth::scopes::Scope;
-use serde::{Deserialize, Serialize};
 use vector::config::{GenerateConfig, SinkConfig, SinkContext};
 use vector::gcp::{GcpAuthConfig, GcpAuthenticator};
 use vector::http::HttpClient;
@@ -13,22 +12,32 @@ use vector::sinks::gcs_common::config::{
 };
 use vector::sinks::Healthcheck;
 use vector::tls::{TlsConfig, TlsSettings};
+use vector_config::{configurable_component, NamedComponent as _};
 use vector_core::config::{AcknowledgementsConfig, DataType, Input};
 use vector_core::sink::VectorSink;
 
 use crate::processor::GcsUploadFileSink;
 use crate::uploader::RequestSettings;
 
-#[derive(Deserialize, Serialize, Debug)]
+/// Configuration for the `gcp_cloud_storage_upload_file` sink.
+#[configurable_component(sink("gcp_cloud_storage_upload_file"))]
+#[derive(Debug)]
 #[serde(deny_unknown_fields)]
 pub struct GcsUploadFileSinkConfig {
+    /// The name of the GCS bucket to upload files to.
     pub bucket: String,
+    /// The ACL to apply to uploaded files.
     pub acl: Option<GcsPredefinedAcl>,
+    /// The storage class to apply to uploaded files.
     pub storage_class: Option<GcsStorageClass>,
+    /// The metadata to apply to uploaded files.
     pub metadata: Option<HashMap<String, String>>,
+    /// The authentication method to use.
     #[serde(flatten)]
     pub auth: GcpAuthConfig,
+    /// The TLS settings.
     pub tls: Option<TlsConfig>,
+    /// The acknowledgements settings.
     #[serde(
         default,
         deserialize_with = "vector::serde::bool_or_struct",
@@ -77,7 +86,6 @@ impl GenerateConfig for GcsUploadFileSinkConfig {
 }
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "gcp_cloud_storage_upload_file")]
 impl SinkConfig for GcsUploadFileSinkConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
         let auth = self.auth.build(Scope::DevStorageReadWrite).await?;
@@ -98,12 +106,8 @@ impl SinkConfig for GcsUploadFileSinkConfig {
         Input::new(DataType::Log)
     }
 
-    fn sink_type(&self) -> &'static str {
-        "gcp_cloud_storage_upload_file"
-    }
-
-    fn acknowledgements(&self) -> Option<&AcknowledgementsConfig> {
-        Some(&self.acknowledgements)
+    fn acknowledgements(&self) -> &AcknowledgementsConfig {
+        &self.acknowledgements
     }
 }
 
@@ -117,7 +121,7 @@ impl GcsUploadFileSinkConfig {
     ) -> vector::Result<VectorSink> {
         let data_dir = cx
             .globals
-            .resolve_and_make_data_subdir(self.data_dir.as_ref(), self.sink_type())?;
+            .resolve_and_make_data_subdir(self.data_dir.as_ref(), self.get_component_name())?;
         let mut checkpointer = Checkpointer::new(data_dir);
         checkpointer.read_checkpoints();
         let req_settings = RequestSettings::new(self)?;

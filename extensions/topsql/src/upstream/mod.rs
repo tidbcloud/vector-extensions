@@ -11,10 +11,12 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio_stream::wrappers::IntervalStream;
 use tonic::transport::{Channel, Endpoint};
-use vector::internal_events::{BytesReceived, EventsReceived, StreamClosedError};
 use vector::tls::TlsConfig;
-use vector::SourceSender;
-use vector_core::internal_event::InternalEvent;
+use vector::{register, SourceSender};
+use vector_common::internal_event::{
+    ByteSize, BytesReceived, EventsReceived, InternalEvent as _, InternalEventHandle as _,
+    Protocol, Registered,
+};
 use vector_core::ByteSizeOf;
 
 use crate::shutdown::ShutdownSubscriber;
@@ -53,6 +55,8 @@ pub struct TopSQLSource {
 
     init_retry_delay: Duration,
     retry_delay: Duration,
+
+    bytes_received: Registered<BytesReceived>,
 }
 
 enum State {
@@ -79,10 +83,16 @@ impl TopSQLSource {
                     format!("http://{}", address)
                 },
 
-                tls,
                 out,
                 init_retry_delay,
                 retry_delay: init_retry_delay,
+                bytes_received: register!(BytesReceived::from(if tls.is_some() {
+                    Protocol::HTTPS
+                } else {
+                    Protocol::HTTP
+                })),
+
+                tls,
             }),
             None => None,
         }
@@ -184,11 +194,7 @@ impl TopSQLSource {
     }
 
     async fn handle_response<U: Upstream>(&mut self, response: U::UpstreamEvent) {
-        BytesReceived {
-            byte_size: response.size_of(),
-            protocol: if self.tls.is_none() { "http" } else { "https" },
-        }
-        .emit();
+        self.bytes_received.emit(ByteSize(response.size_of()));
 
         let events = U::UpstreamEventParser::parse(response, self.instance.clone());
         let count = events.len();
@@ -197,16 +203,12 @@ impl TopSQLSource {
             count,
         }
         .emit();
-        if let Err(error) = self.out.send_batch(events).await {
-            StreamClosedError { error, count }.emit()
-        }
+        self.out.send_batch(events).await.ok();
     }
 
     async fn handle_instance(&mut self) {
         let event = instance_event(self.instance.clone(), self.instance_type.to_string());
-        if let Err(error) = self.out.send_event(event).await {
-            StreamClosedError { error, count: 1 }.emit();
-        }
+        self.out.send_event(event).await.ok();
     }
 
     fn on_connected(&mut self) {

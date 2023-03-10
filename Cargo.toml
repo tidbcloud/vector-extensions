@@ -1,6 +1,6 @@
 [package]
 name = "vector-extensions"
-version = "0.23.3"
+version = "0.25.2"
 edition = "2021"
 readme = "README.md"
 publish = false
@@ -20,8 +20,7 @@ gcp-cloud-storage-upload-file = ["dep:gcp-cloud-storage-upload-file"]
 filename = ["dep:filename"]
 
 [dependencies]
-vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false }
-inventory = { version = "0.1.10", default-features = false }
+vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.25.2", default-features = false }
 
 # Extensions
 topsql = { path = "extensions/topsql", optional = true }
@@ -32,7 +31,7 @@ filename = { path = "extensions/filename", optional = true }
 
 [dev-dependencies]
 hyper = { version = "0.14.20", default-features = false, features = ["client", "runtime", "http1", "http2", "server", "stream"] }
-tokio = { version = "1.20.4", default-features = false, features = ["full"] }
+tokio = { version = "1.21.2", default-features = false, features = ["full"] }
 url = "2.3.1"
 regex = "1.6.0"
 lazy_static = "1.4.0"
@@ -47,12 +46,16 @@ members = [
 ]
 
 [patch.'https://github.com/vectordotdev/vector']
-vector = { git = "https://github.com/zhongzc/vector", branch = "extend-0.23" }
-vector_core = { git = "https://github.com/zhongzc/vector", branch = "extend-0.23" }
+vector = { git = "https://github.com/zhongzc/vector", branch = "extend-0.25" }
+vector-core = { git = "https://github.com/zhongzc/vector", branch = "extend-0.25" }
+vector-config = { git = "https://github.com/zhongzc/vector", branch = "extend-0.25" }
+vector-config-macros = { git = "https://github.com/zhongzc/vector", branch = "extend-0.25" }
+vector-config-common = { git = "https://github.com/zhongzc/vector", branch = "extend-0.25" }
+file-source = { git = "https://github.com/zhongzc/vector", branch = "extend-0.25" }
 
 [patch.crates-io]
 # Removes dependency on `time` v0.1
 # https://github.com/chronotope/chrono/pull/578
-chrono = { git = "https://github.com/vectordotdev/chrono.git", branch = "no-default-time" }
+chrono = { git = "https://github.com/vectordotdev/chrono.git", branch = "no-default-time-v0.4.22-1" }
 # The upgrade for `tokio-util` >= 0.6.9 is blocked on https://github.com/vectordotdev/vector/issues/11257.
 tokio-util = { git = "https://github.com/vectordotdev/tokio", version = "0.7", rev = "3aa231cf6f33f74ca29077163879f0de9a207ad8" }

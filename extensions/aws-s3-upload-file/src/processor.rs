@@ -6,12 +6,11 @@ use common::checkpointer::{Checkpointer, UploadKey};
 use futures::stream::BoxStream;
 use futures_util::StreamExt;
 use tokio_util::time::DelayQueue;
-use vector::emit;
 use vector::event::Finalizable;
 use vector::sinks::s3_common::config::S3Options;
 use vector::sinks::s3_common::service::S3Service;
 use vector_core::event::{Event, EventStatus};
-use vector_core::internal_event::EventsSent;
+use vector_core::internal_event::{EventsSent, InternalEvent as _};
 use vector_core::sink::StreamSink;
 
 use crate::uploader::S3Uploader;
@@ -120,11 +119,11 @@ impl StreamSink<Event> for S3UploadFileSink {
                                 );
                             }
                             finalizers.update_status(EventStatus::Delivered);
-                            emit!(EventsSent {
+                            EventsSent {
                                 count: response.count,
                                 byte_size: response.events_byte_size,
                                 output: None,
-                            });
+                            }.emit();
                             checkpointer.update(upload_key, upload_time, expire_after);
                         }
                         Err(error) => {

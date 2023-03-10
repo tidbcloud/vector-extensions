@@ -10,17 +10,17 @@ use file_source::paths_provider::PathsProvider;
 use file_source::FileSourceInternalEvents;
 use metrics::counter;
 use vector::config::{DataType, Output, SourceConfig, SourceContext};
-use vector::internal_events::prelude::{error_stage, error_type};
-use vector::internal_events::StreamClosedError;
+use vector::impl_generate_config_from_default;
 use vector::sources::Source;
-use vector::{emit, impl_generate_config_from_default};
+use vector_common::internal_event::{error_stage, error_type};
 use vector_config::configurable_component;
+use vector_core::config::LogNamespace;
 use vector_core::event::LogEvent;
 use vector_core::internal_event::InternalEvent;
 
 /// Configuration for the `filename` source.
-#[configurable_component(source)]
-#[derive(Clone, Debug, PartialEq)]
+#[configurable_component(source("filename"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct FilenameConfig {
     /// Array of file patterns to include. [Globbing](https://vector.dev/docs/reference/configuration/sources/file/#globbing) is supported.
@@ -53,7 +53,6 @@ impl Default for FilenameConfig {
 impl_generate_config_from_default!(FilenameConfig);
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "filename")]
 impl SourceConfig for FilenameConfig {
     async fn build(&self, mut cx: SourceContext) -> vector::Result<Source> {
         let glob_minimum_cooldown = Duration::from_millis(self.glob_minimum_cooldown_ms);
@@ -73,13 +72,10 @@ impl SourceConfig for FilenameConfig {
                     .into_iter()
                     .filter(|path| path.metadata().map(|m| m.is_file()).unwrap_or_default())
                     .filter_map(|filepath| filepath.to_str().map(|s| s.to_owned()))
-                    .map(LogEvent::from)
+                    .map(LogEvent::from_str_legacy)
                     .collect::<Vec<_>>();
-                let count = events.len();
 
-                cx.out.send_batch(events).await.map_err(|error| {
-                    emit!(StreamClosedError { error, count });
-                })?;
+                cx.out.send_batch(events).await.map_err(|_| {})?;
 
                 tokio::select! {
                     _ = tokio::time::sleep(glob_minimum_cooldown) => {},
@@ -91,12 +87,8 @@ impl SourceConfig for FilenameConfig {
         }))
     }
 
-    fn outputs(&self) -> Vec<Output> {
+    fn outputs(&self, _global_log_namespace: LogNamespace) -> Vec<Output> {
         vec![Output::default(DataType::Log)]
-    }
-
-    fn source_type(&self) -> &'static str {
-        "filename"
     }
 
     fn can_acknowledge(&self) -> bool {
@@ -162,7 +154,7 @@ impl FileSourceInternalEvents for OnlyGlob {
     fn emit_files_open(&self, _: usize) {}
 
     fn emit_path_globbing_failed(&self, path: &Path, error: &Error) {
-        emit!(PathGlobbingError { path, error });
+        PathGlobbingError { path, error }.emit();
     }
 }
 

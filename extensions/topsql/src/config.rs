@@ -1,19 +1,26 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use vector::config::{self, GenerateConfig, Output, SourceConfig, SourceContext};
 use vector::sources;
 use vector::tls::TlsConfig;
+use vector_config::configurable_component;
+use vector_core::config::LogNamespace;
 
 use crate::controller::Controller;
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+/// The configuration of the TopSQL source.
+#[configurable_component(source("topsql"))]
+#[derive(Clone, Debug)]
 pub struct TopSQLConfig {
+    /// The address of the PD server.
     pub pd_address: String,
+    /// TLS config.
     pub tls: Option<TlsConfig>,
 
+    /// The interval to retry initializing the client.
     #[serde(default = "default_init_retry_delay")]
     pub init_retry_delay_seconds: f64,
+    /// The interval to fetch the topology.
     #[serde(default = "default_topology_fetch_interval")]
     pub topology_fetch_interval_seconds: f64,
 }
@@ -39,7 +46,6 @@ impl GenerateConfig for TopSQLConfig {
 }
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "topsql")]
 impl SourceConfig for TopSQLConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<sources::Source> {
         self.validate_tls()?;
@@ -66,12 +72,8 @@ impl SourceConfig for TopSQLConfig {
         }))
     }
 
-    fn outputs(&self) -> Vec<Output> {
+    fn outputs(&self, _global_log_namespace: LogNamespace) -> Vec<Output> {
         vec![Output::default(config::DataType::Log)]
-    }
-
-    fn source_type(&self) -> &'static str {
-        "topsql"
     }
 
     fn can_acknowledge(&self) -> bool {
