@@ -3,6 +3,7 @@
 apt-get update
 apt-get install -y \
   apt-transport-https \
+  gnupg \
   wget
 
 # we need LLVM >= 3.9 for onig_sys/bindgen
@@ -20,4 +21,5 @@ apt-get update
 apt-get install -y \
       libclang1-9 \
       llvm-9 \
-      clang
+      clang \
+      unzip

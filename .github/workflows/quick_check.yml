@@ -28,6 +28,9 @@ jobs:
           ${{ runner.os }}-cargo-quick_check-
           ${{ runner.os }}-cargo-
 
+    - name: Set up protoc
+      run: bash scripts/environment/install-protoc.sh
+
     - name: Set up toolchains
       uses: actions-rs/toolchain@v1
       with:

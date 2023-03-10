@@ -13,5 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     llvm-9 \
     pkg-config \
     zlib1g-dev
+RUN bash scripts/environment/install-protoc.sh
 
 RUN cargo build
