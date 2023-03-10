@@ -12,7 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     llvm-9 \
     pkg-config \
-    zlib1g-dev
+    zlib1g-dev \
+    curl \
+    unzip
 RUN bash scripts/environment/install-protoc.sh
 
 RUN cargo build
