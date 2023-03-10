@@ -74,7 +74,7 @@ cross-image-%:
 	docker build \
 		--tag vector-cross-env:${TRIPLE} \
 		--file scripts/cross/${TRIPLE}.dockerfile \
-		scripts/cross
+		.
 
 target/%/vector: export PAIR =$(subst /, ,$(@:target/%/vector=%))
 target/%/vector: export TRIPLE ?=$(word 1,${PAIR})
