@@ -8,7 +8,7 @@ publish = false
 vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["gcp", "sinks-gcp"] }
 vector_core = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false, features = ["vrl"] }
 
-common = { path = "../common" }
+common = { path = "../../packages/common" }
 
 tracing = { version = "0.1.34", default-features = false }
 serde = { version = "1.0.137", default-features = false, features = ["derive"] }
