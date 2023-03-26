@@ -39,10 +39,12 @@ lazy_static = "1.4.0"
 
 [workspace]
 members = [
-    "extensions/common",
+    "packages/common",
+
     "extensions/topsql",
     "extensions/vm-import",
     "extensions/aws-s3-upload-file",
+    "extensions/gcp-cloud-storage-upload-file",
     "extensions/filename",
 ]
 
