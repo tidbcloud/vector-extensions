@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use tracing::instrument::Instrument;
-use vector::config::ProxyConfig;
 use vector::shutdown::ShutdownSignal;
-use vector::tls::TlsConfig;
 use vector::SourceSender;
+use vector_core::config::proxy::ProxyConfig;
+use vector_core::tls::TlsConfig;
 
 use crate::shutdown::{pair, ShutdownNotifier, ShutdownSubscriber};
 use crate::topology::{Component, FetchError, TopologyFetcher};

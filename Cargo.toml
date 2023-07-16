@@ -1,6 +1,6 @@
 [package]
 name = "vector-extensions"
-version = "0.23.3"
+version = "0.31.0"
 edition = "2021"
 readme = "README.md"
 publish = false
@@ -20,41 +20,34 @@ gcp-cloud-storage-upload-file = ["dep:gcp-cloud-storage-upload-file"]
 filename = ["dep:filename"]
 
 [dependencies]
-vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.23.3", default-features = false }
-inventory = { version = "0.1.10", default-features = false }
-
-# Extensions
+aws-s3-upload-file = { path = "extensions/aws-s3-upload-file", optional = true }
+filename = { path = "extensions/filename", optional = true }
+gcp-cloud-storage-upload-file = { path = "extensions/gcp-cloud-storage-upload-file", optional = true }
 topsql = { path = "extensions/topsql", optional = true }
 vm-import = { path = "extensions/vm-import", optional = true }
-aws-s3-upload-file = { path = "extensions/aws-s3-upload-file", optional = true }
-gcp-cloud-storage-upload-file = { path = "extensions/gcp-cloud-storage-upload-file", optional = true }
-filename = { path = "extensions/filename", optional = true }
+
+exitcode = { version = "1.1.2", default-features = false }
+inventory = { version = "0.3.6", default-features = false }
+vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.31.0", default-features = false }
+vector-config = { git = "https://github.com/vectordotdev/vector", tag = "v0.31.0", default-features = false }
 
 [dev-dependencies]
 hyper = { version = "0.14.20", default-features = false, features = ["client", "runtime", "http1", "http2", "server", "stream"] }
+lazy_static = "1.4.0"
+regex = "1.6.0"
 tokio = { version = "1.20.4", default-features = false, features = ["full"] }
 url = "2.3.1"
-regex = "1.6.0"
-lazy_static = "1.4.0"
 
 [workspace]
 members = [
-    "packages/common",
-
+    "extensions/aws-s3-upload-file",
+    "extensions/filename",
+    "extensions/gcp-cloud-storage-upload-file",
     "extensions/topsql",
     "extensions/vm-import",
-    "extensions/aws-s3-upload-file",
-    "extensions/gcp-cloud-storage-upload-file",
-    "extensions/filename",
+    "packages/common",
 ]
 
-[patch.'https://github.com/vectordotdev/vector']
-vector = { git = "https://github.com/zhongzc/vector", branch = "extend-0.23" }
-vector_core = { git = "https://github.com/zhongzc/vector", branch = "extend-0.23" }
-
 [patch.crates-io]
-# Removes dependency on `time` v0.1
-# https://github.com/chronotope/chrono/pull/578
-chrono = { git = "https://github.com/vectordotdev/chrono.git", branch = "no-default-time" }
 # The upgrade for `tokio-util` >= 0.6.9 is blocked on https://github.com/vectordotdev/vector/issues/11257.
-tokio-util = { git = "https://github.com/vectordotdev/tokio", version = "0.7", rev = "3aa231cf6f33f74ca29077163879f0de9a207ad8" }
+tokio-util = { git = "https://github.com/vectordotdev/tokio", version = "0.7", rev = "53a17f257b599a9d18bd75249de98d0b6fc28cfa" }

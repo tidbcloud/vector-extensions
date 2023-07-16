@@ -1,24 +1,38 @@
 use futures_util::{FutureExt, SinkExt};
 use serde::{Deserialize, Serialize};
-use vector::config::{AcknowledgementsConfig, GenerateConfig, Input, SinkConfig};
+use vector::config::{SinkConfig, SinkContext};
 use vector::http::HttpClient;
+use vector::sinks;
 use vector::sinks::util::http::PartitionHttpSink;
 use vector::sinks::util::{
     BatchConfig, JsonArrayBuffer, PartitionBuffer, SinkBatchSettings, TowerRequestConfig,
 };
-use vector::tls::{TlsConfig, TlsSettings};
-use vector::{config, sinks};
+use vector_config::component::GenerateConfig;
+use vector_config::NamedComponent;
+use vector_config_macros::Configurable;
+use vector_core::config::AcknowledgementsConfig;
+use vector_core::config::Input;
+use vector_core::tls::{TlsConfig, TlsSettings};
 
 use crate::sink::VMImportSink;
 
-#[derive(Debug, Deserialize, Serialize)]
+/// PLACEHOLDER
+#[derive(Debug, Clone, Deserialize, Serialize, Configurable)]
 pub struct VMImportConfig {
+    /// PLACEHOLDER
     pub endpoint: String,
+
+    /// PLACEHOLDER
     pub healthcheck_endpoint: Option<String>,
+
+    /// PLACEHOLDER
     pub tls: Option<TlsConfig>,
 
+    /// PLACEHOLDER
     #[serde(default)]
     pub request: TowerRequestConfig,
+
+    /// PLACEHOLDER
     #[serde(default)]
     pub batch: BatchConfig<VMImportDefaultBatchSettings>,
 }
@@ -48,12 +62,18 @@ impl GenerateConfig for VMImportConfig {
     }
 }
 
+impl NamedComponent for VMImportConfig {
+    fn get_component_name(&self) -> &'static str {
+        "vm_import"
+    }
+}
+
 #[async_trait::async_trait]
 #[typetag::serde(name = "vm_import")]
 impl SinkConfig for VMImportConfig {
     async fn build(
         &self,
-        cx: config::SinkContext,
+        cx: SinkContext,
     ) -> vector::Result<(sinks::VectorSink, sinks::Healthcheck)> {
         let endpoint_tmp = self.endpoint.clone().try_into()?;
 
@@ -71,11 +91,11 @@ impl SinkConfig for VMImportConfig {
             request_settings,
             batch_settings.timeout,
             client.clone(),
-            cx.acker(),
         )
         .sink_map_err(|e| error!(message = "VM import sink error.", %e));
         let hc = healthcheck(self.healthcheck_endpoint.clone(), client).boxed();
 
+        #[allow(deprecated)] // TODO: remove
         Ok((sinks::VectorSink::from_event_sink(sink), hc))
     }
 
@@ -83,12 +103,8 @@ impl SinkConfig for VMImportConfig {
         Input::log()
     }
 
-    fn sink_type(&self) -> &'static str {
-        "vm_import"
-    }
-
-    fn acknowledgements(&self) -> Option<&AcknowledgementsConfig> {
-        None
+    fn acknowledgements(&self) -> &AcknowledgementsConfig {
+        &AcknowledgementsConfig::DEFAULT
     }
 }
 

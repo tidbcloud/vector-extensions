@@ -70,7 +70,8 @@ impl Buf {
     pub fn points(&mut self, points: impl Iterator<Item = (u64, f64)>) -> &mut Self {
         for (timestamp_sec, value) in points {
             self.timestamps.push(DateTime::<Utc>::from_utc(
-                NaiveDateTime::from_timestamp(timestamp_sec as i64, 0),
+                NaiveDateTime::from_timestamp_opt(timestamp_sec as i64, 0)
+                    .expect("invalid or out-of-range datetime"),
                 Utc,
             ));
             self.values.push(value);

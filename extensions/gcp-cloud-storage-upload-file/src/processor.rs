@@ -6,12 +6,12 @@ use common::checkpointer::{Checkpointer, UploadKey};
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use tokio_util::time::DelayQueue;
-use vector::emit;
-use vector::event::Finalizable;
 use vector::gcp::GcpAuthenticator;
 use vector::http::HttpClient;
-use vector_core::event::{Event, EventStatus};
-use vector_core::internal_event::EventsSent;
+use vector::register;
+use vector_common::finalization::{EventStatus, Finalizable};
+use vector_common::internal_event::{CountByteSize, EventsSent, InternalEventHandle};
+use vector_core::event::Event;
 use vector_core::sink::StreamSink;
 
 use crate::uploader::{GCSUploader, RequestSettings};
@@ -124,11 +124,9 @@ impl StreamSink<Event> for GcsUploadFileSink {
                                 );
                             }
                             finalizers.update_status(EventStatus::Delivered);
-                            emit!(EventsSent {
-                                count: response.count,
-                                byte_size: response.events_byte_size,
+                            register!(EventsSent {
                                 output: None,
-                            });
+                            }).emit(CountByteSize(response.count, response.events_byte_size.into()));
                             checkpointer.update(upload_key, upload_time, expire_after);
                         }
                         Err(error) => {

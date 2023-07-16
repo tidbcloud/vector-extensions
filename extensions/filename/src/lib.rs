@@ -9,18 +9,19 @@ use file_source::paths_provider::glob::{Glob, MatchOptions};
 use file_source::paths_provider::PathsProvider;
 use file_source::FileSourceInternalEvents;
 use metrics::counter;
-use vector::config::{DataType, Output, SourceConfig, SourceContext};
-use vector::internal_events::prelude::{error_stage, error_type};
+use serde::{Deserialize, Serialize};
+use vector::config::{SourceConfig, SourceContext};
 use vector::internal_events::StreamClosedError;
-use vector::sources::Source;
 use vector::{emit, impl_generate_config_from_default};
-use vector_config::configurable_component;
+use vector_common::internal_event::{error_stage, error_type, InternalEvent};
+use vector_config::NamedComponent;
+use vector_config_macros::Configurable;
+use vector_core::config::{DataType, LogNamespace, SourceOutput};
 use vector_core::event::LogEvent;
-use vector_core::internal_event::InternalEvent;
+use vector_core::source::Source;
 
 /// Configuration for the `filename` source.
-#[configurable_component(source)]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, Configurable)]
 #[serde(deny_unknown_fields, default)]
 pub struct FilenameConfig {
     /// Array of file patterns to include. [Globbing](https://vector.dev/docs/reference/configuration/sources/file/#globbing) is supported.
@@ -52,6 +53,12 @@ impl Default for FilenameConfig {
 
 impl_generate_config_from_default!(FilenameConfig);
 
+impl NamedComponent for FilenameConfig {
+    fn get_component_name(&self) -> &'static str {
+        "filename"
+    }
+}
+
 #[async_trait::async_trait]
 #[typetag::serde(name = "filename")]
 impl SourceConfig for FilenameConfig {
@@ -73,12 +80,12 @@ impl SourceConfig for FilenameConfig {
                     .into_iter()
                     .filter(|path| path.metadata().map(|m| m.is_file()).unwrap_or_default())
                     .filter_map(|filepath| filepath.to_str().map(|s| s.to_owned()))
-                    .map(LogEvent::from)
+                    .map(LogEvent::from_str_legacy)
                     .collect::<Vec<_>>();
                 let count = events.len();
 
-                cx.out.send_batch(events).await.map_err(|error| {
-                    emit!(StreamClosedError { error, count });
+                cx.out.send_batch(events).await.map_err(|_| {
+                    emit!(StreamClosedError { count });
                 })?;
 
                 tokio::select! {
@@ -91,12 +98,12 @@ impl SourceConfig for FilenameConfig {
         }))
     }
 
-    fn outputs(&self) -> Vec<Output> {
-        vec![Output::default(DataType::Log)]
-    }
-
-    fn source_type(&self) -> &'static str {
-        "filename"
+    fn outputs(&self, _: LogNamespace) -> Vec<SourceOutput> {
+        vec![SourceOutput {
+            port: None,
+            ty: DataType::Log,
+            schema_definition: None,
+        }]
     }
 
     fn can_acknowledge(&self) -> bool {

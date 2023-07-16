@@ -11,11 +11,13 @@ use std::time::Duration;
 use futures::StreamExt;
 use tokio_stream::wrappers::IntervalStream;
 use tonic::transport::{Channel, Endpoint};
-use vector::internal_events::{BytesReceived, EventsReceived, StreamClosedError};
-use vector::tls::TlsConfig;
-use vector::SourceSender;
-use vector_core::internal_event::InternalEvent;
-use vector_core::ByteSizeOf;
+use vector::internal_events::StreamClosedError;
+use vector::{register, SourceSender};
+use vector_common::byte_size_of::ByteSizeOf;
+use vector_common::internal_event::{
+    ByteSize, BytesReceived, CountByteSize, EventsReceived, InternalEvent, InternalEventHandle,
+};
+use vector_core::tls::TlsConfig;
 
 use crate::shutdown::ShutdownSubscriber;
 use crate::topology::{Component, InstanceType};
@@ -184,28 +186,27 @@ impl TopSQLSource {
     }
 
     async fn handle_response<U: Upstream>(&mut self, response: U::UpstreamEvent) {
-        BytesReceived {
-            byte_size: response.size_of(),
-            protocol: if self.tls.is_none() { "http" } else { "https" },
-        }
-        .emit();
+        register!(BytesReceived {
+            protocol: if self.tls.is_none() {
+                "http".into()
+            } else {
+                "https".into()
+            },
+        })
+        .emit(ByteSize(response.size_of()));
 
         let events = U::UpstreamEventParser::parse(response, self.instance.clone());
         let count = events.len();
-        EventsReceived {
-            byte_size: events.size_of(),
-            count,
-        }
-        .emit();
-        if let Err(error) = self.out.send_batch(events).await {
-            StreamClosedError { error, count }.emit()
+        register!(EventsReceived {}).emit(CountByteSize(count, events.size_of().into()));
+        if let Err(_) = self.out.send_batch(events).await {
+            StreamClosedError { count }.emit()
         }
     }
 
     async fn handle_instance(&mut self) {
         let event = instance_event(self.instance.clone(), self.instance_type.to_string());
-        if let Err(error) = self.out.send_event(event).await {
-            StreamClosedError { error, count: 1 }.emit();
+        if let Err(_) = self.out.send_event(event).await {
+            StreamClosedError { count: 1 }.emit();
         }
     }
 

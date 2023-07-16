@@ -1,8 +1,8 @@
 use serde_json::Value;
-use vector::event::Event;
 use vector::sinks::util::http::HttpEventEncoder;
 use vector::sinks::util::PartitionInnerBuffer;
 use vector::template::Template;
+use vector_core::event::Event;
 
 use crate::partition::PartitionKey;
 

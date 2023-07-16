@@ -115,7 +115,7 @@ impl S3Uploader {
             .set_grant_write_acp(self.options.grant_write_acp.clone())
             .set_server_side_encryption(self.options.server_side_encryption.map(Into::into))
             .set_ssekms_key_id(self.options.ssekms_key_id.clone())
-            .set_storage_class(self.options.storage_class.map(Into::into))
+            .set_storage_class(Some(self.options.storage_class.into()))
             .set_tagging(tagging)
             .content_md5(content_md5)
             .send()
@@ -218,7 +218,7 @@ impl<'a, 'b> MultipartUploader<'a, 'b> {
             .set_grant_write_acp(self.options.grant_write_acp.clone())
             .set_server_side_encryption(self.options.server_side_encryption.map(Into::into))
             .set_ssekms_key_id(self.options.ssekms_key_id.clone())
-            .set_storage_class(self.options.storage_class.map(Into::into))
+            .set_storage_class(Some(self.options.storage_class.into()))
             .set_tagging(tagging)
             .send()
             .await

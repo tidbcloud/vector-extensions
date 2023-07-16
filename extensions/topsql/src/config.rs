@@ -1,19 +1,30 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use vector::config::{self, GenerateConfig, Output, SourceConfig, SourceContext};
-use vector::sources;
-use vector::tls::TlsConfig;
+use vector::config::{SourceConfig, SourceContext};
+use vector_config::component::GenerateConfig;
+use vector_config::NamedComponent;
+use vector_config_macros::Configurable;
+use vector_core::config::{DataType, LogNamespace, SourceOutput};
+use vector_core::source::Source;
+use vector_core::tls::TlsConfig;
 
 use crate::controller::Controller;
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+/// PLACEHOLDER
+#[derive(Debug, Clone, Deserialize, Serialize, Configurable)]
 pub struct TopSQLConfig {
+    /// PLACEHOLDER
     pub pd_address: String,
+
+    /// PLACEHOLDER
     pub tls: Option<TlsConfig>,
 
+    /// PLACEHOLDER
     #[serde(default = "default_init_retry_delay")]
     pub init_retry_delay_seconds: f64,
+
+    /// PLACEHOLDER
     #[serde(default = "default_topology_fetch_interval")]
     pub topology_fetch_interval_seconds: f64,
 }
@@ -38,10 +49,16 @@ impl GenerateConfig for TopSQLConfig {
     }
 }
 
+impl NamedComponent for TopSQLConfig {
+    fn get_component_name(&self) -> &'static str {
+        "topsql"
+    }
+}
+
 #[async_trait::async_trait]
 #[typetag::serde(name = "topsql")]
 impl SourceConfig for TopSQLConfig {
-    async fn build(&self, cx: SourceContext) -> vector::Result<sources::Source> {
+    async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
         self.validate_tls()?;
 
         let pd_address = self.pd_address.clone();
@@ -66,12 +83,12 @@ impl SourceConfig for TopSQLConfig {
         }))
     }
 
-    fn outputs(&self) -> Vec<Output> {
-        vec![Output::default(config::DataType::Log)]
-    }
-
-    fn source_type(&self) -> &'static str {
-        "topsql"
+    fn outputs(&self, _: LogNamespace) -> Vec<SourceOutput> {
+        vec![SourceOutput {
+            port: None,
+            ty: DataType::Log,
+            schema_definition: None,
+        }]
     }
 
     fn can_acknowledge(&self) -> bool {
