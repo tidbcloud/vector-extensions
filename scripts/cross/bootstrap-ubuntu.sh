@@ -20,4 +20,5 @@ apt-get update
 apt-get install -y \
       libclang1-9 \
       llvm-9 \
-      clang
+      clang \
+      unzip

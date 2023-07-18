@@ -46,6 +46,7 @@ members = [
     "extensions/topsql",
     "extensions/vm-import",
     "packages/common",
+    "vdev",
 ]
 
 [patch.crates-io]
