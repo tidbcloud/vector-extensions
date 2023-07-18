@@ -517,9 +517,9 @@ dependencies = [
  "typetag",
  "url",
  "vector",
- "vector-common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
+ "vector-common",
+ "vector-config",
+ "vector-config-macros",
  "vector-core",
 ]
 
@@ -1408,10 +1408,10 @@ dependencies = [
  "snafu",
  "tokio-util",
  "tracing 0.1.37",
- "vector-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-macros 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
+ "vector-common",
+ "vector-config",
+ "vector-config-common",
+ "vector-config-macros",
  "vector-core",
  "vector-lookup",
  "vrl",
@@ -2135,9 +2135,9 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing 0.1.37",
- "vector-config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
+ "vector-config",
+ "vector-config-common",
+ "vector-config-macros",
  "winapi",
 ]
 
@@ -2155,10 +2155,10 @@ dependencies = [
  "tracing 0.1.37",
  "typetag",
  "vector",
- "vector-common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
+ "vector-common",
+ "vector-config",
+ "vector-config-common",
+ "vector-config-macros",
  "vector-core",
 ]
 
@@ -2391,9 +2391,9 @@ dependencies = [
  "tracing 0.1.37",
  "typetag",
  "vector",
- "vector-common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
+ "vector-common",
+ "vector-config",
+ "vector-config-macros",
  "vector-core",
 ]
 
@@ -5615,9 +5615,9 @@ dependencies = [
  "tracing-futures 0.2.5",
  "typetag",
  "vector",
- "vector-common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
+ "vector-common",
+ "vector-config",
+ "vector-config-macros",
  "vector-core",
 ]
 
@@ -6168,10 +6168,10 @@ dependencies = [
  "url",
  "uuid",
  "vector-buffers",
- "vector-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-macros 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
+ "vector-common",
+ "vector-config",
+ "vector-config-common",
+ "vector-config-macros",
  "vector-core",
  "vector-lookup",
  "vector-vrl-functions",
@@ -6206,37 +6206,10 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing 0.1.37",
- "vector-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-macros 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
-]
-
-[[package]]
-name = "vector-common"
-version = "0.1.0"
-source = "git+https://github.com/vectordotdev/vector?tag=v0.31.0#0f13b22a4cebbba000444bdb45f02bc820730a13"
-dependencies = [
- "async-stream",
- "chrono-tz",
- "crossbeam-utils",
- "derivative",
- "futures 0.3.28",
- "indexmap 2.0.0",
- "metrics 0.21.1",
- "ordered-float",
- "paste",
- "pin-project",
- "ryu",
- "serde_json",
- "smallvec",
- "stream-cancel",
- "tokio",
- "tracing 0.1.37",
- "vector-config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vrl",
+ "vector-common",
+ "vector-config",
+ "vector-config-common",
+ "vector-config-macros",
 ]
 
 [[package]]
@@ -6265,34 +6238,9 @@ dependencies = [
  "stream-cancel",
  "tokio",
  "tracing 0.1.37",
- "vector-config 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-macros 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vrl",
-]
-
-[[package]]
-name = "vector-config"
-version = "0.1.0"
-source = "git+https://github.com/vectordotdev/vector?tag=v0.31.0#0f13b22a4cebbba000444bdb45f02bc820730a13"
-dependencies = [
- "chrono",
- "chrono-tz",
- "encoding_rs",
- "indexmap 2.0.0",
- "inventory",
- "no-proxy",
- "num-traits",
- "once_cell",
- "serde",
- "serde_json",
- "serde_with",
- "snafu",
- "toml 0.7.6",
- "tracing 0.1.37",
- "url",
- "vector-config-common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
+ "vector-config",
+ "vector-config-common",
+ "vector-config-macros",
  "vrl",
 ]
 
@@ -6316,30 +6264,14 @@ dependencies = [
  "toml 0.7.6",
  "tracing 0.1.37",
  "url",
- "vector-config-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-macros 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
+ "vector-config-common",
+ "vector-config-macros",
  "vrl",
 ]
 
 [[package]]
 name = "vector-config-common"
 version = "0.1.0"
-source = "git+https://github.com/vectordotdev/vector?tag=v0.31.0#0f13b22a4cebbba000444bdb45f02bc820730a13"
-dependencies = [
- "convert_case 0.6.0",
- "darling 0.13.4",
- "once_cell",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn 1.0.109",
- "tracing 0.1.37",
-]
-
-[[package]]
-name = "vector-config-common"
-version = "0.1.0"
 source = "git+https://github.com/mornyx/vector?branch=extend-0.31#62a49a977b1a9149abb2d6b22a472089513d3b28"
 dependencies = [
  "convert_case 0.6.0",
@@ -6356,19 +6288,6 @@ dependencies = [
 [[package]]
 name = "vector-config-macros"
 version = "0.1.0"
-source = "git+https://github.com/vectordotdev/vector?tag=v0.31.0#0f13b22a4cebbba000444bdb45f02bc820730a13"
-dependencies = [
- "darling 0.13.4",
- "proc-macro2",
- "quote",
- "serde_derive_internals",
- "syn 1.0.109",
- "vector-config-common 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
-]
-
-[[package]]
-name = "vector-config-macros"
-version = "0.1.0"
 source = "git+https://github.com/mornyx/vector?branch=extend-0.31#62a49a977b1a9149abb2d6b22a472089513d3b28"
 dependencies = [
  "darling 0.13.4",
@@ -6376,7 +6295,7 @@ dependencies = [
  "quote",
  "serde_derive_internals",
  "syn 1.0.109",
- "vector-config-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
+ "vector-config-common",
 ]
 
 [[package]]
@@ -6436,10 +6355,10 @@ dependencies = [
  "typetag",
  "url",
  "vector-buffers",
- "vector-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-common 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-macros 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
+ "vector-common",
+ "vector-config",
+ "vector-config-common",
+ "vector-config-macros",
  "vector-lookup",
  "vrl",
 ]
@@ -6460,7 +6379,7 @@ dependencies = [
  "topsql",
  "url",
  "vector",
- "vector-config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
+ "vector-config",
  "vm-import",
 ]
 
@@ -6470,8 +6389,8 @@ version = "0.1.0"
 source = "git+https://github.com/mornyx/vector?branch=extend-0.31#62a49a977b1a9149abb2d6b22a472089513d3b28"
 dependencies = [
  "serde",
- "vector-config 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
- "vector-config-macros 0.1.0 (git+https://github.com/mornyx/vector?branch=extend-0.31)",
+ "vector-config",
+ "vector-config-macros",
  "vrl",
 ]
 
@@ -6506,8 +6425,8 @@ dependencies = [
  "tracing 0.1.37",
  "typetag",
  "vector",
- "vector-config 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
- "vector-config-macros 0.1.0 (git+https://github.com/vectordotdev/vector?tag=v0.31.0)",
+ "vector-config",
+ "vector-config-macros",
  "vector-core",
 ]
 

@@ -65,6 +65,10 @@ members = [
 [patch.'https://github.com/vectordotdev/vector']
 vector = { git = "https://github.com/mornyx/vector", branch = "extend-0.31" }
 vector-core = { git = "https://github.com/mornyx/vector", branch = "extend-0.31" }
+vector-common = { git = "https://github.com/mornyx/vector", branch = "extend-0.31" }
+vector-config = { git = "https://github.com/mornyx/vector", branch = "extend-0.31" }
+vector-config-common = { git = "https://github.com/mornyx/vector", branch = "extend-0.31" }
+vector-config-macros = { git = "https://github.com/mornyx/vector", branch = "extend-0.31" }
 
 [patch.crates-io]
 # The upgrade for `tokio-util` >= 0.6.9 is blocked on https://github.com/vectordotdev/vector/issues/11257.
