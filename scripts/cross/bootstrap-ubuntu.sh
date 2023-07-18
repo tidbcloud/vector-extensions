@@ -4,6 +4,8 @@ set -o errexit
 echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
 
 apt-get update
+apt-get upgrade -y
+
 apt-get install -y \
   apt-transport-https \
   gnupg \
@@ -19,6 +21,7 @@ EOF
 wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key| apt-key add -
 
 apt-get update
+apt-get upgrade -y
 
 # needed by onig_sys
 apt-get install -y \

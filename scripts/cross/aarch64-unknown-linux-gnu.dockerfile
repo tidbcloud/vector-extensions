@@ -1,4 +1,4 @@
-FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5
+FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu:edge
 
 COPY bootstrap-ubuntu.sh .
 COPY install-protoc.sh .
