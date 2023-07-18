@@ -11,7 +11,13 @@ path = "src/main.rs"
 name = "vector"
 
 [features]
-default = ["topsql", "vm-import", "aws-s3-upload-file", "gcp-cloud-storage-upload-file", "filename"]
+default = [
+    "topsql",
+    "vm-import",
+    "aws-s3-upload-file",
+    "gcp-cloud-storage-upload-file",
+    "filename",
+]
 
 topsql = ["dep:topsql"]
 vm-import = ["dep:vm-import"]
@@ -32,7 +38,14 @@ vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.31.0", defa
 vector-config = { git = "https://github.com/vectordotdev/vector", tag = "v0.31.0", default-features = false }
 
 [dev-dependencies]
-hyper = { version = "0.14.20", default-features = false, features = ["client", "runtime", "http1", "http2", "server", "stream"] }
+hyper = { version = "0.14.20", default-features = false, features = [
+    "client",
+    "runtime",
+    "http1",
+    "http2",
+    "server",
+    "stream",
+] }
 lazy_static = "1.4.0"
 regex = "1.6.0"
 tokio = { version = "1.20.4", default-features = false, features = ["full"] }
@@ -48,6 +61,10 @@ members = [
     "packages/common",
     "vdev",
 ]
+
+[patch.'https://github.com/vectordotdev/vector']
+vector = { git = "https://github.com/mornyx/vector", branch = "extend-0.31" }
+vector-core = { git = "https://github.com/mornyx/vector", branch = "extend-0.31" }
 
 [patch.crates-io]
 # The upgrade for `tokio-util` >= 0.6.9 is blocked on https://github.com/vectordotdev/vector/issues/11257.
