@@ -52,7 +52,7 @@ impl EtagCalculator {
         }
 
         if self.concat_md5.is_empty() {
-            let digest: [u8; 16] = md5::Md5::digest(&[]).into();
+            let digest: [u8; 16] = md5::Md5::digest([]).into();
             self.concat_md5.extend_from_slice(&digest);
         }
 

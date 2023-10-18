@@ -1,4 +1,5 @@
 #![allow(clippy::clone_on_ref_ptr)]
+#![allow(non_snake_case)] // To avoid: Function `ScalarWrapper` should have snake_case name, e.g. `scalar_wrapper`
 
 include!(concat!(env!("OUT_DIR"), "/tipb.rs"));
 

@@ -26,6 +26,10 @@ inventory::submit! {
 inventory::submit! {
     SinkDescription::new::<vm_import::VMImportConfig>("vm_import", "", "", "")
 }
+#[cfg(feature = "conprof")]
+inventory::submit! {
+    SourceDescription::new::<conprof::ConprofConfig>("conprof", "", "", "")
+}
 
 #[cfg(unix)]
 fn main() -> ExitCode {

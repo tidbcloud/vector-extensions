@@ -198,14 +198,14 @@ impl TopSQLSource {
         let events = U::UpstreamEventParser::parse(response, self.instance.clone());
         let count = events.len();
         register!(EventsReceived {}).emit(CountByteSize(count, events.size_of().into()));
-        if let Err(_) = self.out.send_batch(events).await {
+        if self.out.send_batch(events).await.is_err() {
             StreamClosedError { count }.emit()
         }
     }
 
     async fn handle_instance(&mut self) {
         let event = instance_event(self.instance.clone(), self.instance_type.to_string());
-        if let Err(_) = self.out.send_event(event).await {
+        if self.out.send_event(event).await.is_err() {
             StreamClosedError { count: 1 }.emit();
         }
     }

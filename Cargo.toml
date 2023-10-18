@@ -13,6 +13,7 @@ name = "vector"
 [features]
 default = [
     "topsql",
+    "conprof",
     "vm-import",
     "aws-s3-upload-file",
     "gcp-cloud-storage-upload-file",
@@ -27,6 +28,7 @@ filename = ["dep:filename"]
 
 [dependencies]
 aws-s3-upload-file = { path = "extensions/aws-s3-upload-file", optional = true }
+conprof = { path = "extensions/conprof", optional = true }
 filename = { path = "extensions/filename", optional = true }
 gcp-cloud-storage-upload-file = { path = "extensions/gcp-cloud-storage-upload-file", optional = true }
 topsql = { path = "extensions/topsql", optional = true }
