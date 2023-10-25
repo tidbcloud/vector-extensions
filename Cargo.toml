@@ -21,6 +21,7 @@ default = [
 ]
 
 topsql = ["dep:topsql"]
+conprof = ["dep:conprof"]
 vm-import = ["dep:vm-import"]
 aws-s3-upload-file = ["dep:aws-s3-upload-file"]
 gcp-cloud-storage-upload-file = ["dep:gcp-cloud-storage-upload-file"]
@@ -56,6 +57,7 @@ url = "2.3.1"
 [workspace]
 members = [
     "extensions/aws-s3-upload-file",
+    "extensions/conprof",
     "extensions/filename",
     "extensions/gcp-cloud-storage-upload-file",
     "extensions/topsql",
