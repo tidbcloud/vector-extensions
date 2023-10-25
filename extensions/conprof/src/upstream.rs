@@ -5,8 +5,8 @@ use chrono::Utc;
 use reqwest::{Certificate, Client, Identity};
 use vector::{internal_events::StreamClosedError, SourceSender};
 use vector_common::internal_event::InternalEvent;
-use vector_core::event::LogEvent;
 use vector_core::tls::TlsConfig;
+use vector_core::{event::LogEvent, tls::TlsSettings};
 
 use crate::{
     shutdown::ShutdownSubscriber,
@@ -35,33 +35,19 @@ impl ConprofSource {
     ) -> Option<Self> {
         let mut builder = reqwest::Client::builder();
         if let Some(tls) = tls.clone() {
-            let ca = match tokio::fs::read(tls.ca_file.expect("tls ca file must be provided")).await
-            {
+            let ca_file = tls.ca_file.clone().expect("tls ca file must be provided");
+            let ca = match tokio::fs::read(ca_file).await {
                 Ok(v) => v,
                 Err(err) => {
                     error!(message = "Failed to read tls ca file", error = %err);
                     return None;
                 }
             };
-            let crt =
-                match tokio::fs::read(tls.crt_file.expect("tls crt file must be provided")).await {
-                    Ok(v) => v,
-                    Err(err) => {
-                        error!(message = "Failed to read tls crt file", error = %err);
-                        return None;
-                    }
-                };
-            let key =
-                match tokio::fs::read(tls.key_file.expect("tls key file must be provided")).await {
-                    Ok(v) => v,
-                    Err(err) => {
-                        error!(message = "Failed to read tls key file", error = %err);
-                        return None;
-                    }
-                };
+            let settings = TlsSettings::from_options(&Some(tls)).expect("invalid tls settings");
+            let (crt, key) = settings.identity_pem().expect("invalid identity pem");
             builder = builder
-                .add_root_certificate(Certificate::from_pem(&ca).expect("invalid ca file"))
-                .identity(Identity::from_pkcs8_pem(&crt, &key).expect("invalid crt & key file"));
+                .add_root_certificate(Certificate::from_pem(&ca).expect("invalid ca"))
+                .identity(Identity::from_pkcs8_pem(&crt, &key).expect("invalid crt & key"));
         }
         let client = match builder
             .timeout(Duration::from_secs(60))
