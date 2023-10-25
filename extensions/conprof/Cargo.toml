@@ -18,7 +18,7 @@ hyper = { version = "0.14.19", default-features = false, features = ["client", "
 ordered-float = { version = "3.0.0", default-features = false }
 prost = { version = "0.10.4", default-features = false, features = ["std"] }
 prost-types = { version = "0.10.1", default-features = false }
-reqwest = "0.11"
+reqwest = { version = "0.11", features = ["native-tls"]}
 serde = { version = "1.0.137", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.81", default-features = false, features = ["raw_value"] }
 snafu = { version = "0.7.1", default-features = false, features = ["futures"] }

@@ -21,7 +21,7 @@ pub struct Controller {
     shutdown_notifier: ShutdownNotifier,
     shutdown_subscriber: ShutdownSubscriber,
 
-    // tls: Option<TlsConfig>,
+    tls: Option<TlsConfig>,
     // init_retry_delay: Duration,
     out: SourceSender,
 }
@@ -45,7 +45,7 @@ impl Controller {
             running_components: HashMap::new(),
             shutdown_notifier,
             shutdown_subscriber,
-            // tls: tls_config,
+            tls: tls_config,
             // init_retry_delay,
             out,
         })
@@ -90,7 +90,7 @@ impl Controller {
         let leavers = prev_components.difference(&latest_components);
 
         for newcomer in newcomers {
-            if self.start_component(newcomer) {
+            if self.start_component(newcomer).await {
                 has_change = true;
                 self.components.insert(newcomer.clone());
             }
@@ -105,13 +105,14 @@ impl Controller {
         Ok(has_change)
     }
 
-    fn start_component(&mut self, component: &Component) -> bool {
+    async fn start_component(&mut self, component: &Component) -> bool {
         let source = ConprofSource::new(
             component.clone(),
-            // self.tls.clone(),
+            self.tls.clone(),
             self.out.clone(),
             // self.init_retry_delay,
-        );
+        )
+        .await;
         let source = match source {
             Some(source) => source,
             None => return false,

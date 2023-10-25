@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use base64::{prelude::*, Engine};
 use chrono::Utc;
-use reqwest::Client;
+use reqwest::{Certificate, Client, Identity};
 use vector::{internal_events::StreamClosedError, SourceSender};
 use vector_common::internal_event::InternalEvent;
 use vector_core::event::LogEvent;
-// use vector_core::tls::TlsConfig;
+use vector_core::tls::TlsConfig;
 
 use crate::{
     shutdown::ShutdownSubscriber,
@@ -27,13 +27,43 @@ pub struct ConprofSource {
 }
 
 impl ConprofSource {
-    pub fn new(
+    pub async fn new(
         component: Component,
-        // tls: Option<TlsConfig>,
+        tls: Option<TlsConfig>,
         out: SourceSender,
         // init_retry_delay: Duration,
     ) -> Option<Self> {
-        let client = match reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder();
+        if let Some(tls) = tls.clone() {
+            let ca = match tokio::fs::read(tls.ca_file.expect("tls ca file must be provided")).await
+            {
+                Ok(v) => v,
+                Err(err) => {
+                    error!(message = "Failed to read tls ca file", error = %err);
+                    return None;
+                }
+            };
+            let crt =
+                match tokio::fs::read(tls.crt_file.expect("tls crt file must be provided")).await {
+                    Ok(v) => v,
+                    Err(err) => {
+                        error!(message = "Failed to read tls crt file", error = %err);
+                        return None;
+                    }
+                };
+            let key =
+                match tokio::fs::read(tls.key_file.expect("tls key file must be provided")).await {
+                    Ok(v) => v,
+                    Err(err) => {
+                        error!(message = "Failed to read tls key file", error = %err);
+                        return None;
+                    }
+                };
+            builder = builder
+                .add_root_certificate(Certificate::from_pem(&ca).expect("invalid ca file"))
+                .identity(Identity::from_pkcs8_pem(&crt, &key).expect("invalid crt & key file"));
+        }
+        let client = match builder
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(10))
             .build()
@@ -50,12 +80,11 @@ impl ConprofSource {
                 // instance: address.clone(),
                 instance_b64: BASE64_URL_SAFE_NO_PAD.encode(&address),
                 instance_type: component.instance_type,
-                uri: format!("http://{}", address),
-                // uri: if tls.is_some() {
-                //     format!("https://{}", address)
-                // } else {
-                //     format!("http://{}", address)
-                // },
+                uri: if tls.is_some() {
+                    format!("https://{}", address)
+                } else {
+                    format!("http://{}", address)
+                },
 
                 // tls,
                 out,
