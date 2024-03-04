@@ -1389,7 +1389,7 @@ dependencies = [
 [[package]]
 name = "codecs"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "apache-avro",
  "bytes 1.4.0",
@@ -2008,7 +2008,7 @@ checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 [[package]]
 name = "enrichment"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -2591,7 +2591,7 @@ checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
 [[package]]
 name = "heim"
 version = "0.1.0-rc.1"
-source = "git+https://github.com/vectordotdev/heim.git?branch=update-nix#76fa765c7ed7fbe43d1465bf52da6b8d19f2d2a9"
+source = "git+https://github.com/vectordotdev/heim.git?branch=update-nix#a66c44074fb214e2b9355d7c407315f720664b18"
 dependencies = [
  "heim-common",
  "heim-disk",
@@ -2601,7 +2601,7 @@ dependencies = [
 [[package]]
 name = "heim-common"
 version = "0.1.0-rc.1"
-source = "git+https://github.com/vectordotdev/heim.git?branch=update-nix#76fa765c7ed7fbe43d1465bf52da6b8d19f2d2a9"
+source = "git+https://github.com/vectordotdev/heim.git?branch=update-nix#a66c44074fb214e2b9355d7c407315f720664b18"
 dependencies = [
  "cfg-if",
  "core-foundation",
@@ -2619,7 +2619,7 @@ dependencies = [
 [[package]]
 name = "heim-disk"
 version = "0.1.0-rc.1"
-source = "git+https://github.com/vectordotdev/heim.git?branch=update-nix#76fa765c7ed7fbe43d1465bf52da6b8d19f2d2a9"
+source = "git+https://github.com/vectordotdev/heim.git?branch=update-nix#a66c44074fb214e2b9355d7c407315f720664b18"
 dependencies = [
  "bitflags 1.3.2",
  "cfg-if",
@@ -2635,7 +2635,7 @@ dependencies = [
 [[package]]
 name = "heim-runtime"
 version = "0.1.0-rc.1"
-source = "git+https://github.com/vectordotdev/heim.git?branch=update-nix#76fa765c7ed7fbe43d1465bf52da6b8d19f2d2a9"
+source = "git+https://github.com/vectordotdev/heim.git?branch=update-nix#a66c44074fb214e2b9355d7c407315f720664b18"
 dependencies = [
  "futures 0.3.28",
  "futures-timer",
@@ -3997,7 +3997,7 @@ checksum = "767eb9f07d4a5ebcb39bbf2d452058a93c011373abf6832e24194a1c3f004794"
 [[package]]
 name = "portpicker"
 version = "1.0.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "rand",
 ]
@@ -5807,7 +5807,7 @@ dependencies = [
 [[package]]
 name = "tracing-limit"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "dashmap",
  "tracing-core 0.1.31",
@@ -6110,7 +6110,7 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 [[package]]
 name = "vector"
 version = "0.31.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "arr_macro",
  "async-stream",
@@ -6222,7 +6222,7 @@ dependencies = [
 [[package]]
 name = "vector-buffers"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "async-recursion",
  "async-stream",
@@ -6253,7 +6253,7 @@ dependencies = [
 [[package]]
 name = "vector-common"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "async-stream",
  "bytes 1.4.0",
@@ -6285,7 +6285,7 @@ dependencies = [
 [[package]]
 name = "vector-config"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -6310,7 +6310,7 @@ dependencies = [
 [[package]]
 name = "vector-config-common"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "convert_case 0.6.0",
  "darling 0.13.4",
@@ -6326,7 +6326,7 @@ dependencies = [
 [[package]]
 name = "vector-config-macros"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
@@ -6339,7 +6339,7 @@ dependencies = [
 [[package]]
 name = "vector-core"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "async-trait",
  "bitmask-enum",
@@ -6425,7 +6425,7 @@ dependencies = [
 [[package]]
 name = "vector-lookup"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "serde",
  "vector-config",
@@ -6436,7 +6436,7 @@ dependencies = [
 [[package]]
 name = "vector-vrl-functions"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#225e658b3db7dd35964da34d6beecf6b707bc8ee"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#db75a336693c3a9d8e04e6c732bea076dbc256e9"
 dependencies = [
  "vrl",
 ]
