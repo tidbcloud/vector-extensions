@@ -1389,7 +1389,7 @@ dependencies = [
 [[package]]
 name = "codecs"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "apache-avro",
  "bytes 1.4.0",
@@ -2008,7 +2008,7 @@ checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 [[package]]
 name = "enrichment"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -3997,7 +3997,7 @@ checksum = "767eb9f07d4a5ebcb39bbf2d452058a93c011373abf6832e24194a1c3f004794"
 [[package]]
 name = "portpicker"
 version = "1.0.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "rand",
 ]
@@ -5807,7 +5807,7 @@ dependencies = [
 [[package]]
 name = "tracing-limit"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "dashmap",
  "tracing-core 0.1.31",
@@ -6110,7 +6110,7 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 [[package]]
 name = "vector"
 version = "0.31.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "arr_macro",
  "async-stream",
@@ -6222,7 +6222,7 @@ dependencies = [
 [[package]]
 name = "vector-buffers"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "async-recursion",
  "async-stream",
@@ -6253,7 +6253,7 @@ dependencies = [
 [[package]]
 name = "vector-common"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "async-stream",
  "bytes 1.4.0",
@@ -6285,7 +6285,7 @@ dependencies = [
 [[package]]
 name = "vector-config"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -6310,7 +6310,7 @@ dependencies = [
 [[package]]
 name = "vector-config-common"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "convert_case 0.6.0",
  "darling 0.13.4",
@@ -6326,7 +6326,7 @@ dependencies = [
 [[package]]
 name = "vector-config-macros"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "darling 0.13.4",
  "proc-macro2",
@@ -6339,7 +6339,7 @@ dependencies = [
 [[package]]
 name = "vector-core"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "async-trait",
  "bitmask-enum",
@@ -6425,7 +6425,7 @@ dependencies = [
 [[package]]
 name = "vector-lookup"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "serde",
  "vector-config",
@@ -6436,7 +6436,7 @@ dependencies = [
 [[package]]
 name = "vector-vrl-functions"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.31#49ea0b574f7908ac68c06a155dcb3a6772d1206d"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.31#0db9d227a9ac8cfe0dc337c11cbcb4ae08091536"
 dependencies = [
  "vrl",
 ]
