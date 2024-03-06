@@ -31,6 +31,10 @@ pub struct TopSQLConfig {
     /// PLACEHOLDER
     #[serde(default = "default_top_n")]
     pub top_n: usize,
+
+    /// PLACEHOLDER
+    #[serde(default = "default_downsampling_interval")]
+    pub downsampling_interval: u32,
 }
 
 pub const fn default_init_retry_delay() -> f64 {
@@ -42,7 +46,11 @@ pub const fn default_topology_fetch_interval() -> f64 {
 }
 
 pub const fn default_top_n() -> usize {
-    10
+    0
+}
+
+pub const fn default_downsampling_interval() -> u32 {
+    0
 }
 
 impl GenerateConfig for TopSQLConfig {
@@ -53,6 +61,7 @@ impl GenerateConfig for TopSQLConfig {
             init_retry_delay_seconds: default_init_retry_delay(),
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
             top_n: default_top_n(),
+            downsampling_interval: default_downsampling_interval(),
         })
         .unwrap()
     }
@@ -75,12 +84,14 @@ impl SourceConfig for TopSQLConfig {
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
         let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
         let top_n = self.top_n;
+        let downsampling_interval = self.downsampling_interval;
         Ok(Box::pin(async move {
             let controller = Controller::new(
                 pd_address,
                 topology_fetch_interval,
                 init_retry_delay,
                 top_n,
+                downsampling_interval,
                 tls,
                 &cx.proxy,
                 cx.out,

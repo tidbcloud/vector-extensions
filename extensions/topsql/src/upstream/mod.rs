@@ -58,6 +58,7 @@ pub struct TopSQLSource {
     init_retry_delay: Duration,
     retry_delay: Duration,
     top_n: usize,
+    downsampling_interval: u32,
 }
 
 enum State {
@@ -74,6 +75,7 @@ impl TopSQLSource {
         out: SourceSender,
         init_retry_delay: Duration,
         top_n: usize,
+        downsampling_interval: u32,
     ) -> Option<Self> {
         let protocal = if tls.is_none() {
             "http".into()
@@ -96,6 +98,7 @@ impl TopSQLSource {
                 init_retry_delay,
                 retry_delay: init_retry_delay,
                 top_n,
+                downsampling_interval,
             }),
             None => None,
         }
@@ -214,16 +217,23 @@ impl TopSQLSource {
     }
 
     async fn handle_responses<U: Upstream>(&mut self, responses: Vec<U::UpstreamEvent>) {
-        let responses = if self.top_n > 0 {
+        // truncate top n
+        let mut responses = if self.top_n > 0 {
             U::UpstreamEventParser::keep_top_n(responses, self.top_n)
         } else {
             responses
         };
+        // downsample
+        if self.downsampling_interval > 1 {
+            U::UpstreamEventParser::downsampling(&mut responses, self.downsampling_interval);
+        }
+        // parse
         let mut batch = vec![];
         for response in responses {
             let mut events = U::UpstreamEventParser::parse(response, self.instance.clone());
             batch.append(&mut events);
         }
+        // send
         let count = batch.len();
         register!(EventsReceived {}).emit(CountByteSize(count, batch.size_of().into()));
         if self.out.send_batch(batch).await.is_err() {

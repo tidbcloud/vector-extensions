@@ -101,11 +101,49 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         results
     }
 
-    // fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, accuracy_sec: u32) {
-    //     if accuracy_sec <= 1 {
-    //         return;
-    //     }
-    // }
+    fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, interval_sec: u32) {
+        if interval_sec <= 1 {
+            return;
+        }
+        let interval_sec = interval_sec as u64;
+        for response in responses {
+            if let Some(RespOneof::Record(record)) = &mut response.resp_oneof {
+                let mut new_items = BTreeMap::new();
+                for item in &record.items {
+                    let new_ts =
+                        item.timestamp_sec + (interval_sec - item.timestamp_sec % interval_sec);
+                    match new_items.get(&new_ts) {
+                        None => {
+                            let mut new_item = item.clone();
+                            new_item.timestamp_sec = new_ts;
+                            new_items.insert(new_ts, new_item);
+                        }
+                        Some(existed_item) => {
+                            let mut new_item = existed_item.clone();
+                            new_item.cpu_time_ms += item.cpu_time_ms;
+                            new_item.stmt_exec_count += item.stmt_exec_count;
+                            new_item.stmt_duration_count += item.stmt_duration_count;
+                            new_item.stmt_duration_sum_ns += item.stmt_duration_sum_ns;
+                            for (k, v) in &item.stmt_kv_exec_count {
+                                match new_item.stmt_kv_exec_count.get(k) {
+                                    None => {
+                                        new_item.stmt_kv_exec_count.insert(k.clone(), *v);
+                                    }
+                                    Some(existed_v) => {
+                                        new_item
+                                            .stmt_kv_exec_count
+                                            .insert(k.clone(), *v + existed_v);
+                                    }
+                                }
+                            }
+                            new_items.insert(new_ts, new_item);
+                        }
+                    }
+                }
+                record.items = new_items.into_values().collect();
+            }
+        }
+    }
 }
 
 impl TopSqlSubResponseParser {
@@ -232,10 +270,9 @@ mod tests {
         stmt_duration_count: u64,
     }
 
-    #[test]
-    fn test_keep_top_n() {
-        let records: Vec<Record> = serde_json::from_str(MOCK_RECORDS).unwrap();
-        let responses = records
+    fn load_mock_responses() -> Vec<TopSqlSubResponse> {
+        serde_json::from_str::<Vec<Record>>(MOCK_RECORDS)
+            .unwrap()
             .into_iter()
             .map(|r| TopSqlSubResponse {
                 resp_oneof: Some(RespOneof::Record(TopSqlRecord {
@@ -255,7 +292,12 @@ mod tests {
                         .collect(),
                 })),
             })
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn test_keep_top_n() {
+        let responses = load_mock_responses();
         let top_n = TopSqlSubResponseParser::keep_top_n(responses, 10);
         assert_eq!(top_n.len(), 11);
         let mut top_cpu_time = vec![];
@@ -273,5 +315,90 @@ mod tests {
         top_cpu_time.sort_by(|a, b| b.cmp(a));
         assert_eq!(top_cpu_time, [90, 60, 50, 50, 50, 40, 40, 40, 40, 40]);
         assert_eq!(others_cpu_time, 30590);
+    }
+
+    #[test]
+    fn test_downsampling() {
+        let mut responses = load_mock_responses();
+        let mut items = vec![];
+        for response in &responses {
+            if let Some(RespOneof::Record(record)) = &response.resp_oneof {
+                if record.sql_digest.is_empty() {
+                    items = record.items.clone();
+                }
+            }
+        }
+        let mut timestamps: Vec<u64> = items.clone().into_iter().map(|i| i.timestamp_sec).collect();
+        timestamps.sort();
+        assert_eq!(
+            timestamps, // 21:54:51 ~ 21:55:24
+            [
+                1709646891, 1709646892, 1709646893, 1709646894, 1709646895, 1709646896, 1709646897,
+                1709646898, 1709646899, 1709646900, 1709646901, 1709646902, 1709646903, 1709646904,
+                1709646905, 1709646907, 1709646908, 1709646909, 1709646910, 1709646911, 1709646912,
+                1709646913, 1709646914, 1709646915, 1709646916, 1709646917, 1709646918, 1709646919,
+                1709646920, 1709646921, 1709646922, 1709646923, 1709646924
+            ]
+        );
+        let mut sum_old = TopSqlRecordItem::default();
+        for item in items {
+            sum_old.cpu_time_ms += item.cpu_time_ms;
+            sum_old.stmt_exec_count += item.stmt_exec_count;
+            sum_old.stmt_duration_sum_ns += item.stmt_duration_sum_ns;
+            sum_old.stmt_duration_count += item.stmt_duration_count;
+            for (k, v) in item.stmt_kv_exec_count {
+                match sum_old.stmt_kv_exec_count.get(&k) {
+                    None => {
+                        sum_old.stmt_kv_exec_count.insert(k, v);
+                    }
+                    Some(sum_v) => {
+                        sum_old.stmt_kv_exec_count.insert(k, *sum_v + v);
+                    }
+                }
+            }
+        }
+
+        TopSqlSubResponseParser::downsampling(&mut responses, 15);
+
+        let mut items = vec![];
+        for response in &responses {
+            if let Some(RespOneof::Record(record)) = &response.resp_oneof {
+                if record.sql_digest.is_empty() {
+                    items = record.items.clone();
+                }
+            }
+        }
+        let timestamps: Vec<u64> = items.clone().into_iter().map(|i| i.timestamp_sec).collect();
+        assert_eq!(
+            timestamps,
+            [
+                1709646900, // 21:55:00
+                1709646915, // 21:55:15
+                1709646930, // 21:55:30
+            ]
+        );
+        let mut sum_new = TopSqlRecordItem::default();
+        for item in items {
+            sum_new.cpu_time_ms += item.cpu_time_ms;
+            sum_new.stmt_exec_count += item.stmt_exec_count;
+            sum_new.stmt_duration_sum_ns += item.stmt_duration_sum_ns;
+            sum_new.stmt_duration_count += item.stmt_duration_count;
+            for (k, v) in item.stmt_kv_exec_count {
+                match sum_new.stmt_kv_exec_count.get(&k) {
+                    None => {
+                        sum_new.stmt_kv_exec_count.insert(k, v);
+                    }
+                    Some(sum_v) => {
+                        sum_new.stmt_kv_exec_count.insert(k, *sum_v + v);
+                    }
+                }
+            }
+        }
+
+        assert_eq!(sum_old.cpu_time_ms, sum_new.cpu_time_ms);
+        assert_eq!(sum_old.stmt_exec_count, sum_new.stmt_exec_count);
+        assert_eq!(sum_old.stmt_duration_count, sum_new.stmt_duration_count);
+        assert_eq!(sum_old.stmt_duration_sum_ns, sum_new.stmt_duration_sum_ns);
+        assert_eq!(sum_old.stmt_kv_exec_count, sum_new.stmt_kv_exec_count);
     }
 }

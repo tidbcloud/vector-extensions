@@ -14,7 +14,7 @@ pub trait UpstreamEventParser {
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent>;
 
-    // fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, accuracy_sec: u32);
+    fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, interval_sec: u32);
 }
 
 pub struct Buf {

@@ -24,6 +24,7 @@ pub struct Controller {
     tls: Option<TlsConfig>,
     init_retry_delay: Duration,
     top_n: usize,
+    downsampling_interval: u32,
 
     out: SourceSender,
 }
@@ -34,6 +35,7 @@ impl Controller {
         topo_fetch_interval: Duration,
         init_retry_delay: Duration,
         top_n: usize,
+        downsampling_interval: u32,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         out: SourceSender,
@@ -51,6 +53,7 @@ impl Controller {
             tls: tls_config,
             init_retry_delay,
             top_n,
+            downsampling_interval,
             out,
         })
     }
@@ -116,6 +119,7 @@ impl Controller {
             self.out.clone(),
             self.init_retry_delay,
             self.top_n,
+            self.downsampling_interval,
         );
         let source = match source {
             Some(source) => source,

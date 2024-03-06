@@ -90,11 +90,36 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         results
     }
 
-    // fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, accuracy_sec: u32) {
-    //     if accuracy_sec <= 1 {
-    //         return;
-    //     }
-    // }
+    fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, interval_sec: u32) {
+        if interval_sec <= 1 {
+            return;
+        }
+        let interval_sec = interval_sec as u64;
+        for response in responses {
+            if let Some(RecordOneof::Record(record)) = &mut response.record_oneof {
+                let mut new_items = BTreeMap::new();
+                for item in &record.items {
+                    let new_ts =
+                        item.timestamp_sec + (interval_sec - item.timestamp_sec % interval_sec);
+                    match new_items.get(&new_ts) {
+                        None => {
+                            let mut new_item = item.clone();
+                            new_item.timestamp_sec = new_ts;
+                            new_items.insert(new_ts, new_item);
+                        }
+                        Some(existed_item) => {
+                            let mut new_item = existed_item.clone();
+                            new_item.cpu_time_ms += item.cpu_time_ms;
+                            new_item.read_keys += item.read_keys;
+                            new_item.write_keys += item.write_keys;
+                            new_items.insert(new_ts, new_item);
+                        }
+                    }
+                }
+                record.items = new_items.into_values().collect();
+            }
+        }
+    }
 }
 
 impl ResourceUsageRecordParser {
@@ -198,10 +223,9 @@ mod tests {
         write_keys: u32,
     }
 
-    #[test]
-    fn test_keep_top_n() {
-        let records: Vec<Record> = serde_json::from_str(MOCK_RECORDS).unwrap();
-        let responses = records
+    fn load_mock_records() -> Vec<ResourceUsageRecord> {
+        serde_json::from_str::<Vec<Record>>(MOCK_RECORDS)
+            .unwrap()
             .into_iter()
             .map(|r| ResourceUsageRecord {
                 record_oneof: Some(RecordOneof::Record(GroupTagRecord {
@@ -222,8 +246,13 @@ mod tests {
                         .collect(),
                 })),
             })
-            .collect();
-        let top_n = ResourceUsageRecordParser::keep_top_n(responses, 10);
+            .collect()
+    }
+
+    #[test]
+    fn test_keep_top_n() {
+        let records = load_mock_records();
+        let top_n = ResourceUsageRecordParser::keep_top_n(records, 10);
         assert_eq!(top_n.len(), 11);
         let mut top_cpu_time = vec![];
         let mut others_cpu_time = 0;
@@ -248,5 +277,74 @@ mod tests {
             [723, 646, 621, 619, 574, 551, 549, 545, 544, 529]
         );
         assert_eq!(others_cpu_time, 65216);
+    }
+
+    #[test]
+    fn test_downsampling() {
+        let mut records = load_mock_records();
+        let mut items = vec![];
+        for record in &records {
+            if let Some(RecordOneof::Record(record)) = &record.record_oneof {
+                if ResourceUsageRecordParser::decode_tag(&record.resource_group_tag)
+                    .unwrap()
+                    .0
+                    .is_empty()
+                {
+                    items = record.items.clone();
+                }
+            }
+        }
+        let mut timestamps: Vec<u64> = items.clone().into_iter().map(|i| i.timestamp_sec).collect();
+        timestamps.sort();
+        println!("{:?}", timestamps);
+        assert_eq!(
+            timestamps, // 00:03:31 ~ 00:03:59
+            [
+                1709654611, 1709654612, 1709654613, 1709654614, 1709654615, 1709654616, 1709654617,
+                1709654618, 1709654619, 1709654620, 1709654621, 1709654622, 1709654623, 1709654624,
+                1709654625, 1709654626, 1709654627, 1709654628, 1709654629, 1709654630, 1709654631,
+                1709654632, 1709654633, 1709654634, 1709654635, 1709654636, 1709654637, 1709654638,
+                1709654639
+            ]
+        );
+        let mut sum_old = GroupTagRecordItem::default();
+        for item in items {
+            sum_old.cpu_time_ms += item.cpu_time_ms;
+            sum_old.read_keys += item.read_keys;
+            sum_old.write_keys += item.write_keys;
+        }
+
+        ResourceUsageRecordParser::downsampling(&mut records, 15);
+
+        let mut items = vec![];
+        for record in &records {
+            if let Some(RecordOneof::Record(record)) = &record.record_oneof {
+                if ResourceUsageRecordParser::decode_tag(&record.resource_group_tag)
+                    .unwrap()
+                    .0
+                    .is_empty()
+                {
+                    items = record.items.clone();
+                }
+            }
+        }
+        let timestamps: Vec<u64> = items.clone().into_iter().map(|i| i.timestamp_sec).collect();
+        assert_eq!(
+            timestamps,
+            [
+                1709654625, // 00:03:45
+                1709654640, // 00:04:00
+            ]
+        );
+        let mut sum_new = GroupTagRecordItem::default();
+        for item in items {
+            sum_new.cpu_time_ms += item.cpu_time_ms;
+            sum_new.read_keys += item.read_keys;
+            sum_new.write_keys += item.write_keys;
+        }
+
+        assert_eq!(sum_old.cpu_time_ms, sum_new.cpu_time_ms);
+        assert_eq!(sum_old.read_keys, sum_new.read_keys);
+        assert_eq!(sum_old.write_keys, sum_new.write_keys);
     }
 }
