@@ -23,6 +23,7 @@ pub struct Controller {
 
     tls: Option<TlsConfig>,
     init_retry_delay: Duration,
+    top_n: usize,
 
     out: SourceSender,
 }
@@ -32,6 +33,7 @@ impl Controller {
         pd_address: String,
         topo_fetch_interval: Duration,
         init_retry_delay: Duration,
+        top_n: usize,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         out: SourceSender,
@@ -48,6 +50,7 @@ impl Controller {
             shutdown_subscriber,
             tls: tls_config,
             init_retry_delay,
+            top_n,
             out,
         })
     }
@@ -112,6 +115,7 @@ impl Controller {
             self.tls.clone(),
             self.out.clone(),
             self.init_retry_delay,
+            self.top_n,
         );
         let source = match source {
             Some(source) => source,

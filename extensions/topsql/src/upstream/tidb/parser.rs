@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use chrono::Utc;
 use vector::event::LogEvent;
@@ -27,6 +27,85 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             None => vec![],
         }
     }
+
+    fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent> {
+        let mut cpu_time_map = HashMap::new();
+        for response in &responses {
+            if let Some(RespOneof::Record(record)) = &response.resp_oneof {
+                if record.sql_digest.is_empty() {
+                    continue; // others
+                }
+                let cpu_time: u32 = record.items.iter().map(|i| i.cpu_time_ms).sum();
+                let k = (record.sql_digest.clone(), record.plan_digest.clone());
+                let v = cpu_time_map.get(&k).unwrap_or(&0);
+                cpu_time_map.insert(k, *v + cpu_time);
+            }
+        }
+        let mut cpu_time_vec = cpu_time_map
+            .into_iter()
+            .collect::<Vec<((Vec<u8>, Vec<u8>), u32)>>();
+        cpu_time_vec.sort_by(|a, b| b.1.cmp(&a.1));
+        cpu_time_vec.truncate(top_n);
+        let mut top_sql_plan = HashSet::new();
+        for v in cpu_time_vec {
+            top_sql_plan.insert(v.0);
+        }
+
+        let mut results = vec![];
+        let mut records_others = vec![];
+        for response in responses {
+            match response.resp_oneof {
+                Some(RespOneof::Record(record)) => {
+                    if top_sql_plan
+                        .contains(&(record.sql_digest.clone(), record.plan_digest.clone()))
+                    {
+                        results.push(TopSqlSubResponse {
+                            resp_oneof: Some(RespOneof::Record(record)),
+                        });
+                    } else {
+                        records_others.push(record);
+                    }
+                }
+                _ => results.push(response),
+            }
+        }
+
+        let mut others_ts_item = BTreeMap::new();
+        for record in records_others {
+            for item in record.items {
+                match others_ts_item.get_mut(&item.timestamp_sec) {
+                    None => {
+                        others_ts_item.insert(item.timestamp_sec, item);
+                    }
+                    Some(i) => {
+                        i.cpu_time_ms += item.cpu_time_ms;
+                        i.stmt_exec_count += item.stmt_exec_count;
+                        i.stmt_duration_sum_ns += item.stmt_duration_sum_ns;
+                        i.stmt_duration_count += item.stmt_duration_count;
+                        for (k, v) in item.stmt_kv_exec_count {
+                            let iv = i.stmt_kv_exec_count.get(&k).unwrap_or(&0);
+                            i.stmt_kv_exec_count.insert(k, *iv + v);
+                        }
+                    }
+                }
+            }
+        }
+        results.push(TopSqlSubResponse {
+            resp_oneof: Some(RespOneof::Record(TopSqlRecord {
+                sql_digest: vec![],
+                plan_digest: vec![],
+                items: others_ts_item.into_values().collect(),
+            })),
+        });
+
+        results
+    }
+
+    // fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, accuracy_sec: u32) {
+    //     if accuracy_sec <= 1 {
+    //         return;
+    //     }
+    // }
 }
 
 impl TopSqlSubResponseParser {
@@ -126,5 +205,73 @@ impl TopSqlSubResponseParser {
             &[Utc::now()],
             &[1.0],
         )]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::upstream::tidb::proto::TopSqlRecordItem;
+
+    const MOCK_RECORDS: &'static str = include_str!("testdata/mock-records.json");
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct Record {
+        sql: String,
+        plan: String,
+        items: Vec<Item>,
+    }
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct Item {
+        timestamp_sec: u64,
+        cpu_time_ms: u32,
+        stmt_exec_count: u64,
+        stmt_kv_exec_count: BTreeMap<String, u64>,
+        stmt_duration_sum_ns: u64,
+        stmt_duration_count: u64,
+    }
+
+    #[test]
+    fn test_keep_top_n() {
+        let records: Vec<Record> = serde_json::from_str(MOCK_RECORDS).unwrap();
+        let responses = records
+            .into_iter()
+            .map(|r| TopSqlSubResponse {
+                resp_oneof: Some(RespOneof::Record(TopSqlRecord {
+                    sql_digest: hex::decode(r.sql).unwrap(),
+                    plan_digest: hex::decode(r.plan).unwrap(),
+                    items: r
+                        .items
+                        .into_iter()
+                        .map(|i| TopSqlRecordItem {
+                            timestamp_sec: i.timestamp_sec,
+                            cpu_time_ms: i.cpu_time_ms,
+                            stmt_exec_count: i.stmt_exec_count,
+                            stmt_kv_exec_count: i.stmt_kv_exec_count,
+                            stmt_duration_sum_ns: i.stmt_duration_sum_ns,
+                            stmt_duration_count: i.stmt_duration_count,
+                        })
+                        .collect(),
+                })),
+            })
+            .collect();
+        let top_n = TopSqlSubResponseParser::keep_top_n(responses, 10);
+        assert_eq!(top_n.len(), 11);
+        let mut top_cpu_time = vec![];
+        let mut others_cpu_time = 0;
+        for response in top_n {
+            if let Some(RespOneof::Record(record)) = response.resp_oneof {
+                let cpu_time: u32 = record.items.iter().map(|i| i.cpu_time_ms).sum();
+                if record.sql_digest.is_empty() {
+                    others_cpu_time = cpu_time;
+                } else {
+                    top_cpu_time.push(cpu_time);
+                }
+            }
+        }
+        top_cpu_time.sort_by(|a, b| b.cmp(a));
+        assert_eq!(top_cpu_time, [90, 60, 50, 50, 50, 40, 40, 40, 40, 40]);
+        assert_eq!(others_cpu_time, 30590);
     }
 }

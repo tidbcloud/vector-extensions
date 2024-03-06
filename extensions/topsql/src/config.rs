@@ -27,6 +27,10 @@ pub struct TopSQLConfig {
     /// PLACEHOLDER
     #[serde(default = "default_topology_fetch_interval")]
     pub topology_fetch_interval_seconds: f64,
+
+    /// PLACEHOLDER
+    #[serde(default = "default_top_n")]
+    pub top_n: usize,
 }
 
 pub const fn default_init_retry_delay() -> f64 {
@@ -37,6 +41,10 @@ pub const fn default_topology_fetch_interval() -> f64 {
     30.0
 }
 
+pub const fn default_top_n() -> usize {
+    10
+}
+
 impl GenerateConfig for TopSQLConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
@@ -44,6 +52,7 @@ impl GenerateConfig for TopSQLConfig {
             tls: None,
             init_retry_delay_seconds: default_init_retry_delay(),
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
+            top_n: default_top_n(),
         })
         .unwrap()
     }
@@ -65,11 +74,13 @@ impl SourceConfig for TopSQLConfig {
         let tls = self.tls.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
         let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
+        let top_n = self.top_n;
         Ok(Box::pin(async move {
             let controller = Controller::new(
                 pd_address,
                 topology_fetch_interval,
                 init_retry_delay,
+                top_n,
                 tls,
                 &cx.proxy,
                 cx.out,

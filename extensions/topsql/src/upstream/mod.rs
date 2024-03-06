@@ -9,6 +9,7 @@ mod utils;
 use std::time::Duration;
 
 use futures::StreamExt;
+use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
 use tonic::transport::{Channel, Endpoint};
 use vector::internal_events::StreamClosedError;
@@ -51,10 +52,12 @@ pub struct TopSQLSource {
     uri: String,
 
     tls: Option<TlsConfig>,
+    protocal: String,
     out: SourceSender,
 
     init_retry_delay: Duration,
     retry_delay: Duration,
+    top_n: usize,
 }
 
 enum State {
@@ -70,7 +73,13 @@ impl TopSQLSource {
         tls: Option<TlsConfig>,
         out: SourceSender,
         init_retry_delay: Duration,
+        top_n: usize,
     ) -> Option<Self> {
+        let protocal = if tls.is_none() {
+            "http".into()
+        } else {
+            "https".into()
+        };
         match component.topsql_address() {
             Some(address) => Some(TopSQLSource {
                 instance: address.clone(),
@@ -82,9 +91,11 @@ impl TopSQLSource {
                 },
 
                 tls,
+                protocal,
                 out,
                 init_retry_delay,
                 retry_delay: init_retry_delay,
+                top_n,
             }),
             None => None,
         }
@@ -118,7 +129,7 @@ impl TopSQLSource {
                         timeout_secs = self.retry_delay.as_secs_f64(),
                         "Retrying after timeout."
                     );
-                    tokio::time::sleep(self.retry_delay).await;
+                    time::sleep(self.retry_delay).await;
                 }
             }
         }
@@ -130,20 +141,37 @@ impl TopSQLSource {
             Ok(stream) => stream,
             Err(state) => return state,
         };
-        let mut instance_stream =
-            IntervalStream::new(tokio::time::interval(Duration::from_secs(30)));
-
         self.on_connected();
+
+        let mut tick_stream = IntervalStream::new(time::interval(Duration::from_secs(1)));
+        let mut instance_stream = IntervalStream::new(time::interval(Duration::from_secs(30)));
+        let mut responses = vec![];
+        let mut last_event_recv_ts = chrono::Local::now().timestamp();
         loop {
             tokio::select! {
                 response = response_stream.next() => {
                     match response {
-                        Some(Ok(response)) => self.handle_response::<U>(response).await,
+                        Some(Ok(response)) => {
+                            register!(BytesReceived {
+                                protocol: self.protocal.clone().into(),
+                            })
+                            .emit(ByteSize(response.size_of()));
+                            responses.push(response);
+                            last_event_recv_ts = chrono::Local::now().timestamp();
+                        },
                         Some(Err(error)) => {
                             error!(message = "Failed to fetch events.", error = %error);
                             break State::RetryDelay;
                         },
                         None => break State::RetryNow,
+                    }
+                }
+                _ = tick_stream.next() => {
+                    if chrono::Local::now().timestamp() > last_event_recv_ts + 10 {
+                        if !responses.is_empty() {
+                            self.handle_responses::<U>(responses).await;
+                            responses = vec![];
+                        }
                     }
                 }
                 _ = instance_stream.next() => self.handle_instance().await,
@@ -185,20 +213,20 @@ impl TopSQLSource {
         Ok(response_stream)
     }
 
-    async fn handle_response<U: Upstream>(&mut self, response: U::UpstreamEvent) {
-        register!(BytesReceived {
-            protocol: if self.tls.is_none() {
-                "http".into()
-            } else {
-                "https".into()
-            },
-        })
-        .emit(ByteSize(response.size_of()));
-
-        let events = U::UpstreamEventParser::parse(response, self.instance.clone());
-        let count = events.len();
-        register!(EventsReceived {}).emit(CountByteSize(count, events.size_of().into()));
-        if self.out.send_batch(events).await.is_err() {
+    async fn handle_responses<U: Upstream>(&mut self, responses: Vec<U::UpstreamEvent>) {
+        let responses = if self.top_n > 0 {
+            U::UpstreamEventParser::keep_top_n(responses, self.top_n)
+        } else {
+            responses
+        };
+        let mut batch = vec![];
+        for response in responses {
+            let mut events = U::UpstreamEventParser::parse(response, self.instance.clone());
+            batch.append(&mut events);
+        }
+        let count = batch.len();
+        register!(EventsReceived {}).emit(CountByteSize(count, batch.size_of().into()));
+        if self.out.send_batch(batch).await.is_err() {
             StreamClosedError { count }.emit()
         }
     }
