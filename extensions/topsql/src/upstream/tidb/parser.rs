@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::Utc;
 use vector::event::LogEvent;
@@ -11,7 +11,9 @@ use crate::upstream::consts::{
 };
 use crate::upstream::parser::{Buf, UpstreamEventParser};
 use crate::upstream::tidb::proto::top_sql_sub_response::RespOneof;
-use crate::upstream::tidb::proto::{PlanMeta, SqlMeta, TopSqlRecord, TopSqlSubResponse};
+use crate::upstream::tidb::proto::{
+    PlanMeta, SqlMeta, TopSqlRecord, TopSqlRecordItem, TopSqlSubResponse,
+};
 use crate::upstream::utils::make_metric_like_log_event;
 
 pub struct TopSqlSubResponseParser;
@@ -29,77 +31,213 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
     }
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent> {
-        let mut cpu_time_map = HashMap::new();
-        for response in &responses {
-            if let Some(RespOneof::Record(record)) = &response.resp_oneof {
-                if record.sql_digest.is_empty() {
-                    continue; // others
-                }
-                let cpu_time: u32 = record.items.iter().map(|i| i.cpu_time_ms).sum();
-                let k = (record.sql_digest.clone(), record.plan_digest.clone());
-                let v = cpu_time_map.get(&k).unwrap_or(&0);
-                cpu_time_map.insert(k, *v + cpu_time);
-            }
-        }
-        let mut cpu_time_vec = cpu_time_map
-            .into_iter()
-            .collect::<Vec<((Vec<u8>, Vec<u8>), u32)>>();
-        cpu_time_vec.sort_by(|a, b| b.1.cmp(&a.1));
-        cpu_time_vec.truncate(top_n);
-        let mut top_sql_plan = HashSet::new();
-        for v in cpu_time_vec {
-            top_sql_plan.insert(v.0);
+        struct PerSecondDigest {
+            sql_digest: Vec<u8>,
+            plan_digest: Vec<u8>,
+            cpu_time_ms: u32,
+            stmt_exec_count: u64,
+            stmt_kv_exec_count: BTreeMap<String, u64>,
+            stmt_duration_sum_ns: u64,
+            stmt_duration_count: u64,
         }
 
-        let mut results = vec![];
-        let mut records_others = vec![];
+        let mut ts_others = BTreeMap::new();
+        let mut ts_digests = BTreeMap::new();
         for response in responses {
-            match response.resp_oneof {
-                Some(RespOneof::Record(record)) => {
-                    if top_sql_plan
-                        .contains(&(record.sql_digest.clone(), record.plan_digest.clone()))
-                    {
-                        results.push(TopSqlSubResponse {
-                            resp_oneof: Some(RespOneof::Record(record)),
-                        });
-                    } else {
-                        records_others.push(record);
+            if let Some(RespOneof::Record(record)) = response.resp_oneof {
+                if record.sql_digest.is_empty() {
+                    for item in record.items {
+                        ts_others.insert(item.timestamp_sec, item);
                     }
-                }
-                _ => results.push(response),
-            }
-        }
-
-        let mut others_ts_item = BTreeMap::new();
-        for record in records_others {
-            for item in record.items {
-                match others_ts_item.get_mut(&item.timestamp_sec) {
-                    None => {
-                        others_ts_item.insert(item.timestamp_sec, item);
-                    }
-                    Some(i) => {
-                        i.cpu_time_ms += item.cpu_time_ms;
-                        i.stmt_exec_count += item.stmt_exec_count;
-                        i.stmt_duration_sum_ns += item.stmt_duration_sum_ns;
-                        i.stmt_duration_count += item.stmt_duration_count;
-                        for (k, v) in item.stmt_kv_exec_count {
-                            let iv = i.stmt_kv_exec_count.get(&k).unwrap_or(&0);
-                            i.stmt_kv_exec_count.insert(k, *iv + v);
+                } else {
+                    for item in &record.items {
+                        let psd = PerSecondDigest {
+                            sql_digest: record.sql_digest.clone(),
+                            plan_digest: record.plan_digest.clone(),
+                            cpu_time_ms: item.cpu_time_ms,
+                            stmt_exec_count: item.stmt_exec_count,
+                            stmt_kv_exec_count: item.stmt_kv_exec_count.clone(),
+                            stmt_duration_sum_ns: item.stmt_duration_sum_ns,
+                            stmt_duration_count: item.stmt_duration_count,
+                        };
+                        match ts_digests.get_mut(&item.timestamp_sec) {
+                            None => {
+                                ts_digests.insert(item.timestamp_sec, vec![psd]);
+                            }
+                            Some(v) => {
+                                v.push(psd);
+                            }
                         }
                     }
                 }
             }
         }
-        results.push(TopSqlSubResponse {
-            resp_oneof: Some(RespOneof::Record(TopSqlRecord {
-                sql_digest: vec![],
-                plan_digest: vec![],
-                items: others_ts_item.into_values().collect(),
-            })),
-        });
 
-        results
+        for (ts, v) in &mut ts_digests {
+            if v.len() <= top_n {
+                continue;
+            }
+            v.sort_by(|psd1, psd2| psd2.cpu_time_ms.cmp(&psd1.cpu_time_ms));
+            let evicted = v.split_at(top_n).1;
+            let mut others = TopSqlRecordItem::default();
+            for e in evicted {
+                others.timestamp_sec = *ts;
+                others.cpu_time_ms += e.cpu_time_ms;
+                others.stmt_exec_count = e.stmt_exec_count;
+                others.stmt_duration_sum_ns = e.stmt_duration_sum_ns;
+                others.stmt_duration_count = e.stmt_duration_count;
+                for (k, v) in &e.stmt_kv_exec_count {
+                    match others.stmt_kv_exec_count.get(k) {
+                        None => {
+                            others.stmt_kv_exec_count.insert(k.clone(), *v);
+                        }
+                        Some(existed_v) => {
+                            others.stmt_kv_exec_count.insert(k.clone(), existed_v + v);
+                        }
+                    }
+                }
+            }
+            v.truncate(top_n);
+            match ts_others.get_mut(&ts) {
+                None => {
+                    ts_others.insert(*ts, others);
+                }
+                Some(existed_others) => {
+                    existed_others.cpu_time_ms += others.cpu_time_ms;
+                    existed_others.stmt_exec_count += others.stmt_exec_count;
+                    existed_others.stmt_duration_sum_ns += others.stmt_duration_sum_ns;
+                    existed_others.stmt_duration_count += others.stmt_duration_count;
+                    for (k, v) in &others.stmt_kv_exec_count {
+                        match existed_others.stmt_kv_exec_count.get(k) {
+                            None => {
+                                existed_others.stmt_kv_exec_count.insert(k.clone(), *v);
+                            }
+                            Some(existed_v) => {
+                                existed_others
+                                    .stmt_kv_exec_count
+                                    .insert(k.clone(), existed_v + v);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut digest_items = HashMap::new();
+        for (ts, v) in ts_digests {
+            for psd in v {
+                let k = (psd.sql_digest, psd.plan_digest);
+                let item = TopSqlRecordItem {
+                    timestamp_sec: ts,
+                    cpu_time_ms: psd.cpu_time_ms,
+                    stmt_exec_count: psd.stmt_exec_count,
+                    stmt_kv_exec_count: psd.stmt_kv_exec_count.clone(),
+                    stmt_duration_sum_ns: psd.stmt_duration_sum_ns,
+                    stmt_duration_count: psd.stmt_duration_count,
+                };
+                match digest_items.get_mut(&k) {
+                    None => {
+                        digest_items.insert(k, vec![item]);
+                    }
+                    Some(items) => {
+                        items.push(item);
+                    }
+                }
+            }
+        }
+        if !ts_others.is_empty() {
+            let others_k = (vec![], vec![]);
+            digest_items.insert(others_k.clone(), vec![]);
+            for item in ts_others.into_values() {
+                digest_items.get_mut(&others_k).unwrap().push(item)
+            }
+        }
+
+        let mut responses = vec![];
+        for (digest, items) in digest_items {
+            responses.push(TopSqlSubResponse {
+                resp_oneof: Some(RespOneof::Record(TopSqlRecord {
+                    sql_digest: digest.0,
+                    plan_digest: digest.1,
+                    items: items,
+                })),
+            })
+        }
+        responses
     }
+
+    // fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent> {
+    //     let mut cpu_time_map = HashMap::new();
+    //     for response in &responses {
+    //         if let Some(RespOneof::Record(record)) = &response.resp_oneof {
+    //             if record.sql_digest.is_empty() {
+    //                 continue; // others
+    //             }
+    //             let cpu_time: u32 = record.items.iter().map(|i| i.cpu_time_ms).sum();
+    //             let k = (record.sql_digest.clone(), record.plan_digest.clone());
+    //             let v = cpu_time_map.get(&k).unwrap_or(&0);
+    //             cpu_time_map.insert(k, v + cpu_time);
+    //         }
+    //     }
+    //     let mut cpu_time_vec = cpu_time_map
+    //         .into_iter()
+    //         .collect::<Vec<((Vec<u8>, Vec<u8>), u32)>>();
+    //     cpu_time_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    //     cpu_time_vec.truncate(top_n);
+    //     let mut top_sql_plan = HashSet::new();
+    //     for v in cpu_time_vec {
+    //         top_sql_plan.insert(v.0);
+    //     }
+
+    //     let mut results = vec![];
+    //     let mut records_others = vec![];
+    //     for response in responses {
+    //         match response.resp_oneof {
+    //             Some(RespOneof::Record(record)) => {
+    //                 if top_sql_plan
+    //                     .contains(&(record.sql_digest.clone(), record.plan_digest.clone()))
+    //                 {
+    //                     results.push(TopSqlSubResponse {
+    //                         resp_oneof: Some(RespOneof::Record(record)),
+    //                     });
+    //                 } else {
+    //                     records_others.push(record);
+    //                 }
+    //             }
+    //             _ => results.push(response),
+    //         }
+    //     }
+
+    //     let mut others_ts_item = BTreeMap::new();
+    //     for record in records_others {
+    //         for item in record.items {
+    //             match others_ts_item.get_mut(&item.timestamp_sec) {
+    //                 None => {
+    //                     others_ts_item.insert(item.timestamp_sec, item);
+    //                 }
+    //                 Some(i) => {
+    //                     i.cpu_time_ms += item.cpu_time_ms;
+    //                     i.stmt_exec_count += item.stmt_exec_count;
+    //                     i.stmt_duration_sum_ns += item.stmt_duration_sum_ns;
+    //                     i.stmt_duration_count += item.stmt_duration_count;
+    //                     for (k, v) in item.stmt_kv_exec_count {
+    //                         let iv = i.stmt_kv_exec_count.get(&k).unwrap_or(&0);
+    //                         i.stmt_kv_exec_count.insert(k, iv + v);
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     results.push(TopSqlSubResponse {
+    //         resp_oneof: Some(RespOneof::Record(TopSqlRecord {
+    //             sql_digest: vec![],
+    //             plan_digest: vec![],
+    //             items: others_ts_item.into_values().collect(),
+    //         })),
+    //     });
+
+    //     results
+    // }
 
     fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, interval_sec: u32) {
         if interval_sec <= 1 {
@@ -132,7 +270,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                                     Some(existed_v) => {
                                         new_item
                                             .stmt_kv_exec_count
-                                            .insert(k.clone(), *v + existed_v);
+                                            .insert(k.clone(), v + existed_v);
                                     }
                                 }
                             }
@@ -352,7 +490,7 @@ mod tests {
                         sum_old.stmt_kv_exec_count.insert(k, v);
                     }
                     Some(sum_v) => {
-                        sum_old.stmt_kv_exec_count.insert(k, *sum_v + v);
+                        sum_old.stmt_kv_exec_count.insert(k, sum_v + v);
                     }
                 }
             }
@@ -389,7 +527,7 @@ mod tests {
                         sum_new.stmt_kv_exec_count.insert(k, v);
                     }
                     Some(sum_v) => {
-                        sum_new.stmt_kv_exec_count.insert(k, *sum_v + v);
+                        sum_new.stmt_kv_exec_count.insert(k, sum_v + v);
                     }
                 }
             }

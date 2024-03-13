@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use prost::Message;
 use vector::event::LogEvent;
@@ -10,7 +10,7 @@ use crate::upstream::consts::{
 use crate::upstream::parser::{Buf, UpstreamEventParser};
 use crate::upstream::tidb::proto::ResourceGroupTag;
 use crate::upstream::tikv::proto::resource_usage_record::RecordOneof;
-use crate::upstream::tikv::proto::{GroupTagRecord, ResourceUsageRecord};
+use crate::upstream::tikv::proto::{GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord};
 
 pub struct ResourceUsageRecordParser;
 
@@ -25,70 +25,176 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
     }
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent> {
-        let mut cpu_time_map = HashMap::new();
-        for response in &responses {
-            if let Some(RecordOneof::Record(record)) = &response.record_oneof {
+        struct PerSecondDigest {
+            resource_group_tag: Vec<u8>,
+            cpu_time_ms: u32,
+            read_keys: u32,
+            write_keys: u32,
+        }
+
+        let mut ts_others = BTreeMap::new();
+        let mut ts_digests = BTreeMap::new();
+        for response in responses {
+            if let Some(RecordOneof::Record(record)) = response.record_oneof {
                 let (sql_digest, _, _) = match Self::decode_tag(&record.resource_group_tag) {
                     Some(tag) => tag,
                     None => continue,
                 };
                 if sql_digest.is_empty() {
-                    continue; // others
-                }
-                let cpu_time: u32 = record.items.iter().map(|i| i.cpu_time_ms).sum();
-                let v = cpu_time_map.get(&record.resource_group_tag).unwrap_or(&0);
-                cpu_time_map.insert(record.resource_group_tag.clone(), *v + cpu_time);
-            }
-        }
-        let mut cpu_time_vec = cpu_time_map.into_iter().collect::<Vec<(Vec<u8>, u32)>>();
-        cpu_time_vec.sort_by(|a, b| b.1.cmp(&a.1));
-        cpu_time_vec.truncate(top_n);
-        let mut top_tag = HashSet::new();
-        for v in cpu_time_vec {
-            top_tag.insert(v.0);
-        }
-
-        let mut results = vec![];
-        let mut records_others = vec![];
-        for response in responses {
-            match response.record_oneof {
-                Some(RecordOneof::Record(record)) => {
-                    if top_tag.contains(&record.resource_group_tag) {
-                        results.push(ResourceUsageRecord {
-                            record_oneof: Some(RecordOneof::Record(record)),
-                        });
-                    } else {
-                        records_others.push(record);
+                    for item in record.items {
+                        ts_others.insert(item.timestamp_sec, item);
+                    }
+                } else {
+                    for item in &record.items {
+                        let psd = PerSecondDigest {
+                            resource_group_tag: record.resource_group_tag.clone(),
+                            cpu_time_ms: item.cpu_time_ms,
+                            read_keys: item.read_keys,
+                            write_keys: item.write_keys,
+                        };
+                        match ts_digests.get_mut(&item.timestamp_sec) {
+                            None => {
+                                ts_digests.insert(item.timestamp_sec, vec![psd]);
+                            }
+                            Some(v) => {
+                                v.push(psd);
+                            }
+                        }
                     }
                 }
-                _ => results.push(response),
             }
         }
 
-        let mut others_ts_item = BTreeMap::new();
-        for record in records_others {
-            for item in record.items {
-                match others_ts_item.get_mut(&item.timestamp_sec) {
+        for (ts, v) in &mut ts_digests {
+            if v.len() <= top_n {
+                continue;
+            }
+            v.sort_by(|psd1, psd2| psd2.cpu_time_ms.cmp(&psd1.cpu_time_ms));
+            let evicted = v.split_at(top_n).1;
+            let mut others = GroupTagRecordItem::default();
+            for e in evicted {
+                others.timestamp_sec = *ts;
+                others.cpu_time_ms += e.cpu_time_ms;
+                others.read_keys += e.read_keys;
+                others.write_keys += e.write_keys;
+            }
+            v.truncate(top_n);
+            match ts_others.get_mut(&ts) {
+                None => {
+                    ts_others.insert(*ts, others);
+                }
+                Some(existed_others) => {
+                    existed_others.cpu_time_ms += others.cpu_time_ms;
+                    existed_others.read_keys += others.read_keys;
+                    existed_others.write_keys += others.write_keys;
+                }
+            }
+        }
+
+        let mut digest_items = HashMap::new();
+        for (ts, v) in ts_digests {
+            for psd in v {
+                let item = GroupTagRecordItem {
+                    timestamp_sec: ts,
+                    cpu_time_ms: psd.cpu_time_ms,
+                    read_keys: psd.read_keys,
+                    write_keys: psd.write_keys,
+                };
+                match digest_items.get_mut(&psd.resource_group_tag) {
                     None => {
-                        others_ts_item.insert(item.timestamp_sec, item);
+                        digest_items.insert(psd.resource_group_tag, vec![item]);
                     }
-                    Some(i) => {
-                        i.cpu_time_ms += item.cpu_time_ms;
-                        i.read_keys += item.read_keys;
-                        i.write_keys += item.write_keys;
+                    Some(items) => {
+                        items.push(item);
                     }
                 }
             }
         }
-        results.push(ResourceUsageRecord {
-            record_oneof: Some(RecordOneof::Record(GroupTagRecord {
-                resource_group_tag: Self::encode_tag(vec![], vec![], None),
-                items: others_ts_item.into_values().collect(),
-            })),
-        });
+        if !ts_others.is_empty() {
+            let others_k = Self::encode_tag(vec![], vec![], None);
+            digest_items.insert(others_k.clone(), vec![]);
+            for item in ts_others.into_values() {
+                digest_items.get_mut(&others_k).unwrap().push(item)
+            }
+        }
 
-        results
+        let mut responses = vec![];
+        for (digest, items) in digest_items {
+            responses.push(ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: digest,
+                    items: items,
+                })),
+            })
+        }
+        responses
     }
+
+    // fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent> {
+    //     let mut cpu_time_map = HashMap::new();
+    //     for response in &responses {
+    //         if let Some(RecordOneof::Record(record)) = &response.record_oneof {
+    //             let (sql_digest, _, _) = match Self::decode_tag(&record.resource_group_tag) {
+    //                 Some(tag) => tag,
+    //                 None => continue,
+    //             };
+    //             if sql_digest.is_empty() {
+    //                 continue; // others
+    //             }
+    //             let cpu_time: u32 = record.items.iter().map(|i| i.cpu_time_ms).sum();
+    //             let v = cpu_time_map.get(&record.resource_group_tag).unwrap_or(&0);
+    //             cpu_time_map.insert(record.resource_group_tag.clone(), v + cpu_time);
+    //         }
+    //     }
+    //     let mut cpu_time_vec = cpu_time_map.into_iter().collect::<Vec<(Vec<u8>, u32)>>();
+    //     cpu_time_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    //     cpu_time_vec.truncate(top_n);
+    //     let mut top_tag = HashSet::new();
+    //     for v in cpu_time_vec {
+    //         top_tag.insert(v.0);
+    //     }
+
+    //     let mut results = vec![];
+    //     let mut records_others = vec![];
+    //     for response in responses {
+    //         match response.record_oneof {
+    //             Some(RecordOneof::Record(record)) => {
+    //                 if top_tag.contains(&record.resource_group_tag) {
+    //                     results.push(ResourceUsageRecord {
+    //                         record_oneof: Some(RecordOneof::Record(record)),
+    //                     });
+    //                 } else {
+    //                     records_others.push(record);
+    //                 }
+    //             }
+    //             _ => results.push(response),
+    //         }
+    //     }
+
+    //     let mut others_ts_item = BTreeMap::new();
+    //     for record in records_others {
+    //         for item in record.items {
+    //             match others_ts_item.get_mut(&item.timestamp_sec) {
+    //                 None => {
+    //                     others_ts_item.insert(item.timestamp_sec, item);
+    //                 }
+    //                 Some(i) => {
+    //                     i.cpu_time_ms += item.cpu_time_ms;
+    //                     i.read_keys += item.read_keys;
+    //                     i.write_keys += item.write_keys;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     results.push(ResourceUsageRecord {
+    //         record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+    //             resource_group_tag: Self::encode_tag(vec![], vec![], None),
+    //             items: others_ts_item.into_values().collect(),
+    //         })),
+    //     });
+
+    //     results
+    // }
 
     fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, interval_sec: u32) {
         if interval_sec <= 1 {
