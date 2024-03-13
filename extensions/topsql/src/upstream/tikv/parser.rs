@@ -32,6 +32,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
             write_keys: u32,
         }
 
+        let mut new_responses = vec![];
         let mut ts_others = BTreeMap::new();
         let mut ts_digests = BTreeMap::new();
         for response in responses {
@@ -62,6 +63,8 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                         }
                     }
                 }
+            } else {
+                new_responses.push(response);
             }
         }
 
@@ -112,22 +115,18 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         }
         if !ts_others.is_empty() {
             let others_k = Self::encode_tag(vec![], vec![], None);
-            digest_items.insert(others_k.clone(), vec![]);
-            for item in ts_others.into_values() {
-                digest_items.get_mut(&others_k).unwrap().push(item)
-            }
+            digest_items.insert(others_k.clone(), ts_others.into_values().collect());
         }
 
-        let mut responses = vec![];
         for (digest, items) in digest_items {
-            responses.push(ResourceUsageRecord {
+            new_responses.push(ResourceUsageRecord {
                 record_oneof: Some(RecordOneof::Record(GroupTagRecord {
                     resource_group_tag: digest,
                     items: items,
                 })),
             })
         }
-        responses
+        new_responses
     }
 
     // fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent> {
