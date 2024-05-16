@@ -106,9 +106,12 @@ make build-armv7-unknown-linux-musleabihf
 ```bash
 make target/x86_64-unknown-linux-gnu/release/vector
 JEMALLOC_SYS_WITH_LG_PAGE=16 make target/aarch64-unknown-linux-gnu/release/vector
-JEMALLOC_SYS_WITH_LG_PAGE=16 make target/armv7-unknown-linux-gnueabihf/release/vector
+# JEMALLOC_SYS_WITH_LG_PAGE=16 make target/armv7-unknown-linux-gnueabihf/release/vector
 make release-docker
 
 # build with given version and repo
 REPO=tidbcloud/vector VERSION=0.23.3 make release-docker
+
+make clean
+REPO=mornyx/vector VERSION=0.37.1-9cee53 make release-docker
 ```

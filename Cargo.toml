@@ -34,7 +34,7 @@ metrics = "0.21.1"
 ordered-float = { version = "4.2.0", default-features = false }
 prost = { version = "0.12", default-features = false, features = ["std"] }
 prost-types = { version = "0.12", default-features = false }
-reqwest = { version = "0.11", features = ["native-tls"] }
+reqwest = { version = "0.11.26", features = ["native-tls"] }
 serde = { version = "1.0.197", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.114", default-features = false, features = ["std", "raw_value"] }
 snafu = { version = "0.7.5", default-features = false, features = ["futures"] }
@@ -60,6 +60,127 @@ regex = "1.10.3"
 [build-dependencies]
 prost-build = { version = "0.12", default-features = false }
 tonic-build = { version = "0.10", default-features = false, features = ["transport", "prost"] }
+
+[features]
+default = [
+    "sinks",
+    "sources",
+    "vector/api",
+    "vector/api-client",
+    "vector/enrichment-tables",
+    # "vector/sinks",
+    # "vector/sources",
+    "vector/sources-dnstap",
+    "vector/transforms",
+    "vector/unix",
+    "vector/enterprise",
+]
+sources = ["sources-logs", "sources-metrics"]
+sources-logs = [
+    "vector/sources-amqp",
+    "vector/sources-aws_kinesis_firehose",
+    "vector/sources-aws_s3",
+    "vector/sources-aws_sqs",
+    "vector/sources-datadog_agent",
+    "vector/sources-demo_logs",
+    "vector/sources-docker_logs",
+    "vector/sources-exec",
+    "vector/sources-file",
+    "vector/sources-fluent",
+    "vector/sources-gcp_pubsub",
+    "vector/sources-heroku_logs",
+    "vector/sources-http_server",
+    "vector/sources-http_client",
+    "vector/sources-internal_logs",
+    "vector/sources-journald",
+    # "vector/sources-kafka",
+    "vector/sources-kubernetes_logs",
+    "vector/sources-logstash",
+    "vector/sources-nats",
+    "vector/sources-opentelemetry",
+    "vector/sources-pulsar",
+    "vector/sources-file-descriptor",
+    "vector/sources-redis",
+    "vector/sources-socket",
+    # "vector/sources-splunk_hec",
+    "vector/sources-stdin",
+    "vector/sources-syslog",
+    "vector/sources-vector",
+]
+sources-metrics = [
+    "vector/sources-apache_metrics",
+    "vector/sources-aws_ecs_metrics",
+    "vector/sources-eventstoredb_metrics",
+    "vector/sources-host_metrics",
+    "vector/sources-internal_metrics",
+    "vector/sources-mongodb_metrics",
+    "vector/sources-nginx_metrics",
+    "vector/sources-postgresql_metrics",
+    "vector/sources-prometheus",
+    "vector/sources-statsd",
+    "vector/sources-vector",
+]
+sinks = ["sinks-logs", "sinks-metrics"]
+sinks-logs = [
+    "vector/sinks-amqp",
+    "vector/sinks-appsignal",
+    "vector/sinks-aws_cloudwatch_logs",
+    "vector/sinks-aws_kinesis_firehose",
+    "vector/sinks-aws_kinesis_streams",
+    "vector/sinks-aws_s3",
+    "vector/sinks-aws_sqs",
+    "vector/sinks-aws_sns",
+    "vector/sinks-axiom",
+    "vector/sinks-azure_blob",
+    "vector/sinks-azure_monitor_logs",
+    "vector/sinks-blackhole",
+    "vector/sinks-chronicle",
+    "vector/sinks-clickhouse",
+    "vector/sinks-console",
+    "vector/sinks-databend",
+    "vector/sinks-datadog_events",
+    "vector/sinks-datadog_logs",
+    "vector/sinks-datadog_traces",
+    "vector/sinks-elasticsearch",
+    "vector/sinks-file",
+    "vector/sinks-gcp",
+    "vector/sinks-honeycomb",
+    "vector/sinks-http",
+    "vector/sinks-humio",
+    "vector/sinks-influxdb",
+    # "vector/sinks-kafka",
+    "vector/sinks-mezmo",
+    "vector/sinks-loki",
+    "vector/sinks-mqtt",
+    "vector/sinks-nats",
+    "vector/sinks-new_relic_logs",
+    "vector/sinks-new_relic",
+    "vector/sinks-papertrail",
+    "vector/sinks-pulsar",
+    "vector/sinks-redis",
+    "vector/sinks-sematext",
+    "vector/sinks-socket",
+    # "vector/sinks-splunk_hec",
+    "vector/sinks-vector",
+    "vector/sinks-webhdfs",
+    "vector/sinks-websocket",
+]
+sinks-metrics = [
+    "vector/sinks-appsignal",
+    "vector/sinks-aws_cloudwatch_metrics",
+    "vector/sinks-blackhole",
+    "vector/sinks-console",
+    "vector/sinks-datadog_metrics",
+    "vector/sinks-greptimedb",
+    "vector/sinks-humio",
+    "vector/sinks-influxdb",
+    # "vector/sinks-kafka",
+    "vector/sinks-prometheus",
+    "vector/sinks-sematext",
+    "vector/sinks-statsd",
+    "vector/sinks-vector",
+    # "vector/sinks-splunk_hec",
+]
 
 [workspace]
 members = ["vdev"]

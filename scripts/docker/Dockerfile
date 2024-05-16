@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 ARG TARGETARCH
 COPY vector-$TARGETARCH /usr/bin/vector
-COPY vector.toml /etc/vector/vector.toml
+# COPY vector.toml /etc/vector/vector.toml
 
 ENV VECTOR_LOG="info"
 
