@@ -47,6 +47,13 @@ fn detect_container_tool() -> OsString {
     fatal!("No container tool could be detected.");
 }
 
+fn get_rust_version() -> String {
+    match RustToolchainConfig::parse() {
+        Ok(config) => config.channel,
+        Err(error) => fatal!("Could not read `rust-toolchain.toml` file: {error}"),
+    }
+}
+
 fn dockercmd<I: AsRef<OsStr>>(args: impl IntoIterator<Item = I>) -> Command {
     let mut command = Command::new(&*CONTAINER_TOOL);
     command.args(args);
@@ -73,8 +80,14 @@ pub fn get_agent_test_runner(container: bool) -> Result<Box<dyn TestRunner>> {
 }
 
 pub trait TestRunner {
-    fn test(&self, outer_env: &Environment, inner_env: &Environment, args: &[String])
-        -> Result<()>;
+    fn test(
+        &self,
+        outer_env: &Environment,
+        inner_env: &Environment,
+        features: Option<&[String]>,
+        args: &[String],
+        directory: &str,
+    ) -> Result<()>;
 }
 
 pub trait ContainerTestRunner: TestRunner {
@@ -91,13 +104,6 @@ pub trait ContainerTestRunner: TestRunner {
     fn stop(&self) -> Result<()> {
         dockercmd(["stop", "--time", "0", &self.container_name()])
             .wait(format!("Stopping container {}", self.container_name()))
-    }
-
-    fn get_rust_version(&self) -> String {
-        match RustToolchainConfig::parse() {
-            Ok(config) => config.channel,
-            Err(error) => fatal!("Could not read `rust-toolchain.toml` file: {error}"),
-        }
     }
 
     fn state(&self) -> Result<RunnerState> {
@@ -129,7 +135,7 @@ pub trait ContainerTestRunner: TestRunner {
         Ok(RunnerState::Missing)
     }
 
-    fn ensure_running(&self) -> Result<()> {
+    fn ensure_running(&self, features: Option<&[String]>, directory: &str) -> Result<()> {
         match self.state()? {
             RunnerState::Running | RunnerState::Restarting => (),
             RunnerState::Created | RunnerState::Exited => self.start()?,
@@ -140,7 +146,7 @@ pub trait ContainerTestRunner: TestRunner {
                 self.start()?;
             }
             RunnerState::Missing => {
-                self.build()?;
+                self.build(features, directory)?;
                 self.ensure_volumes()?;
                 self.create()?;
                 self.start()?;
@@ -168,8 +174,8 @@ pub trait ContainerTestRunner: TestRunner {
         Ok(())
     }
 
-    fn build(&self) -> Result<()> {
-        let dockerfile: PathBuf = [app::path(), "scripts", "integration", "Dockerfile"]
+    fn build(&self, features: Option<&[String]>, directory: &str) -> Result<()> {
+        let dockerfile: PathBuf = [app::path(), "scripts", directory, "Dockerfile"]
             .iter()
             .collect();
         let mut command = dockercmd(["build"]);
@@ -183,8 +189,12 @@ pub trait ContainerTestRunner: TestRunner {
             &self.image_name(),
             "--file",
             dockerfile.to_str().unwrap(),
+            "--label",
+            "vector-test-runner=true",
             "--build-arg",
-            &format!("RUST_VERSION={}", self.get_rust_version()),
+            &format!("RUST_VERSION={}", get_rust_version()),
+            "--build-arg",
+            &format!("FEATURES={}", features.unwrap_or(&[]).join(",")),
             ".",
         ]);
 
@@ -262,9 +272,11 @@ where
         &self,
         outer_env: &Environment,
         inner_env: &Environment,
+        features: Option<&[String]>,
         args: &[String],
+        directory: &str,
     ) -> Result<()> {
-        self.ensure_running()?;
+        self.ensure_running(features, directory)?;
 
         let mut command = dockercmd(["exec"]);
         if *IS_A_TTY {
@@ -295,7 +307,8 @@ where
 }
 
 pub(super) struct IntegrationTestRunner {
-    integration: String,
+    // The integration is None when compiling the runner image with the `all-integration-tests` feature.
+    integration: Option<String>,
     needs_docker_socket: bool,
     network: Option<String>,
     volumes: Vec<String>,
@@ -303,7 +316,7 @@ pub(super) struct IntegrationTestRunner {
 
 impl IntegrationTestRunner {
     pub(super) fn new(
-        integration: String,
+        integration: Option<String>,
         config: &IntegrationRunnerConfig,
         network: Option<String>,
     ) -> Result<Self> {
@@ -344,11 +357,11 @@ impl ContainerTestRunner for IntegrationTestRunner {
     }
 
     fn container_name(&self) -> String {
-        format!(
-            "vector-test-runner-{}-{}",
-            self.integration,
-            self.get_rust_version()
-        )
+        if let Some(integration) = self.integration.as_ref() {
+            format!("vector-test-runner-{}-{}", integration, get_rust_version())
+        } else {
+            format!("vector-test-runner-{}", get_rust_version())
+        }
     }
 
     fn image_name(&self) -> String {
@@ -372,7 +385,7 @@ impl ContainerTestRunner for DockerTestRunner {
     }
 
     fn container_name(&self) -> String {
-        format!("vector-test-runner-{}", self.get_rust_version())
+        format!("vector-test-runner-{}", get_rust_version())
     }
 
     fn image_name(&self) -> String {
@@ -395,7 +408,9 @@ impl TestRunner for LocalTestRunner {
         &self,
         outer_env: &Environment,
         inner_env: &Environment,
+        _features: Option<&[String]>,
         args: &[String],
+        _directory: &str,
     ) -> Result<()> {
         let mut command = Command::new(TEST_COMMAND[0]);
         command.args(&TEST_COMMAND[1..]);
