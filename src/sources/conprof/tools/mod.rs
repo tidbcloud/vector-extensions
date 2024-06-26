@@ -9,7 +9,7 @@ pub async fn fetch_raw(url: String, tls: Option<TlsConfig>) -> Result<Vec<u8>, S
     if let Some(tls) = tls {
         let url_fetcher = format!(
             "curl -s --cert {} --key {} --cacert {}",
-            tls.crt_file.unwrap().to_str().unwrap(),
+            tls.crt_file.clone().unwrap().to_str().unwrap(),
             tls.key_file.unwrap().to_str().unwrap(),
             tls.ca_file.unwrap().to_str().unwrap()
         );
