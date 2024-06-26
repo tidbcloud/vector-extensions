@@ -12,6 +12,7 @@ use crate::sources::conprof::controller::Controller;
 
 mod controller;
 mod shutdown;
+mod tools;
 mod topology;
 mod upstream;
 

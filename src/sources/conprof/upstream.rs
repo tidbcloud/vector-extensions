@@ -12,6 +12,7 @@ use vector_lib::{
 
 use crate::sources::conprof::{
     shutdown::ShutdownSubscriber,
+    tools::fetch_raw,
     topology::{Component, InstanceType},
 };
 
@@ -22,7 +23,7 @@ pub struct ConprofSource {
     instance_type: InstanceType,
     uri: String,
 
-    // tls: Option<TlsConfig>,
+    tls: Option<TlsConfig>,
     out: SourceSender,
     // init_retry_delay: Duration,
     // retry_delay: Duration,
@@ -74,7 +75,7 @@ impl ConprofSource {
                     format!("http://{}", address)
                 },
 
-                // tls,
+                tls,
                 out,
                 // init_retry_delay,
                 // retry_delay: init_retry_delay,
@@ -128,7 +129,7 @@ impl ConprofSource {
                         shutdown.clone(),
                     )
                     .await;
-                    self.fetch_heap(
+                    self.fetch_heap_with_jeprof(
                         format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
                         shutdown.clone(),
                     )
@@ -272,6 +273,26 @@ impl ConprofSource {
                     }
                     Err(err) => {
                         error!(message = "Failed to fetch goroutine", %err);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn fetch_heap_with_jeprof(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+        tokio::select! {
+            _ = shutdown.done() => {}
+            resp = fetch_raw(format!("{}/debug/pprof/heap", self.uri), self.tls.clone()) => {
+                match resp {
+                    Ok(resp) => {
+                        let mut event = LogEvent::from_str_legacy(BASE64_STANDARD.encode(&resp));
+                        event.insert("filename", filename);
+                        if self.out.send_event(event).await.is_err() {
+                            StreamClosedError { count: 1 }.emit();
+                        }
+                    }
+                    Err(err) => {
+                        error!("Failed to fetch heap with jeprof: {}", err);
                     }
                 }
             }
