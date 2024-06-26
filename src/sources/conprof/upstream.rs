@@ -128,6 +128,11 @@ impl ConprofSource {
                         shutdown.clone(),
                     )
                     .await;
+                    self.fetch_heap(
+                        format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
+                        shutdown.clone(),
+                    )
+                    .await;
                 }
                 InstanceType::TiFlash => {
                     // do nothing.
