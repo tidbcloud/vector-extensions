@@ -1,5 +1,5 @@
 FROM docker.io/debian:bullseye
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata systemd
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata systemd curl
 
 ARG TARGETARCH
 COPY vector-$TARGETARCH /usr/bin/vector
