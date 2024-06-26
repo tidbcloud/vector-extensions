@@ -81,10 +81,18 @@ impl SourceConfig for KeyvizConfig {
 
         Ok(Box::pin(async move {
             loop {
-                let mut ts = Utc::now().timestamp();
+                let now = Utc::now();
+                let filename = now.format("%Y%m%d%H%M").to_string();
+                let mut ts = now.timestamp();
                 ts -= ts % 60;
                 let next_minute_ts = ts + 60;
-                fetch_and_send_regions(client.clone(), &pd_address, &mut cx, ts.to_string()).await;
+                fetch_and_send_regions(
+                    client.clone(),
+                    &pd_address,
+                    &mut cx,
+                    format!("{}.json", filename),
+                )
+                .await;
                 let now = Utc::now().timestamp();
                 if now < next_minute_ts {
                     tokio::select! {
