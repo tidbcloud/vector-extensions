@@ -13,8 +13,6 @@ pub async fn fetch_raw(url: String, tls: Option<TlsConfig>) -> Result<Vec<u8>, S
             tls.key_file.unwrap().to_str().unwrap(),
             tls.ca_file.unwrap().to_str().unwrap()
         );
-        info!(">>>>> {}", url_fetcher);
-        info!(">>>>> {}", tls.crt_file.unwrap().as_path().to_str().unwrap());
         jeprof.env("URL_FETCHER", url_fetcher);
     }
     let mut jeprof = jeprof
