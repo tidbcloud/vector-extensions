@@ -18,6 +18,7 @@ pub async fn fetch_raw(url: String, tls: Option<TlsConfig>) -> Result<Vec<u8>, S
     let mut jeprof = jeprof
         .args(["/dev/stdin", "--raw", &url])
         .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| format!("spawn jeprof fail: {}", e))?;
     jeprof
