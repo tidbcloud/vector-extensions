@@ -7,15 +7,15 @@ const JEPROF: &[u8] = include_bytes!("jeprof");
 pub async fn fetch_raw(url: String, tls: Option<TlsConfig>) -> Result<Vec<u8>, String> {
     let mut jeprof = Command::new("perl");
     if let Some(tls) = tls {
-        jeprof.env(
-            "URL_FETCHER",
-            format!(
-                "curl -s --cert {} --key {} --cacert {}",
-                tls.crt_file.unwrap().to_str().unwrap(),
-                tls.key_file.unwrap().to_str().unwrap(),
-                tls.ca_file.unwrap().to_str().unwrap(),
-            ),
+        let url_fetcher = format!(
+            "curl -s --cert {} --key {} --cacert {}",
+            tls.crt_file.unwrap().to_str().unwrap(),
+            tls.key_file.unwrap().to_str().unwrap(),
+            tls.ca_file.unwrap().to_str().unwrap()
         );
+        info!(">>>>> {}", url_fetcher);
+        info!(">>>>> {}", tls.crt_file.unwrap().as_path().to_str().unwrap());
+        jeprof.env("URL_FETCHER", url_fetcher);
     }
     let mut jeprof = jeprof
         .args(["/dev/stdin", "--raw", &url])
