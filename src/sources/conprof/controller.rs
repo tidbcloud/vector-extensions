@@ -60,6 +60,8 @@ impl Controller {
     }
 
     async fn run_loop(&mut self) {
+        tokio::time::sleep(Duration::from_secs(30)).await; // protect crash loop
+
         loop {
             let res = self.fetch_and_update().await;
             match res {

@@ -80,6 +80,7 @@ impl SourceConfig for KeyvizConfig {
         };
 
         Ok(Box::pin(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await; // protect crash loop
             loop {
                 let now = Utc::now();
                 let filename = now.format("%Y%m%d%H%M").to_string();
@@ -213,24 +214,24 @@ async fn fetch_regions(client: Client, pd_address: &str) -> reqwest::Result<Regi
             51200,
         )
         .await?;
-        for region in &mut regions.regions {
-            let start_bytes = match hex::decode(&region.start_key) {
-                Ok(v) => v,
-                Err(err) => {
-                    error!(message = "Failed to decode regions info start key", %err);
-                    continue;
-                }
-            };
-            let end_bytes = match hex::decode(&region.end_key) {
-                Ok(v) => v,
-                Err(err) => {
-                    error!(message = "Failed to decode regions info end key", %err);
-                    continue;
-                }
-            };
-            region.start_key = unsafe { String::from_utf8_unchecked(start_bytes) };
-            region.end_key = unsafe { String::from_utf8_unchecked(end_bytes) };
-        }
+        // for region in &mut regions.regions {
+        //     let start_bytes = match hex::decode(&region.start_key) {
+        //         Ok(v) => v,
+        //         Err(err) => {
+        //             error!(message = "Failed to decode regions info start key", %err);
+        //             continue;
+        //         }
+        //     };
+        //     let end_bytes = match hex::decode(&region.end_key) {
+        //         Ok(v) => v,
+        //         Err(err) => {
+        //             error!(message = "Failed to decode regions info end key", %err);
+        //             continue;
+        //         }
+        //     };
+        //     region.start_key = unsafe { String::from_utf8_unchecked(start_bytes) };
+        //     region.end_key = unsafe { String::from_utf8_unchecked(end_bytes) };
+        // }
         let last_key = regions.regions.last().map(|r| r.end_key.clone());
         all.regions.append(&mut regions.regions);
         all.count += regions.count;
@@ -240,7 +241,13 @@ async fn fetch_regions(client: Client, pd_address: &str) -> reqwest::Result<Regi
                 if last_key == "" {
                     break;
                 }
-                last_key
+                match hex::decode(&last_key) {
+                    Err(_) => break,
+                    Ok(last_key_bytes) => match String::from_utf8(last_key_bytes) {
+                        Err(_) => break,
+                        Ok(last_key) => last_key,
+                    },
+                }
             }
         };
     }
