@@ -22,12 +22,15 @@ pub struct Controller {
     tls: Option<TlsConfig>,
     // init_retry_delay: Duration,
     out: SourceSender,
+
+    enable_tikv_heap_profile: bool,
 }
 
 impl Controller {
     pub async fn new(
         pd_address: String,
         topo_fetch_interval: Duration,
+        enable_tikv_heap_profile: bool,
         // init_retry_delay: Duration,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
@@ -46,6 +49,7 @@ impl Controller {
             tls: tls_config,
             // init_retry_delay,
             out,
+            enable_tikv_heap_profile,
         })
     }
 
@@ -111,6 +115,7 @@ impl Controller {
             self.tls.clone(),
             self.out.clone(),
             // self.init_retry_delay,
+            self.enable_tikv_heap_profile,
         )
         .await;
         let source = match source {

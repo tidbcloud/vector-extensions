@@ -27,6 +27,7 @@ pub struct ConprofSource {
     out: SourceSender,
     // init_retry_delay: Duration,
     // retry_delay: Duration,
+    enable_tikv_heap_profile: bool,
 }
 
 impl ConprofSource {
@@ -35,6 +36,7 @@ impl ConprofSource {
         tls: Option<TlsConfig>,
         out: SourceSender,
         // init_retry_delay: Duration,
+        enable_tikv_heap_profile: bool,
     ) -> Option<Self> {
         let mut builder = reqwest::Client::builder();
         if let Some(tls) = tls.clone() {
@@ -79,6 +81,7 @@ impl ConprofSource {
                 out,
                 // init_retry_delay,
                 // retry_delay: init_retry_delay,
+                enable_tikv_heap_profile,
             }),
             None => None,
         }
@@ -129,11 +132,13 @@ impl ConprofSource {
                         shutdown.clone(),
                     )
                     .await;
-                    self.fetch_heap_with_jeprof(
-                        format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
+                    if self.enable_tikv_heap_profile {
+                        self.fetch_heap_with_jeprof(
+                            format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
+                            shutdown.clone(),
+                        )
+                        .await;
+                    }
                 }
                 InstanceType::TiFlash => {
                     // do nothing.

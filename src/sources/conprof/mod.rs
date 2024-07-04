@@ -33,6 +33,10 @@ pub struct ConprofConfig {
     /// PLACEHOLDER
     #[serde(default = "default_topology_fetch_interval")]
     pub topology_fetch_interval_seconds: f64,
+
+    /// PLACEHOLDER
+    #[serde(default = "default_enable_tikv_heap_profile")]
+    pub enable_tikv_heap_profile: bool,
 }
 
 // pub const fn default_init_retry_delay() -> f64 {
@@ -43,6 +47,10 @@ pub const fn default_topology_fetch_interval() -> f64 {
     30.0
 }
 
+pub const fn default_enable_tikv_heap_profile() -> bool {
+    false
+}
+
 impl GenerateConfig for ConprofConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
@@ -50,6 +58,7 @@ impl GenerateConfig for ConprofConfig {
             tls: None,
             // init_retry_delay_seconds: default_init_retry_delay(),
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
+            enable_tikv_heap_profile: default_enable_tikv_heap_profile(),
         })
         .unwrap()
     }
@@ -64,11 +73,13 @@ impl SourceConfig for ConprofConfig {
         let pd_address = self.pd_address.clone();
         let tls = self.tls.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
+        let enable_tikv_heap_profile = self.enable_tikv_heap_profile;
         // let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
         Ok(Box::pin(async move {
             Controller::new(
                 pd_address,
                 topology_fetch_interval,
+                enable_tikv_heap_profile,
                 // init_retry_delay,
                 tls,
                 &cx.proxy,
