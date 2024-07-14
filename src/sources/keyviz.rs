@@ -1,13 +1,16 @@
-use std::time::Duration;
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use chrono::Utc;
+use rand::Rng;
 use reqwest::{Certificate, Client, Identity};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use vector::{
     config::{GenerateConfig, SourceConfig, SourceContext},
     event::LogEvent,
     internal_events::StreamClosedError,
     tls::TlsSettings,
+    SourceSender,
 };
 use vector_lib::{
     config::{DataType, LogNamespace, SourceOutput},
@@ -16,6 +19,8 @@ use vector_lib::{
     source::Source,
     tls::TlsConfig,
 };
+
+use super::topsql::topology::{InstanceType, TopologyFetcher};
 
 /// PLACEHOLDER
 #[configurable_component(source("keyviz"))]
@@ -79,21 +84,71 @@ impl SourceConfig for KeyvizConfig {
             }
         };
 
+        let mut topo = TopologyFetcher::new(pd_address.clone(), tls.clone(), &cx.proxy).await?;
+        let mut etcd = topo.etcd_client.clone();
         Ok(Box::pin(async move {
             tokio::time::sleep(Duration::from_secs(30)).await; // protect crash loop
+
+            let tidb_instances = Arc::new(Mutex::new(Vec::new()));
+            {
+                let tidb_instances = tidb_instances.clone();
+                let mut shutdown = cx.shutdown.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = &mut shutdown => break,
+                            _ = fetch_and_update_tidb_instances(&mut topo, tidb_instances.clone()) => {},
+                        }
+                        tokio::select! {
+                            _ = &mut shutdown => break,
+                            _ = tokio::time::sleep(Duration::from_secs(600)) => {},
+                        }
+                    }
+                });
+            }
+
+            {
+                let https = tls.is_some();
+                let mut shutdown = cx.shutdown.clone();
+                let mut client = client.clone();
+                let mut out = cx.out.clone();
+                tokio::spawn(async move {
+                    let mut schema_version = -1;
+                    loop {
+                        tokio::select! {
+                            _ = &mut shutdown => break,
+                            _ = fetch_and_send_tidb_schema(
+                                &mut client,
+                                https,
+                                &mut etcd,
+                                &mut schema_version,
+                                &mut out,
+                                tidb_instances.clone(),
+                            ) => {},
+                        }
+                        tokio::select! {
+                            _ = &mut shutdown => break,
+                            _ = tokio::time::sleep(Duration::from_secs(60)) => {},
+                        }
+                    }
+                });
+            }
+
             loop {
                 let now = Utc::now();
-                let filename = now.format("%Y%m%d%H%M").to_string();
+                let filename = format!("{}.json", now.format("%Y%m%d%H%M").to_string());
                 let mut ts = now.timestamp();
                 ts -= ts % 60;
                 let next_minute_ts = ts + 60;
-                fetch_and_send_regions(
-                    client.clone(),
-                    &pd_address,
-                    &mut cx,
-                    format!("{}.json", filename),
-                )
-                .await;
+                tokio::select! {
+                    _ = &mut cx.shutdown => break,
+                    _ = fetch_and_send_regions(
+                        client.clone(),
+                        &pd_address,
+                        &mut cx.out,
+                        filename,
+                    ) => {},
+                }
                 let now = Utc::now().timestamp();
                 if now < next_minute_ts {
                     tokio::select! {
@@ -169,32 +224,27 @@ struct RegionInfo {
 async fn fetch_and_send_regions(
     client: Client,
     pd_address: &str,
-    cx: &mut SourceContext,
+    out: &mut SourceSender,
     filename: String,
 ) {
-    tokio::select! {
-        _ = &mut cx.shutdown => {}
-        regions = fetch_regions(client.clone(), pd_address) => {
-            match regions {
-                Ok(regions) => {
-                    let json = match serde_json::to_string(&regions) {
-                        Ok(v) => v,
-                        Err(err) => {
-                            error!(message = "Failed to serialize json", %err);
-                            return;
-                        }
-                    };
-                    let mut event = LogEvent::from_str_legacy(json);
-                    event.insert("filename", filename);
-                    if cx.out.send_event(event).await.is_err() {
-                        StreamClosedError { count: 1 }.emit();
-                    }
-                }
+    match fetch_regions(client.clone(), pd_address).await {
+        Ok(regions) => {
+            let json = match serde_json::to_string(&regions) {
+                Ok(v) => v,
                 Err(err) => {
-                    error!(message = "Failed to fetch regions", %err);
+                    error!(message = "Failed to serialize regions json", %err);
                     return;
                 }
+            };
+            let mut event = LogEvent::from_str_legacy(json);
+            event.insert("filename", filename);
+            if out.send_event(event).await.is_err() {
+                StreamClosedError { count: 1 }.emit();
             }
+        }
+        Err(err) => {
+            error!(message = "Failed to fetch regions", %err);
+            return;
         }
     }
 }
@@ -268,6 +318,202 @@ async fn fetch_regions_part(
             ("end_key", end_key),
             ("limit", limit.to_string()),
         ])
+        .send()
+        .await?
+        .json()
+        .await
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct DBTablesInfo {
+    db: DBInfo,
+    tables: Vec<TableInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct DBInfo {
+    id: i64,
+    db_name: CIStr,
+    state: u8,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TableInfo {
+    id: i64,
+    name: CIStr,
+    index_info: Option<Vec<Option<IndexInfo>>>,
+    partition: Option<PartitionInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct IndexInfo {
+    id: i64,
+    idx_name: CIStr,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PartitionInfo {
+    enable: bool,
+    definitions: Option<Vec<Option<PartitionDefinition>>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PartitionDefinition {
+    id: i64,
+    name: CIStr,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CIStr {
+    #[serde(rename = "O")]
+    o: String,
+    #[serde(rename = "L")]
+    l: String,
+}
+
+async fn fetch_and_update_tidb_instances(
+    topo: &mut TopologyFetcher,
+    tidb_instances: Arc<Mutex<Vec<String>>>,
+) {
+    let mut components = HashSet::new();
+    if let Err(err) = topo.get_up_components(&mut components).await {
+        warn!(message = "Failed to fetch topology", %err);
+        return;
+    }
+    let mut tidbs = vec![];
+    for component in components {
+        if component.instance_type == InstanceType::TiDB {
+            tidbs.push(format!("{}:{}", component.host, component.secondary_port));
+        }
+    }
+    *(tidb_instances.lock().await) = tidbs;
+}
+
+async fn fetch_and_send_tidb_schema(
+    client: &mut Client,
+    https: bool,
+    etcd: &mut etcd_client::Client,
+    schema_version: &mut i32,
+    out: &mut SourceSender,
+    tidb_instances: Arc<Mutex<Vec<String>>>,
+) {
+    let resp = match etcd.get("/tidb/ddl/global_schema_version", None).await {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(message = "Failed to fetch tidb schema version", %err);
+            return;
+        }
+    };
+    let kvs = resp.kvs();
+    if kvs.len() != 1 {
+        warn!(message = "Failed to fetch tidb schema version, invalid response");
+        return;
+    }
+    let value = match String::from_utf8(kvs[0].value().to_owned()) {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(message = "Failed to parse tidb schema version", %err);
+            return;
+        }
+    };
+    let new_schema_version = match value.parse::<i32>() {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(message = "Failed to parse tidb schema version", %err);
+            return;
+        }
+    };
+    if new_schema_version == *schema_version {
+        return;
+    }
+    let tidb_instance = {
+        let tidb_instances = tidb_instances.lock().await;
+        if tidb_instances.is_empty() {
+            return;
+        }
+        let idx = rand::thread_rng().gen_range(0..tidb_instances.len());
+        tidb_instances[idx].clone()
+    };
+    let dbinfos = match fetch_tidb_dbinfos(client, https, &tidb_instance).await {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(message = "Failed to fetch tidb db info", %err);
+            return;
+        }
+    };
+    let mut db_tables = Vec::with_capacity(dbinfos.len());
+    let mut update_success = true;
+    for dbinfo in dbinfos {
+        if dbinfo.state == 0 {
+            continue;
+        }
+        let tableinfos =
+            match fetch_tidb_tableinfos(client, https, &tidb_instance, &dbinfo.db_name.o).await {
+                Ok(v) => v,
+                Err(err) => {
+                    update_success = false;
+                    warn!(message = "Failed to fetch tidb table info", %err);
+                    continue;
+                }
+            };
+        db_tables.push(DBTablesInfo {
+            db: dbinfo,
+            tables: tableinfos,
+        })
+    }
+    if update_success {
+        *schema_version = new_schema_version;
+    }
+    let json = match serde_json::to_string(&db_tables) {
+        Ok(v) => v,
+        Err(err) => {
+            error!(message = "Failed to serialize tidb schema json", %err);
+            return;
+        }
+    };
+    let mut event = LogEvent::from_str_legacy(json);
+    event.insert("filename", "tidb-schema");
+    if out.send_event(event).await.is_err() {
+        StreamClosedError { count: 1 }.emit();
+    }
+}
+
+async fn fetch_tidb_dbinfos(
+    client: &mut Client,
+    https: bool,
+    tidb_instance: &str,
+) -> reqwest::Result<Vec<DBInfo>> {
+    let schema = if tidb_instance.starts_with("http") {
+        ""
+    } else if https {
+        "https://"
+    } else {
+        "http://"
+    };
+    client
+        .get(format!("{}{}/schema", schema, tidb_instance))
+        .send()
+        .await?
+        .json()
+        .await
+}
+
+async fn fetch_tidb_tableinfos(
+    client: &mut Client,
+    https: bool,
+    tidb_instance: &str,
+    dbname: &str,
+) -> reqwest::Result<Vec<TableInfo>> {
+    let schema = if tidb_instance.starts_with("http") {
+        ""
+    } else if https {
+        "https://"
+    } else {
+        "http://"
+    };
+    let dbname = url::form_urlencoded::byte_serialize(dbname.as_bytes()).collect::<String>();
+    client
+        .get(format!("{}{}/schema/{}", schema, tidb_instance, dbname))
         .send()
         .await?
         .json()

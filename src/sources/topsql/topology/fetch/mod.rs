@@ -44,7 +44,7 @@ pub enum FetchError {
 pub struct TopologyFetcher {
     pd_address: String,
     http_client: HttpClient<hyper::Body>,
-    etcd_client: etcd_client::Client,
+    pub etcd_client: etcd_client::Client,
 }
 
 impl TopologyFetcher {

@@ -15,7 +15,7 @@ pub use upstream::parser;
 
 mod controller;
 mod shutdown;
-mod topology;
+pub mod topology;
 mod upstream;
 
 /// PLACEHOLDER
