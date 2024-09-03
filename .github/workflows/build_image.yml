@@ -117,17 +117,17 @@ jobs:
         role-to-assume: arn:aws:iam::385595570414:role/vector-cicd
         aws-region: us-west-2
     - name: Download staged binary (x86_64-unknown-linux-gnu)
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4.1.7
       with:
         name: vector-${{ env.VECTOR_BUILD_SHA }}-x86_64-unknown-linux-gnu
         path: target/x86_64-unknown-linux-gnu/release
     - name: Download staged binary (aarch64-unknown-linux-gnu)
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4.1.7
       with:
         name: vector-${{ env.VECTOR_BUILD_SHA }}-aarch64-unknown-linux-gnu
         path: target/aarch64-unknown-linux-gnu/release
     - name: Download staged binary (armv7-unknown-linux-gnueabihf)
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4.1.7
       with:
         name: vector-${{ env.VECTOR_BUILD_SHA }}-armv7-unknown-linux-gnueabihf
         path: target/armv7-unknown-linux-gnueabihf/release
