@@ -4,6 +4,7 @@ mod proto;
 #[cfg(test)]
 pub mod mock_upstream;
 
+use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 use tonic::{Status, Streaming};
 
@@ -35,7 +36,7 @@ impl Upstream for TiKVUpstream {
     }
 
     fn build_client(channel: Channel) -> Self::Client {
-        Self::Client::new(channel)
+        Self::Client::new(channel).accept_compressed(CompressionEncoding::Gzip)
     }
 
     async fn build_stream(
