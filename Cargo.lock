@@ -9703,6 +9703,7 @@ dependencies = [
  "async-trait",
  "aws-sdk-s3",
  "aws-smithy-types",
+ "azure_storage_blobs",
  "base64 0.22.1",
  "bytes 1.6.0",
  "chrono",
