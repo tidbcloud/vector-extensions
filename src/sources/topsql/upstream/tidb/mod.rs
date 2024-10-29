@@ -4,6 +4,8 @@ pub mod proto;
 #[cfg(test)]
 pub mod mock_upstream;
 
+use std::time::Duration;
+
 use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 use tonic::{Status, Streaming};
@@ -26,10 +28,16 @@ impl Upstream for TiDBUpstream {
     ) -> vector::Result<Endpoint> {
         let endpoint = if tls_config.is_none() {
             Channel::from_shared(address.clone())?
+                .http2_keep_alive_interval(Duration::from_secs(300))
+                .keep_alive_timeout(Duration::from_secs(10))
+                .keep_alive_while_idle(true)
         } else {
             // do proxy
             let port = tls_proxy::tls_proxy(tls_config, &address, shutdown_subscriber).await?;
             Channel::from_shared(format!("http://127.0.0.1:{}", port))?
+                .http2_keep_alive_interval(Duration::from_secs(300))
+                .keep_alive_timeout(Duration::from_secs(10))
+                .keep_alive_while_idle(true)
         };
 
         Ok(endpoint)
