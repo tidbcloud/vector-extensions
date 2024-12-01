@@ -1975,7 +1975,7 @@ dependencies = [
 [[package]]
 name = "codecs"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "apache-avro",
  "bytes 1.6.0",
@@ -2648,7 +2648,7 @@ dependencies = [
 [[package]]
 name = "dnsmsg-parser"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "data-encoding",
  "hickory-proto",
@@ -2779,7 +2779,7 @@ checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
 [[package]]
 name = "enrichment"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -2987,7 +2987,7 @@ checksum = "de853764b47027c2e862a995c34978ffa63c1501f2e15f987ba11bd4f9bba193"
 [[package]]
 name = "fakedata"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "chrono",
  "fakedata_generator",
@@ -3046,7 +3046,7 @@ checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 [[package]]
 name = "file-source"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "bstr",
  "bytes 1.6.0",
@@ -4740,7 +4740,7 @@ checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
 [[package]]
 name = "loki-logproto"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "bytes 1.6.0",
  "prost 0.12.4",
@@ -5689,7 +5689,7 @@ dependencies = [
 [[package]]
 name = "opentelemetry-proto"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "bytes 1.6.0",
  "chrono",
@@ -6147,7 +6147,7 @@ checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
 [[package]]
 name = "portpicker"
 version = "1.0.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "rand 0.8.5",
 ]
@@ -6332,7 +6332,7 @@ dependencies = [
 [[package]]
 name = "prometheus-parser"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "indexmap 2.2.6",
  "nom",
@@ -8927,7 +8927,7 @@ dependencies = [
 [[package]]
 name = "tracing-limit"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "dashmap",
  "tracing-core 0.1.32",
@@ -9374,7 +9374,7 @@ dependencies = [
 [[package]]
 name = "vector"
 version = "0.37.1"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "apache-avro",
  "arc-swap",
@@ -9545,7 +9545,7 @@ dependencies = [
 [[package]]
 name = "vector-api-client"
 version = "0.1.2"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9567,7 +9567,7 @@ dependencies = [
 [[package]]
 name = "vector-buffers"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "async-recursion",
  "async-stream",
@@ -9600,7 +9600,7 @@ dependencies = [
 [[package]]
 name = "vector-common"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "async-stream",
  "bytes 1.6.0",
@@ -9632,7 +9632,7 @@ dependencies = [
 [[package]]
 name = "vector-config"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -9657,7 +9657,7 @@ dependencies = [
 [[package]]
 name = "vector-config-common"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "convert_case 0.6.0",
  "darling 0.20.9",
@@ -9673,7 +9673,7 @@ dependencies = [
 [[package]]
 name = "vector-config-macros"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "darling 0.20.9",
  "proc-macro2",
@@ -9686,7 +9686,7 @@ dependencies = [
 [[package]]
 name = "vector-core"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "async-graphql",
  "async-trait",
@@ -9804,7 +9804,7 @@ dependencies = [
 [[package]]
 name = "vector-lib"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "codecs",
  "enrichment",
@@ -9823,7 +9823,7 @@ dependencies = [
 [[package]]
 name = "vector-lookup"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "serde",
  "vector-config",
@@ -9834,7 +9834,7 @@ dependencies = [
 [[package]]
 name = "vector-stream"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "async-stream",
  "futures 0.3.30",
@@ -9852,7 +9852,7 @@ dependencies = [
 [[package]]
 name = "vector-vrl-functions"
 version = "0.1.0"
-source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#0785ebaa928972c8dbe542d8a54b1a79af0e404f"
+source = "git+https://github.com/mornyx/vector?branch=extend-0.37.1#9e3905ab3716b08889610f46e647f2d70a55f808"
 dependencies = [
  "vrl",
 ]
