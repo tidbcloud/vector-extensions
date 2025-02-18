@@ -304,17 +304,12 @@ async fn fetch_regions_part(
 ) -> reqwest::Result<RegionsInfo> {
     let encoded_key = url::form_urlencoded::byte_serialize(key).collect::<String>();
     let encoded_end_key = url::form_urlencoded::byte_serialize(end_key).collect::<String>();
-    client
-        .get(format!("{}/pd/api/v1/regions/key", pd_address))
-        .query(&[
-            ("key", encoded_key),
-            ("end_key", encoded_end_key),
-            ("limit", limit.to_string()),
-        ])
-        .send()
-        .await?
-        .json()
-        .await
+    let url = format!(
+        "{}/pd/api/v1/regions/key?end_key={}&key={}&limit={}",
+        pd_address, encoded_end_key, encoded_key, limit
+    );
+    info!("sending pd request: {}", url);
+    client.get(url).send().await?.json().await
 }
 
 #[derive(Debug, Deserialize, Serialize)]
