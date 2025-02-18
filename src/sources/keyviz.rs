@@ -254,16 +254,10 @@ async fn fetch_regions(client: Client, pd_address: &str) -> reqwest::Result<Regi
         count: 0,
         regions: vec![],
     };
-    let mut start_key = String::new();
+    let mut start_key = Vec::new();
     loop {
-        let mut regions = fetch_regions_part(
-            client.clone(),
-            pd_address,
-            start_key.clone(),
-            String::new(),
-            51200,
-        )
-        .await?;
+        let mut regions =
+            fetch_regions_part(client.clone(), pd_address, &start_key, &[], 51200).await?;
         // for region in &mut regions.regions {
         //     let start_bytes = match hex::decode(&region.start_key) {
         //         Ok(v) => v,
@@ -293,10 +287,7 @@ async fn fetch_regions(client: Client, pd_address: &str) -> reqwest::Result<Regi
                 }
                 match hex::decode(&last_key) {
                     Err(_) => break,
-                    Ok(last_key_bytes) => match String::from_utf8(last_key_bytes) {
-                        Err(_) => break,
-                        Ok(last_key) => last_key,
-                    },
+                    Ok(last_key_bytes) => last_key_bytes,
                 }
             }
         };
@@ -307,15 +298,17 @@ async fn fetch_regions(client: Client, pd_address: &str) -> reqwest::Result<Regi
 async fn fetch_regions_part(
     client: Client,
     pd_address: &str,
-    key: String,
-    end_key: String,
+    key: &[u8],
+    end_key: &[u8],
     limit: i32,
 ) -> reqwest::Result<RegionsInfo> {
+    let encoded_key = url::form_urlencoded::byte_serialize(key).collect::<String>();
+    let encoded_end_key = url::form_urlencoded::byte_serialize(end_key).collect::<String>();
     client
         .get(format!("{}/pd/api/v1/regions/key", pd_address))
         .query(&[
-            ("key", key),
-            ("end_key", end_key),
+            ("key", encoded_key),
+            ("end_key", encoded_end_key),
             ("limit", limit.to_string()),
         ])
         .send()
