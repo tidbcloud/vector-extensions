@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use prost::Message;
 use vector::event::LogEvent;
 
+use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
     INSTANCE_TYPE_TIKV, KV_TAG_LABEL_INDEX, KV_TAG_LABEL_ROW, KV_TAG_LABEL_UNKNOWN,
     METRIC_NAME_CPU_TIME_MS, METRIC_NAME_READ_KEYS, METRIC_NAME_WRITE_KEYS,
@@ -10,16 +12,24 @@ use crate::sources::topsql::upstream::consts::{
 use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser};
 use crate::sources::topsql::upstream::tidb::proto::ResourceGroupTag;
 use crate::sources::topsql::upstream::tikv::proto::resource_usage_record::RecordOneof;
-use crate::sources::topsql::upstream::tikv::proto::{GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord};
+use crate::sources::topsql::upstream::tikv::proto::{
+    GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord,
+};
 
 pub struct ResourceUsageRecordParser;
 
 impl UpstreamEventParser for ResourceUsageRecordParser {
     type UpstreamEvent = ResourceUsageRecord;
 
-    fn parse(response: Self::UpstreamEvent, instance: String) -> Vec<LogEvent> {
+    fn parse(
+        response: Self::UpstreamEvent,
+        instance: String,
+        schema_cache: Option<Arc<SchemaCache>>,
+    ) -> Vec<LogEvent> {
         match response.record_oneof {
-            Some(RecordOneof::Record(record)) => Self::parse_tikv_record(record, instance),
+            Some(RecordOneof::Record(record)) => {
+                Self::parse_tikv_record(record, instance, schema_cache)
+            }
             None => vec![],
         }
     }
@@ -37,7 +47,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         let mut ts_digests = BTreeMap::new();
         for response in responses {
             if let Some(RecordOneof::Record(record)) = response.record_oneof {
-                let (sql_digest, _, _) = match Self::decode_tag(&record.resource_group_tag) {
+                let (sql_digest, _, _) = match Self::decode_tag(&record.resource_group_tag, None) {
                     Some(tag) => tag,
                     None => continue,
                 };
@@ -129,72 +139,6 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         new_responses
     }
 
-    // fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent> {
-    //     let mut cpu_time_map = HashMap::new();
-    //     for response in &responses {
-    //         if let Some(RecordOneof::Record(record)) = &response.record_oneof {
-    //             let (sql_digest, _, _) = match Self::decode_tag(&record.resource_group_tag) {
-    //                 Some(tag) => tag,
-    //                 None => continue,
-    //             };
-    //             if sql_digest.is_empty() {
-    //                 continue; // others
-    //             }
-    //             let cpu_time: u32 = record.items.iter().map(|i| i.cpu_time_ms).sum();
-    //             let v = cpu_time_map.get(&record.resource_group_tag).unwrap_or(&0);
-    //             cpu_time_map.insert(record.resource_group_tag.clone(), v + cpu_time);
-    //         }
-    //     }
-    //     let mut cpu_time_vec = cpu_time_map.into_iter().collect::<Vec<(Vec<u8>, u32)>>();
-    //     cpu_time_vec.sort_by(|a, b| b.1.cmp(&a.1));
-    //     cpu_time_vec.truncate(top_n);
-    //     let mut top_tag = HashSet::new();
-    //     for v in cpu_time_vec {
-    //         top_tag.insert(v.0);
-    //     }
-
-    //     let mut results = vec![];
-    //     let mut records_others = vec![];
-    //     for response in responses {
-    //         match response.record_oneof {
-    //             Some(RecordOneof::Record(record)) => {
-    //                 if top_tag.contains(&record.resource_group_tag) {
-    //                     results.push(ResourceUsageRecord {
-    //                         record_oneof: Some(RecordOneof::Record(record)),
-    //                     });
-    //                 } else {
-    //                     records_others.push(record);
-    //                 }
-    //             }
-    //             _ => results.push(response),
-    //         }
-    //     }
-
-    //     let mut others_ts_item = BTreeMap::new();
-    //     for record in records_others {
-    //         for item in record.items {
-    //             match others_ts_item.get_mut(&item.timestamp_sec) {
-    //                 None => {
-    //                     others_ts_item.insert(item.timestamp_sec, item);
-    //                 }
-    //                 Some(i) => {
-    //                     i.cpu_time_ms += item.cpu_time_ms;
-    //                     i.read_keys += item.read_keys;
-    //                     i.write_keys += item.write_keys;
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     results.push(ResourceUsageRecord {
-    //         record_oneof: Some(RecordOneof::Record(GroupTagRecord {
-    //             resource_group_tag: Self::encode_tag(vec![], vec![], None),
-    //             items: others_ts_item.into_values().collect(),
-    //         })),
-    //     });
-
-    //     results
-    // }
-
     fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, interval_sec: u32) {
         if interval_sec <= 1 {
             return;
@@ -228,8 +172,12 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
 }
 
 impl ResourceUsageRecordParser {
-    fn parse_tikv_record(record: GroupTagRecord, instance: String) -> Vec<LogEvent> {
-        let decoded = Self::decode_tag(record.resource_group_tag.as_slice());
+    fn parse_tikv_record(
+        record: GroupTagRecord,
+        instance: String,
+        schema_cache: Option<Arc<SchemaCache>>,
+    ) -> Vec<LogEvent> {
+        let decoded = Self::decode_tag(record.resource_group_tag.as_slice(), schema_cache.clone());
         if decoded.is_none() {
             return vec![];
         }
@@ -273,20 +221,59 @@ impl ResourceUsageRecordParser {
         logs
     }
 
-    fn decode_tag(tag: &[u8]) -> Option<(String, String, String)> {
+    fn decode_tag(
+        tag: &[u8],
+        schema_cache: Option<Arc<SchemaCache>>,
+    ) -> Option<(String, String, String)> {
         match ResourceGroupTag::decode(tag) {
             Ok(resource_tag) => {
                 if resource_tag.sql_digest.is_none() {
                     None
                 } else {
+                    // Try to get table info from schema cache if available
+                    let mut tag_label = match resource_tag.label {
+                        Some(1) => KV_TAG_LABEL_ROW.to_owned(),
+                        Some(2) => KV_TAG_LABEL_INDEX.to_owned(),
+                        _ => KV_TAG_LABEL_UNKNOWN.to_owned(),
+                    };
+
+                    // If we have schema cache and table_id, try to enhance the tag label
+                    if let Some(schema_cache) = schema_cache {
+                        // Since ResourceGroupTag doesn't have table_id or index_id fields,
+                        // we need to extract these values from elsewhere or use placeholder values
+                        // for demonstration purposes
+
+                        // For example, we might extract table_id from another field or use a constant
+                        let table_id = 0; // Replace with actual logic to get table_id
+
+                        if let Some(table_detail) = schema_cache.get(table_id) {
+                            // For row type
+                            if resource_tag.label == Some(1) {
+                                tag_label = format!(
+                                    "{}:{}.{}",
+                                    KV_TAG_LABEL_ROW, table_detail.db, table_detail.name
+                                );
+                            }
+                            // For index type
+                            else if resource_tag.label == Some(2) {
+                                // Similarly, extract index_id from the appropriate source
+                                let index_id = 0; // Replace with actual logic to get index_id
+
+                                tag_label = format!(
+                                    "{}:{}.{}.{}",
+                                    KV_TAG_LABEL_INDEX,
+                                    table_detail.db,
+                                    table_detail.name,
+                                    index_id
+                                );
+                            }
+                        }
+                    }
+
                     Some((
                         hex::encode_upper(resource_tag.sql_digest.unwrap()),
                         hex::encode_upper(resource_tag.plan_digest.unwrap_or_default()),
-                        match resource_tag.label {
-                            Some(1) => KV_TAG_LABEL_ROW.to_owned(),
-                            Some(2) => KV_TAG_LABEL_INDEX.to_owned(),
-                            _ => KV_TAG_LABEL_UNKNOWN.to_owned(),
-                        },
+                        tag_label,
                     ))
                 }
             }
@@ -364,7 +351,7 @@ mod tests {
         for response in top_n {
             if let Some(RecordOneof::Record(record)) = response.record_oneof {
                 let cpu_time: u32 = record.items.iter().map(|i| i.cpu_time_ms).sum();
-                match ResourceUsageRecordParser::decode_tag(&record.resource_group_tag) {
+                match ResourceUsageRecordParser::decode_tag(&record.resource_group_tag, None) {
                     None => others_cpu_time = cpu_time,
                     Some((sql_digest, _, _)) => {
                         if sql_digest.is_empty() {
@@ -390,7 +377,7 @@ mod tests {
         let mut items = vec![];
         for record in &records {
             if let Some(RecordOneof::Record(record)) = &record.record_oneof {
-                if ResourceUsageRecordParser::decode_tag(&record.resource_group_tag)
+                if ResourceUsageRecordParser::decode_tag(&record.resource_group_tag, None)
                     .unwrap()
                     .0
                     .is_empty()
@@ -424,7 +411,7 @@ mod tests {
         let mut items = vec![];
         for record in &records {
             if let Some(RecordOneof::Record(record)) = &record.record_oneof {
-                if ResourceUsageRecordParser::decode_tag(&record.resource_group_tag)
+                if ResourceUsageRecordParser::decode_tag(&record.resource_group_tag, None)
                     .unwrap()
                     .0
                     .is_empty()

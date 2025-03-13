@@ -14,9 +14,10 @@ use crate::sources::topsql::controller::Controller;
 pub use upstream::parser;
 
 mod controller;
-mod shutdown;
+mod schema_cache;
+pub mod shutdown;
 pub mod topology;
-mod upstream;
+pub mod upstream;
 
 /// PLACEHOLDER
 #[configurable_component(source("topsql"))]
@@ -87,6 +88,7 @@ impl SourceConfig for TopSQLConfig {
         let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
         let top_n = self.top_n;
         let downsampling_interval = self.downsampling_interval;
+        let schema_update_interval = Duration::from_secs(60);
         Ok(Box::pin(async move {
             let controller = Controller::new(
                 pd_address,
@@ -94,6 +96,7 @@ impl SourceConfig for TopSQLConfig {
                 init_retry_delay,
                 top_n,
                 downsampling_interval,
+                schema_update_interval,
                 tls,
                 &cx.proxy,
                 cx.out,

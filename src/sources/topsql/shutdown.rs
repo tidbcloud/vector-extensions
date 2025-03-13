@@ -9,6 +9,7 @@ pub fn pair() -> (ShutdownNotifier, ShutdownSubscriber) {
     )
 }
 
+#[derive(Clone)]
 pub struct ShutdownNotifier {
     tx: watch::Sender<()>,
 }
@@ -56,6 +57,15 @@ impl ShutdownSubscriber {
                 rx,
             },
         )
+    }
+
+    #[allow(dead_code)]
+    pub async fn wait_for_shutdown(&mut self) {
+        self.done().await
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<()> {
+        self.rx.clone()
     }
 }
 

@@ -8,7 +8,9 @@ use futures_util::stream;
 use tonic::transport::ServerTlsConfig;
 use tonic::{Request, Response, Status};
 
-use crate::sources::topsql::upstream::tidb::proto::top_sql_pub_sub_server::{TopSqlPubSub, TopSqlPubSubServer};
+use crate::sources::topsql::upstream::tidb::proto::top_sql_pub_sub_server::{
+    TopSqlPubSub, TopSqlPubSubServer,
+};
 use crate::sources::topsql::upstream::tidb::proto::top_sql_sub_response::RespOneof;
 use crate::sources::topsql::upstream::tidb::proto::{
     PlanMeta, SqlMeta, TopSqlRecord, TopSqlRecordItem, TopSqlSubRequest, TopSqlSubResponse,

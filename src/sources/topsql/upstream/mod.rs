@@ -6,6 +6,7 @@ mod consts;
 mod tls_proxy;
 mod utils;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -23,6 +24,7 @@ use vector_lib::{
 };
 
 use crate::sources::topsql::{
+    schema_cache::SchemaCache,
     shutdown::ShutdownSubscriber,
     topology::{Component, InstanceType},
     upstream::{
@@ -62,6 +64,7 @@ pub struct TopSQLSource {
     retry_delay: Duration,
     top_n: usize,
     downsampling_interval: u32,
+    schema_cache: Option<Arc<SchemaCache>>,
 }
 
 enum State {
@@ -79,6 +82,7 @@ impl TopSQLSource {
         init_retry_delay: Duration,
         top_n: usize,
         downsampling_interval: u32,
+        schema_cache: Option<Arc<SchemaCache>>,
     ) -> Option<Self> {
         let protocal = if tls.is_none() {
             "http".into()
@@ -102,6 +106,7 @@ impl TopSQLSource {
                 retry_delay: init_retry_delay,
                 top_n,
                 downsampling_interval,
+                schema_cache,
             }),
             None => None,
         }
@@ -233,7 +238,11 @@ impl TopSQLSource {
         // parse
         let mut batch = vec![];
         for response in responses {
-            let mut events = U::UpstreamEventParser::parse(response, self.instance.clone());
+            let mut events = U::UpstreamEventParser::parse(
+                response,
+                self.instance.clone(),
+                self.schema_cache.clone(),
+            );
             batch.append(&mut events);
         }
         // send
