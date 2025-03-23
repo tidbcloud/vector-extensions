@@ -19,7 +19,7 @@ azure_storage_blobs = { version = "0.17", default-features = false, features = [
 base64 = { version = "0.22.0", default-features = false }
 bytes = { version = "1.5.0", default-features = false, features = ["serde"] }
 chrono = { version = "0.4.34", default-features = false, features = ["clock", "serde"] }
-etcd-client = { version = "0.9", features = ["tls-roots"] }
+etcd-client = { version = "0.14", features = ["tls-roots"] }
 exitcode = { version = "1.1.2", default-features = false }
 file-source = { git = "https://github.com/mornyx/vector", branch = "extend-0.37.1" }
 flate2 = { version = "1.0.28", default-features = false, features = ["default"] }
@@ -45,7 +45,7 @@ tokio-openssl = { version = "0.6.4", default-features = false }
 tokio-stream = { version = "0.1.15", default-features = false, features = ["net", "sync", "time"] }
 tokio-util = { version = "0.7", default-features = false, features = ["io", "time"] }
 toml = { version = "0.8.12", default-features = false }
-tonic = { version = "0.10", default-features = false, features = ["transport", "codegen", "prost", "tls", "tls-roots", "gzip"] }
+tonic = { version = "0.11", default-features = false, features = ["transport", "codegen", "prost", "tls", "tls-roots", "gzip"] }
 tracing = { version = "0.1.34", default-features = false }
 tracing-futures = { version = "0.2.5", default-features = false, features = ["futures-03"] }
 typetag = { version = "0.2.16", default-features = false }
@@ -61,7 +61,7 @@ regex = "1.10.3"
 
 [build-dependencies]
 prost-build = { version = "0.12", default-features = false }
-tonic-build = { version = "0.10", default-features = false, features = ["transport", "prost"] }
+tonic-build = { version = "0.11", default-features = false, features = ["transport", "prost"] }
 
 [features]
 default = [
@@ -98,9 +98,9 @@ sources-logs = [
     # "vector/sources-kafka",
     "vector/sources-kubernetes_logs",
     "vector/sources-logstash",
-    "vector/sources-nats",
+    # "vector/sources-nats",
     "vector/sources-opentelemetry",
-    "vector/sources-pulsar",
+    # "vector/sources-pulsar",
     "vector/sources-file-descriptor",
     "vector/sources-redis",
     "vector/sources-socket",
@@ -115,7 +115,7 @@ sources-metrics = [
     "vector/sources-eventstoredb_metrics",
     "vector/sources-host_metrics",
     "vector/sources-internal_metrics",
-    "vector/sources-mongodb_metrics",
+    # "vector/sources-mongodb_metrics",
     "vector/sources-nginx_metrics",
     "vector/sources-postgresql_metrics",
     "vector/sources-prometheus",
@@ -154,11 +154,11 @@ sinks-logs = [
     "vector/sinks-mezmo",
     "vector/sinks-loki",
     "vector/sinks-mqtt",
-    "vector/sinks-nats",
+    # "vector/sinks-nats",
     "vector/sinks-new_relic_logs",
     "vector/sinks-new_relic",
     "vector/sinks-papertrail",
-    "vector/sinks-pulsar",
+    # "vector/sinks-pulsar",
     "vector/sinks-redis",
     "vector/sinks-sematext",
     "vector/sinks-socket",
@@ -173,7 +173,7 @@ sinks-metrics = [
     "vector/sinks-blackhole",
     "vector/sinks-console",
     "vector/sinks-datadog_metrics",
-    "vector/sinks-greptimedb",
+    # "vector/sinks-greptimedb",
     "vector/sinks-humio",
     "vector/sinks-influxdb",
     # "vector/sinks-kafka",
@@ -188,7 +188,7 @@ sinks-metrics = [
 members = ["vdev"]
 
 [workspace.dependencies]
-chrono = { version = "0.4.34", default-features = false, features = ["clock", "serde"] }
+chrono = { version = "0.4.40", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4.5.3", default-features = false, features = ["derive", "error-context", "env", "help", "std", "string", "usage", "wrap_help"] }
 indexmap = { version = "2.2.5", default-features = false, features = ["serde", "std"] }
 serde = { version = "1.0.197", default-features = false, features = ["alloc", "derive", "rc"] }

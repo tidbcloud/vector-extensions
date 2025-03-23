@@ -35,13 +35,13 @@ test:
 .PHONY: build
 build:
 	@echo "Building..."
-	@cargo build --no-default-features --features default,vector/default
+	@cargo build --no-default-features --features default
 	@echo "Done building."
 
 .PHONY: build-release
 build-release:
 	@echo "Building release..."
-	@cargo build --release --no-default-features --features default,vector/default
+	@cargo build --release --no-default-features --features default
 	@echo "Done building release."
 
 .PHONY: build-x86_64-unknown-linux-gnu
