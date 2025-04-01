@@ -22,6 +22,8 @@ use vector_lib::{
 
 use super::topsql::topology::{InstanceType, TopologyFetcher};
 
+const DEFAULT_MAX_REGIONS_PER_PD_REQUEST: usize = 51200;
+
 /// PLACEHOLDER
 #[configurable_component(source("keyviz"))]
 #[derive(Debug, Clone)]
@@ -31,6 +33,9 @@ pub struct KeyvizConfig {
 
     /// PLACEHOLDER
     pub tls: Option<TlsConfig>,
+
+    /// PLACEHOLDER
+    pub max_regions_per_pd_request: Option<usize>,
 }
 
 impl GenerateConfig for KeyvizConfig {
@@ -38,6 +43,7 @@ impl GenerateConfig for KeyvizConfig {
         toml::Value::try_from(Self {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
+            max_regions_per_pd_request: Some(DEFAULT_MAX_REGIONS_PER_PD_REQUEST),
         })
         .unwrap()
     }
@@ -86,6 +92,7 @@ impl SourceConfig for KeyvizConfig {
 
         let mut topo = TopologyFetcher::new(pd_address.clone(), tls.clone(), &cx.proxy).await?;
         let mut etcd = topo.etcd_client.clone();
+        let max_regions_per_pd_request = self.max_regions_per_pd_request;
         Ok(Box::pin(async move {
             tokio::time::sleep(Duration::from_secs(30)).await; // protect crash loop
 
@@ -147,6 +154,7 @@ impl SourceConfig for KeyvizConfig {
                         &pd_address,
                         &mut cx.out,
                         filename,
+                        max_regions_per_pd_request,
                     ) => {},
                 }
                 let now = Utc::now().timestamp();
@@ -226,8 +234,9 @@ async fn fetch_and_send_regions(
     pd_address: &str,
     out: &mut SourceSender,
     filename: String,
+    max_regions_per_pd_request: Option<usize>,
 ) {
-    match fetch_regions(client.clone(), pd_address).await {
+    match fetch_regions(client.clone(), pd_address, max_regions_per_pd_request).await {
         Ok(regions) => {
             let json = match serde_json::to_string(&regions) {
                 Ok(v) => v,
@@ -249,15 +258,25 @@ async fn fetch_and_send_regions(
     }
 }
 
-async fn fetch_regions(client: Client, pd_address: &str) -> reqwest::Result<RegionsInfo> {
+async fn fetch_regions(
+    client: Client,
+    pd_address: &str,
+    max_regions_per_pd_request: Option<usize>,
+) -> reqwest::Result<RegionsInfo> {
     let mut all = RegionsInfo {
         count: 0,
         regions: vec![],
     };
     let mut start_key = Vec::new();
     loop {
-        let mut regions =
-            fetch_regions_part(client.clone(), pd_address, &start_key, &[], 51200).await?;
+        let mut regions = fetch_regions_part(
+            client.clone(),
+            pd_address,
+            &start_key,
+            &[],
+            max_regions_per_pd_request.unwrap_or(DEFAULT_MAX_REGIONS_PER_PD_REQUEST),
+        )
+        .await?;
         // for region in &mut regions.regions {
         //     let start_bytes = match hex::decode(&region.start_key) {
         //         Ok(v) => v,
@@ -300,7 +319,7 @@ async fn fetch_regions_part(
     pd_address: &str,
     key: &[u8],
     end_key: &[u8],
-    limit: i32,
+    limit: usize,
 ) -> reqwest::Result<RegionsInfo> {
     let encoded_key = url::form_urlencoded::byte_serialize(key).collect::<String>();
     let encoded_end_key = url::form_urlencoded::byte_serialize(end_key).collect::<String>();
