@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::instrument::Instrument;
@@ -6,6 +7,7 @@ use vector::shutdown::ShutdownSignal;
 use vector::SourceSender;
 use vector_lib::{config::proxy::ProxyConfig, tls::TlsConfig};
 
+use crate::sources::topsql::schema_cache::{SchemaCache, SchemaManager};
 use crate::sources::topsql::shutdown::{pair, ShutdownNotifier, ShutdownSubscriber};
 use crate::sources::topsql::topology::{Component, FetchError, TopologyFetcher};
 use crate::sources::topsql::upstream::TopSQLSource;
@@ -25,6 +27,9 @@ pub struct Controller {
     top_n: usize,
     downsampling_interval: u32,
 
+    schema_cache: Option<Arc<SchemaCache>>,
+    schema_update_interval: Duration,
+
     out: SourceSender,
 }
 
@@ -35,6 +40,7 @@ impl Controller {
         init_retry_delay: Duration,
         top_n: usize,
         downsampling_interval: u32,
+        schema_update_interval: Duration,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         out: SourceSender,
@@ -53,11 +59,16 @@ impl Controller {
             init_retry_delay,
             top_n,
             downsampling_interval,
+            schema_cache: None,
+            schema_update_interval,
             out,
         })
     }
 
     pub async fn run(mut self, mut shutdown: ShutdownSignal) {
+        // Start schema manager if we have a TiDB component
+        self.start_schema_manager_if_needed().await;
+
         tokio::select! {
             _ = self.run_loop() => {},
             _ = &mut shutdown => {},
@@ -65,6 +76,49 @@ impl Controller {
 
         info!("TopSQL PubSub Controller is shutting down.");
         self.shutdown_all_components().await;
+    }
+
+    async fn start_schema_manager_if_needed(&mut self) {
+        // First fetch to see if we have any TiDB components
+        let mut components = HashSet::new();
+        if let Err(e) = self.topo_fetcher.get_up_components(&mut components).await {
+            error!(message = "Failed to fetch initial topology for schema manager", error = %e);
+            return;
+        }
+
+        // Find a TiDB component to use for schema fetching
+        let tidb_component = components
+            .iter()
+            .find(|c| c.instance_type == crate::sources::topsql::topology::InstanceType::TiDB);
+
+        if let Some(tidb) = tidb_component {
+            info!(message = "Starting schema manager with TiDB instance", instance = %tidb);
+
+            let https = self.tls.is_some();
+            let tidb_address = format!("{}:{}", tidb.host, tidb.secondary_port);
+
+            let schema_manager =
+                SchemaManager::new(tidb_address, https, self.schema_update_interval);
+            self.schema_cache = Some(schema_manager.get_cache());
+
+            // Convert ShutdownSubscriber to broadcast::Receiver<()>
+            let shutdown = self.shutdown_subscriber.subscribe();
+
+            // Clone the etcd client for the schema manager
+            let etcd_client = self.topo_fetcher.etcd_client.clone();
+
+            tokio::spawn(
+                schema_manager
+                    .run_update_loop_with_etcd(shutdown, etcd_client)
+                    .instrument(tracing::info_span!("topsql_schema_manager")),
+            );
+
+            info!(message = "Started schema manager");
+            self.running_components
+                .insert(tidb.clone(), self.shutdown_notifier.clone());
+        } else {
+            info!(message = "No TiDB component found for schema manager");
+        }
     }
 
     async fn run_loop(&mut self) {
@@ -119,6 +173,7 @@ impl Controller {
             self.init_retry_delay,
             self.top_n,
             self.downsampling_interval,
+            self.schema_cache.clone(),
         );
         let source = match source {
             Some(source) => source,

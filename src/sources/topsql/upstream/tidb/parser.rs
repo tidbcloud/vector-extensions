@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use chrono::Utc;
 use vector::event::LogEvent;
 
+use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
     INSTANCE_TYPE_TIDB, INSTANCE_TYPE_TIKV, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_IS_INTERNAL_SQL,
     LABEL_NAME, LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_SQL_DIGEST,
@@ -21,7 +23,11 @@ pub struct TopSqlSubResponseParser;
 impl UpstreamEventParser for TopSqlSubResponseParser {
     type UpstreamEvent = TopSqlSubResponse;
 
-    fn parse(response: Self::UpstreamEvent, instance: String) -> Vec<LogEvent> {
+    fn parse(
+        response: Self::UpstreamEvent,
+        instance: String,
+        _schema_cache: Option<Arc<SchemaCache>>,
+    ) -> Vec<LogEvent> {
         match response.resp_oneof {
             Some(RespOneof::Record(record)) => Self::parse_tidb_record(record, instance),
             Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
