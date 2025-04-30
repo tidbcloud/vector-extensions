@@ -2,6 +2,7 @@ mod models;
 mod pd;
 mod store;
 mod tidb;
+mod tiproxy;
 mod utils;
 
 #[cfg(test)]
@@ -39,6 +40,8 @@ pub enum FetchError {
     FetchTiDBTopology { source: tidb::FetchError },
     #[snafu(display("Failed to fetch store topology: {}", source))]
     FetchStoreTopology { source: store::FetchError },
+    #[snafu(display("Failed to fetch tiproxy topology: {}", source))]
+    FetchTiProxyTopology { source: tiproxy::FetchError },
 }
 
 pub struct TopologyFetcher {
@@ -80,6 +83,10 @@ impl TopologyFetcher {
             .get_up_stores(components)
             .await
             .context(FetchStoreTopologySnafu)?;
+        tiproxy::TiProxyTopologyFetcher::new(&mut self.etcd_client)
+            .get_up_tiproxys(components)
+            .await
+            .context(FetchTiProxyTopologySnafu)?;
         Ok(())
     }
 
