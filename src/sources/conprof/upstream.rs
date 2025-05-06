@@ -101,7 +101,7 @@ impl ConprofSource {
             ts -= ts % 60;
             let next_minute_ts = ts + 60;
             match self.instance_type {
-                InstanceType::TiDB | InstanceType::PD => {
+                InstanceType::TiDB | InstanceType::PD | InstanceType::TiProxy => {
                     self.fetch_goroutine(
                         format!(
                             "{}-{}-goroutine-{}",

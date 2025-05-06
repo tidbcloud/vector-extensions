@@ -10,6 +10,7 @@ pub enum InstanceType {
     TiDB,
     TiKV,
     TiFlash,
+    TiProxy,
 }
 
 impl fmt::Display for InstanceType {
@@ -19,6 +20,7 @@ impl fmt::Display for InstanceType {
             InstanceType::TiDB => write!(f, "tidb"),
             InstanceType::TiKV => write!(f, "tikv"),
             InstanceType::TiFlash => write!(f, "tiflash"),
+             InstanceType::TiProxy => write!(f, "tiproxy"),
         }
     }
 }
@@ -35,7 +37,7 @@ impl Component {
     pub fn conprof_address(&self) -> Option<String> {
         match self.instance_type {
             InstanceType::PD => Some(format!("{}:{}", self.host, self.primary_port)),
-            InstanceType::TiDB | InstanceType::TiKV | InstanceType::TiFlash => {
+            InstanceType::TiDB | InstanceType::TiKV | InstanceType::TiFlash | InstanceType::TiProxy => {
                 Some(format!("{}:{}", self.host, self.secondary_port))
             }
         }
