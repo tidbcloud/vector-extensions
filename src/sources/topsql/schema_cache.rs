@@ -92,6 +92,40 @@ impl SchemaCache {
         self.schema_version.load(Ordering::SeqCst)
     }
 
+    // Calculate the memory usage of the schema cache
+    pub fn memory_usage(&self) -> usize {
+        if let Ok(cache) = self.cache.read() {
+            // Size of HashMap overhead (rough estimate)
+            let mut size = std::mem::size_of::<HashMap<i64, TableDetail>>();
+            
+            // Size of each entry
+            for (_key, value) in cache.iter() {
+                // Size of key (i64)
+                size += std::mem::size_of::<i64>();
+                
+                // Size of TableDetail struct
+                size += std::mem::size_of::<TableDetail>();
+                
+                // Size of String contents for name and db fields
+                size += value.name.capacity();
+                size += value.db.capacity();
+            }
+            
+            size
+        } else {
+            0
+        }
+    }
+
+    // Get the number of entries in the cache
+    pub fn entry_count(&self) -> usize {
+        if let Ok(cache) = self.cache.read() {
+            cache.len()
+        } else {
+            0
+        }
+    }
+
     pub async fn update(&self, client: &Client, tidb_instance: &str, tls: &Option<TlsConfig>) -> bool {
         let schema = if tidb_instance.starts_with("http") {
             ""
@@ -281,6 +315,16 @@ impl SchemaCache {
             if let Ok(mut cache) = self.cache.write() {
                 *cache = temp_cache.cache.read().unwrap().clone();
                 self.schema_version.store(schema_version, Ordering::SeqCst);
+                
+                // Log memory usage after update
+                let entries = self.entry_count();
+                let memory = self.memory_usage();
+                tracing::info!(
+                    "Schema cache updated: entries={}, memory_usage={} bytes ({}KB)",
+                    entries,
+                    memory,
+                    memory / 1024
+                );
             }
             Ok(())
         } else {

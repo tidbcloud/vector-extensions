@@ -174,7 +174,9 @@ impl Controller {
                 }
             };
             
-            self.schema_cache = Some(schema_manager.get_cache());
+            // Get cache for stats and store it
+            let cache = schema_manager.get_cache();
+            self.schema_cache = Some(cache.clone());
 
             // Convert ShutdownSubscriber to broadcast::Receiver<()>
             let shutdown = self.shutdown_subscriber.subscribe();
@@ -188,7 +190,13 @@ impl Controller {
                     .instrument(tracing::info_span!("topsql_schema_manager")),
             );
 
-            info!(message = "Started schema manager successfully", instance = %tidb);
+            info!(
+                message = "Started schema manager successfully", 
+                instance = %tidb,
+                initial_entries = cache.entry_count(),
+                initial_memory_usage_bytes = cache.memory_usage(),
+                initial_memory_usage_kb = cache.memory_usage() / 1024
+            );
             
             // Store the running schema manager and the TiDB instance it uses
             self.running_components
@@ -244,6 +252,16 @@ impl Controller {
         // If the component being stopped is the current TiDB instance used by the schema manager, clear the reference
         if let Some(tidb) = &self.schema_manager_tidb {
             if tidb == component {
+                // Print memory usage stats before clearing schema manager reference
+                if let Some(cache) = &self.schema_cache {
+                    info!(
+                        message = "Schema cache stats when stopping TiDB instance", 
+                        instance = %tidb,
+                        entries = cache.entry_count(), 
+                        memory_usage_bytes = cache.memory_usage(),
+                        memory_usage_kb = cache.memory_usage() / 1024
+                    );
+                }
                 self.schema_manager_tidb = None;
             }
         }
