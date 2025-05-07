@@ -7,6 +7,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::{error, info};
+use crate::utils::http::build_reqwest_client;
+use vector::tls::TlsConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DBInfo {
@@ -90,10 +92,10 @@ impl SchemaCache {
         self.schema_version.load(Ordering::SeqCst)
     }
 
-    pub async fn update(&self, client: &Client, tidb_instance: &str, https: bool) -> bool {
+    pub async fn update(&self, client: &Client, tidb_instance: &str, tls: &Option<TlsConfig>) -> bool {
         let schema = if tidb_instance.starts_with("http") {
             ""
-        } else if https {
+        } else if tls.is_some() {
             "https://"
         } else {
             "http://"
@@ -168,11 +170,9 @@ impl SchemaCache {
             }
         }
 
-        if update_success {
-            if let Ok(mut cache) = self.cache.write() {
-                *cache = new_cache;
-                self.schema_version.fetch_add(1, Ordering::SeqCst);
-            }
+        // After successful update, acquire the write lock
+        if let Ok(mut cache) = self.cache.write() {
+            *cache = new_cache;
         }
 
         update_success
@@ -220,7 +220,7 @@ impl SchemaCache {
         &self,
         client: &Client,
         tidb_instance: &str,
-        https: bool,
+        tls: &Option<TlsConfig>,
         etcd_client: &mut etcd_client::Client,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get schema version from etcd
@@ -276,7 +276,7 @@ impl SchemaCache {
 
         // Create a temporary cache and update it
         let temp_cache = SchemaCache::new();
-        if temp_cache.update(client, tidb_instance, https).await {
+        if temp_cache.update(client, tidb_instance, tls).await {
             // Only after successful update, acquire the write lock and update the version
             if let Ok(mut cache) = self.cache.write() {
                 *cache = temp_cache.cache.read().unwrap().clone();
@@ -293,19 +293,22 @@ pub struct SchemaManager {
     cache: Arc<SchemaCache>,
     client: Client,
     tidb_instance: String,
-    https: bool,
+    tls: Option<TlsConfig>,
     update_interval: Duration,
 }
 
 impl SchemaManager {
-    pub fn new(tidb_instance: String, https: bool, update_interval: Duration) -> Self {
-        Self {
+    pub async fn new(tidb_instance: String, update_interval: Duration, tls: Option<TlsConfig>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Use the standardized client builder
+        let client = build_reqwest_client(tls.clone(), None, None).await?;
+        
+        Ok(Self {
             cache: Arc::new(SchemaCache::new()),
-            client: Client::new(),
+            client,
             tidb_instance,
-            https,
+            tls,
             update_interval,
-        }
+        })
     }
 
     pub fn get_cache(&self) -> Arc<SchemaCache> {
@@ -329,7 +332,7 @@ impl SchemaManager {
                     let cache = self.cache.clone();
                     let client = self.client.clone();
                     let tidb_instance = self.tidb_instance.clone();
-                    let https = self.https;
+                    let tls = self.tls.clone();
                     let etcd = etcd_client.clone();
 
                     async move {
@@ -337,7 +340,7 @@ impl SchemaManager {
                         let _ = cache.update_schema_cache(
                             &client,
                             &tidb_instance,
-                            https,
+                            &tls,
                             &mut *etcd_lock
                         ).await;
                     }

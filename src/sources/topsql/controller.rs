@@ -94,11 +94,21 @@ impl Controller {
         if let Some(tidb) = tidb_component {
             info!(message = "Starting schema manager with TiDB instance", instance = %tidb);
 
-            let https = self.tls.is_some();
             let tidb_address = format!("{}:{}", tidb.host, tidb.secondary_port);
 
-            let schema_manager =
-                SchemaManager::new(tidb_address, https, self.schema_update_interval);
+            // Use the new async constructor with TLS configuration
+            let schema_manager = match SchemaManager::new(
+                tidb_address, 
+                self.schema_update_interval,
+                self.tls.clone(),
+            ).await {
+                Ok(manager) => manager,
+                Err(err) => {
+                    error!(message = "Failed to create schema manager", %err);
+                    return;
+                }
+            };
+            
             self.schema_cache = Some(schema_manager.get_cache());
 
             // Convert ShutdownSubscriber to broadcast::Receiver<()>

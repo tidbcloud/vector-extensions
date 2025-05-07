@@ -8,6 +8,7 @@ use vector::{app::Application, extra_context::ExtraContext};
 mod common;
 mod sinks;
 mod sources;
+mod utils;
 
 #[cfg(unix)]
 fn main() -> ExitCode {
