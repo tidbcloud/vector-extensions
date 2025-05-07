@@ -153,7 +153,10 @@ impl Controller {
 
         // Shuffle the TiDB instances to distribute load
         tidb_components.shuffle(&mut thread_rng());
-        info!(message = "Shuffled TiDB instances for load balancing", instance_count = tidb_components.len());
+        info!(
+            message = "Shuffled TiDB instances for load balancing",
+            instance_count = tidb_components.len()
+        );
 
         // Try each TiDB instance until one succeeds
         for tidb in tidb_components {
@@ -163,17 +166,19 @@ impl Controller {
 
             // Use the async constructor with TLS configuration
             let schema_manager = match SchemaManager::new(
-                tidb_address, 
+                tidb_address,
                 self.schema_update_interval,
                 self.tls.clone(),
-            ).await {
+            )
+            .await
+            {
                 Ok(manager) => manager,
                 Err(err) => {
                     error!(message = "Failed to create schema manager with this TiDB instance, trying next", instance = %tidb, %err);
                     continue; // Try the next TiDB instance
                 }
             };
-            
+
             // Get cache for stats and store it
             let cache = schema_manager.get_cache();
             self.schema_cache = Some(cache.clone());
@@ -191,22 +196,22 @@ impl Controller {
             );
 
             info!(
-                message = "Started schema manager successfully", 
+                message = "Started schema manager successfully",
                 instance = %tidb,
                 initial_entries = cache.entry_count(),
                 initial_memory_usage_bytes = cache.memory_usage(),
                 initial_memory_usage_kb = cache.memory_usage() / 1024
             );
-            
+
             // Store the running schema manager and the TiDB instance it uses
             self.running_components
                 .insert(tidb.clone(), self.shutdown_notifier.clone());
             self.schema_manager_tidb = Some(tidb.clone());
-            
+
             // Successfully started, exit the loop
             return;
         }
-        
+
         // If we get here, all TiDB instances failed
         error!(message = "Failed to start schema manager with any available TiDB instance");
     }
@@ -255,9 +260,9 @@ impl Controller {
                 // Print memory usage stats before clearing schema manager reference
                 if let Some(cache) = &self.schema_cache {
                     info!(
-                        message = "Schema cache stats when stopping TiDB instance", 
+                        message = "Schema cache stats when stopping TiDB instance",
                         instance = %tidb,
-                        entries = cache.entry_count(), 
+                        entries = cache.entry_count(),
                         memory_usage_bytes = cache.memory_usage(),
                         memory_usage_kb = cache.memory_usage() / 1024
                     );

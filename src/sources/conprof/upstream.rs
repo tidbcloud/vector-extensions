@@ -4,11 +4,7 @@ use base64::{prelude::*, Engine};
 use chrono::Utc;
 use reqwest::Client;
 use vector::{internal_events::StreamClosedError, SourceSender};
-use vector_lib::{
-    internal_event::InternalEvent,
-    tls::TlsConfig,
-    event::LogEvent,
-};
+use vector_lib::{event::LogEvent, internal_event::InternalEvent, tls::TlsConfig};
 
 use crate::sources::conprof::{
     shutdown::ShutdownSubscriber,
@@ -46,7 +42,7 @@ impl ConprofSource {
                 return None;
             }
         };
-        
+
         match component.conprof_address() {
             Some(address) => Some(ConprofSource {
                 client,

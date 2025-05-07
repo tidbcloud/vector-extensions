@@ -457,7 +457,7 @@ async fn fetch_tidb_dbinfos(
     } else {
         "http://"
     };
-    
+
     client
         .get(format!("{}{}/schema", schema, tidb_instance))
         .send()
@@ -479,7 +479,7 @@ async fn fetch_tidb_tableinfos(
     } else {
         "http://"
     };
-    
+
     client
         .get(format!(
             "{}{}/schema/{}?id_name_only=true",
