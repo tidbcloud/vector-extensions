@@ -64,7 +64,7 @@ pub struct TopSQLSource {
     retry_delay: Duration,
     top_n: usize,
     downsampling_interval: u32,
-    schema_cache: Option<Arc<SchemaCache>>,
+    schema_cache: Arc<SchemaCache>,
 }
 
 enum State {
@@ -82,7 +82,7 @@ impl TopSQLSource {
         init_retry_delay: Duration,
         top_n: usize,
         downsampling_interval: u32,
-        schema_cache: Option<Arc<SchemaCache>>,
+        schema_cache: Arc<SchemaCache>,
     ) -> Option<Self> {
         let protocal = if tls.is_none() {
             "http".into()

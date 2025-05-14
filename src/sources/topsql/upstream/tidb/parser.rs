@@ -26,7 +26,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
     fn parse(
         response: Self::UpstreamEvent,
         instance: String,
-        _schema_cache: Option<Arc<SchemaCache>>,
+        _schema_cache: Arc<SchemaCache>,
     ) -> Vec<LogEvent> {
         match response.resp_oneof {
             Some(RespOneof::Record(record)) => Self::parse_tidb_record(record, instance),

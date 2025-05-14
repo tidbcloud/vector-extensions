@@ -92,8 +92,19 @@ impl SchemaCache {
         self.schema_version.load(Ordering::SeqCst)
     }
 
+    // Get the number of entries in the cache
+    pub fn entry_count(&self) -> usize {
+        // Use a separate scope to ensure the read lock is dropped immediately
+        if let Ok(cache) = self.cache.read() {
+            cache.len()
+        } else {
+            0
+        }
+    }
+
     // Calculate the memory usage of the schema cache
     pub fn memory_usage(&self) -> usize {
+        // Use a separate scope to ensure the read lock is dropped immediately
         if let Ok(cache) = self.cache.read() {
             // Size of HashMap overhead (rough estimate)
             let mut size = std::mem::size_of::<HashMap<i64, TableDetail>>();
@@ -112,15 +123,6 @@ impl SchemaCache {
             }
 
             size
-        } else {
-            0
-        }
-    }
-
-    // Get the number of entries in the cache
-    pub fn entry_count(&self) -> usize {
-        if let Ok(cache) = self.cache.read() {
-            cache.len()
         } else {
             0
         }
@@ -316,21 +318,61 @@ impl SchemaCache {
         // Create a temporary cache and update it
         let temp_cache = SchemaCache::new();
         if temp_cache.update(client, tidb_instance, tls).await {
-            // Only after successful update, acquire the write lock and update the version
-            if let Ok(mut cache) = self.cache.write() {
-                *cache = temp_cache.cache.read().unwrap().clone();
-                self.schema_version.store(schema_version, Ordering::SeqCst);
+            // Get a cloned copy of the updated cache map before acquiring the write lock
+            let updated_cache = {
+                if let Ok(temp_map) = temp_cache.cache.read() {
+                    temp_map.clone()
+                } else {
+                    tracing::error!("Failed to read from temporary cache");
+                    return Err("Failed to read from temporary cache".into());
+                }
+            };
 
-                // Log memory usage after update
-                let entries = self.entry_count();
-                let memory = self.memory_usage();
-                tracing::info!(
-                    "Schema cache updated: entries={}, memory_usage={} bytes ({}KB)",
-                    entries,
-                    memory,
-                    memory / 1024
-                );
+            // Only after getting the cloned copy, acquire the write lock and update the version
+            if let Ok(mut cache) = self.cache.write() {
+                *cache = updated_cache;
+                self.schema_version.store(schema_version, Ordering::SeqCst);
+            } else {
+                tracing::error!("Failed to acquire write lock for cache update");
+                return Err("Failed to acquire write lock for cache update".into());
             }
+
+            // Collect metrics AFTER the write lock is released to avoid potential deadlocks
+            let entries = self.entry_count();
+            let memory = self.memory_usage();
+            tracing::info!(
+                "Schema cache updated: entries={}, memory_usage={} bytes ({}KB), schema_version={}",
+                entries,
+                memory,
+                memory / 1024,
+                schema_version
+            );
+
+            // print cache content
+            if let Ok(cache) = self.cache.read() {
+                let mut tables_by_db = std::collections::HashMap::new();
+
+                // Group tables by database for better logging
+                for (id, detail) in cache.iter() {
+                    tables_by_db
+                        .entry(detail.db.clone())
+                        .or_insert_with(Vec::new)
+                        .push((*id, detail.name.clone()));
+                }
+
+                // Log a summary of tables by database
+                for (db, tables) in &tables_by_db {
+                    tracing::info!(
+                        "Cache DB summary: db={}, table_count={}, first_few_tables={:?}",
+                        db,
+                        tables.len(),
+                        tables.iter().take(5).collect::<Vec<_>>()
+                    );
+                }
+            } else {
+                tracing::error!("Failed to acquire read lock for printing cache content");
+            }
+
             Ok(())
         } else {
             Err("Failed to update schema cache".into())
@@ -344,6 +386,7 @@ pub struct SchemaManager {
     tidb_instance: String,
     tls: Option<TlsConfig>,
     update_interval: Duration,
+    shutdown_sender: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl SchemaManager {
@@ -351,16 +394,18 @@ impl SchemaManager {
         tidb_instance: String,
         update_interval: Duration,
         tls: Option<TlsConfig>,
+        cache: Arc<SchemaCache>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Use the standardized client builder
         let client = build_reqwest_client(tls.clone(), None, None).await?;
 
         Ok(Self {
-            cache: Arc::new(SchemaCache::new()),
+            cache,
             client,
             tidb_instance,
             tls,
             update_interval,
+            shutdown_sender: None,
         })
     }
 
@@ -369,16 +414,24 @@ impl SchemaManager {
     }
 
     pub async fn run_update_loop_with_etcd(
-        self,
+        mut self,
         mut shutdown: watch::Receiver<()>,
         etcd_client: etcd_client::Client,
     ) {
         let etcd_client = Arc::new(tokio::sync::Mutex::new(etcd_client));
+        let (oneshot_tx, mut oneshot_rx) = tokio::sync::oneshot::channel();
+
+        // Store shutdown sender for external shutdown
+        self.shutdown_sender = Some(oneshot_tx);
 
         loop {
             tokio::select! {
                 _ = shutdown.changed() => {
-                    info!(message = "Schema manager is shutting down");
+                    info!(message = "Schema manager is shutting down via watch");
+                    break;
+                }
+                _ = &mut oneshot_rx => {
+                    info!(message = "Schema manager is shutting down via oneshot");
                     break;
                 }
                 _ = {
@@ -403,6 +456,10 @@ impl SchemaManager {
             tokio::select! {
                 _ = shutdown.changed() => {
                     info!(message = "Schema manager is shutting down");
+                    break;
+                }
+                _ = &mut oneshot_rx => {
+                    info!(message = "Schema manager is shutting down via oneshot");
                     break;
                 }
                 _ = tokio::time::sleep(self.update_interval) => {}

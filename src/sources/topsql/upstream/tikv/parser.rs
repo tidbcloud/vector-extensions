@@ -24,7 +24,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
     fn parse(
         response: Self::UpstreamEvent,
         instance: String,
-        schema_cache: Option<Arc<SchemaCache>>,
+        schema_cache: Arc<SchemaCache>,
     ) -> Vec<LogEvent> {
         match response.record_oneof {
             Some(RecordOneof::Record(record)) => {
@@ -175,8 +175,15 @@ impl ResourceUsageRecordParser {
     fn parse_tikv_record(
         record: GroupTagRecord,
         instance: String,
-        schema_cache: Option<Arc<SchemaCache>>,
+        schema_cache: Arc<SchemaCache>,
     ) -> Vec<LogEvent> {
+        // Log schema cache info
+        debug!(
+            message = "Schema cache available in parse_tikv_record",
+            entries = schema_cache.entry_count(),
+            schema_version = schema_cache.schema_version()
+        );
+
         let decoded = Self::decode_tag(record.resource_group_tag.as_slice());
         if decoded.is_none() {
             return vec![];
@@ -186,16 +193,15 @@ impl ResourceUsageRecordParser {
 
         let (sql_digest, plan_digest, tag_label, table_id) = decoded.unwrap();
 
-        let mut db_name = "unknown".to_string();
+        let mut db_name = "".to_string();
         let mut table_name = "".to_string();
+        let mut table_id_str = "".to_string();
 
         if let Some(tid) = table_id {
-            table_name = tid.to_string();
-            if let Some(sc) = schema_cache {
-                if let Some(table_detail) = sc.get(tid) {
-                    db_name = table_detail.db.clone();
-                    table_name = format!("{}-{}", table_detail.name, tid);
-                }
+            table_id_str = tid.to_string();
+            if let Some(table_detail) = schema_cache.get(tid) {
+                db_name = table_detail.db.clone();
+                table_name = table_detail.name;
             }
         }
 
@@ -206,7 +212,8 @@ impl ResourceUsageRecordParser {
             .plan_digest(plan_digest)
             .tag_label(tag_label)
             .db_name(db_name)
-            .table_name(table_name);
+            .table_name(table_name)
+            .table_id(table_id_str);
 
         macro_rules! append {
             ($( ($label_name:expr, $item_name:tt), )* ) => {

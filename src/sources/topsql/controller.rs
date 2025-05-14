@@ -29,11 +29,16 @@ pub struct Controller {
     top_n: usize,
     downsampling_interval: u32,
 
-    schema_cache: Option<Arc<SchemaCache>>,
+    schema_cache: Arc<SchemaCache>,
     schema_update_interval: Duration,
-    schema_manager_tidb: Option<Component>,
+    active_schema_manager: Option<ActiveSchemaManager>,
 
     out: SourceSender,
+}
+
+struct ActiveSchemaManager {
+    tidb: Component,
+    task_handle: tokio::task::JoinHandle<()>,
 }
 
 impl Controller {
@@ -51,6 +56,10 @@ impl Controller {
         let topo_fetcher =
             TopologyFetcher::new(pd_address, tls_config.clone(), proxy_config).await?;
         let (shutdown_notifier, shutdown_subscriber) = pair();
+
+        // Initialize an empty schema cache to ensure all components always have a cache reference
+        let schema_cache = Arc::new(SchemaCache::new());
+
         Ok(Self {
             topo_fetch_interval,
             topo_fetcher,
@@ -62,9 +71,9 @@ impl Controller {
             init_retry_delay,
             top_n,
             downsampling_interval,
-            schema_cache: None,
+            schema_cache,
             schema_update_interval,
-            schema_manager_tidb: None,
+            active_schema_manager: None,
             out,
         })
     }
@@ -121,8 +130,8 @@ impl Controller {
         }
 
         // Check if the TiDB instance used by the current schema manager is no longer available
-        let need_update_schema_manager = match &self.schema_manager_tidb {
-            Some(tidb) => !latest_components.contains(tidb),
+        let need_update_schema_manager = match &self.active_schema_manager {
+            Some(instance) => !latest_components.contains(&instance.tidb),
             None => true, // Schema manager has never been started
         };
 
@@ -135,28 +144,37 @@ impl Controller {
     }
 
     async fn update_schema_manager(&mut self, available_components: &HashSet<Component>) {
-        // If there is a running schema manager, clear the reference
-        if let Some(_tidb) = &self.schema_manager_tidb {
-            self.schema_manager_tidb = None;
+        // If there is a running schema manager, shut it down
+        if let Some(instance) = self.active_schema_manager.take() {
+            info!(message = "Shutting down previous schema manager", instance = %instance.tidb);
+
+            // Abort the task
+            instance.task_handle.abort();
+            info!(message = "Aborted previous schema manager task", instance = %instance.tidb);
         }
 
         // Find all available TiDB instances
-        let mut tidb_components: Vec<_> = available_components
+        let tidb_components: Vec<_> = available_components
             .iter()
             .filter(|c| c.instance_type == InstanceType::TiDB)
+            .cloned()
             .collect();
 
+        // Shuffle TiDB instances to distribute load
+        let mut shuffled_components = tidb_components.clone();
+        shuffled_components.shuffle(&mut thread_rng());
+
+        // Use the method to update schema_manager
+        self.update_schema_manager_with_components(&shuffled_components)
+            .await;
+    }
+
+    async fn update_schema_manager_with_components(&mut self, tidb_components: &[Component]) {
+        // If no TiDB components are available, return early
         if tidb_components.is_empty() {
             info!(message = "No TiDB component available for schema manager");
             return;
         }
-
-        // Shuffle the TiDB instances to distribute load
-        tidb_components.shuffle(&mut thread_rng());
-        info!(
-            message = "Shuffled TiDB instances for load balancing",
-            instance_count = tidb_components.len()
-        );
 
         // Try each TiDB instance until one succeeds
         for tidb in tidb_components {
@@ -164,11 +182,12 @@ impl Controller {
 
             let tidb_address = format!("{}:{}", tidb.host, tidb.secondary_port);
 
-            // Use the async constructor with TLS configuration
+            // Use async constructor with TLS configuration and pass existing schema_cache
             let schema_manager = match SchemaManager::new(
                 tidb_address,
                 self.schema_update_interval,
                 self.tls.clone(),
+                self.schema_cache.clone(), // Pass existing schema cache
             )
             .await
             {
@@ -179,9 +198,8 @@ impl Controller {
                 }
             };
 
-            // Get cache for stats and store it
+            // Get cache reference for logs
             let cache = schema_manager.get_cache();
-            self.schema_cache = Some(cache.clone());
 
             // Convert ShutdownSubscriber to broadcast::Receiver<()>
             let shutdown = self.shutdown_subscriber.subscribe();
@@ -189,24 +207,27 @@ impl Controller {
             // Clone the etcd client for the schema manager
             let etcd_client = self.topo_fetcher.etcd_client.clone();
 
-            tokio::spawn(
+            // Spawn the schema manager task
+            let task_handle = tokio::spawn(
                 schema_manager
                     .run_update_loop_with_etcd(shutdown, etcd_client)
                     .instrument(tracing::info_span!("topsql_schema_manager")),
             );
 
+            // Store the reference to the active schema manager
+            self.active_schema_manager = Some(ActiveSchemaManager {
+                tidb: tidb.clone(),
+                task_handle,
+            });
+
             info!(
                 message = "Started schema manager successfully",
                 instance = %tidb,
-                initial_entries = cache.entry_count(),
-                initial_memory_usage_bytes = cache.memory_usage(),
-                initial_memory_usage_kb = cache.memory_usage() / 1024
+                entries = cache.entry_count(),
+                schema_version = cache.schema_version(),
+                memory_usage_bytes = cache.memory_usage(),
+                memory_usage_kb = cache.memory_usage() / 1024
             );
-
-            // Store the running schema manager and the TiDB instance it uses
-            self.running_components
-                .insert(tidb.clone(), self.shutdown_notifier.clone());
-            self.schema_manager_tidb = Some(tidb.clone());
 
             // Successfully started, exit the loop
             return;
@@ -237,7 +258,7 @@ impl Controller {
                 .run(shutdown_subscriber)
                 .instrument(tracing::info_span!("topsql_source", topsql_source = %component)),
         );
-        info!(message = "Started TopSQL source.", topsql_source = %component);
+        info!(message = "Started TopSQL source", topsql_source = %component);
         self.running_components
             .insert(component.clone(), shutdown_notifier);
 
@@ -254,27 +275,38 @@ impl Controller {
         shutdown_notifier.wait_for_exit().await;
         info!(message = "Stopped TopSQL source.", topsql_source = %component);
 
-        // If the component being stopped is the current TiDB instance used by the schema manager, clear the reference
-        if let Some(tidb) = &self.schema_manager_tidb {
-            if tidb == component {
-                // Print memory usage stats before clearing schema manager reference
-                if let Some(cache) = &self.schema_cache {
-                    info!(
-                        message = "Schema cache stats when stopping TiDB instance",
-                        instance = %tidb,
-                        entries = cache.entry_count(),
-                        memory_usage_bytes = cache.memory_usage(),
-                        memory_usage_kb = cache.memory_usage() / 1024
-                    );
+        // If the component being stopped is the current TiDB instance used by the schema manager, abort the task
+        if let Some(active_manager) = &self.active_schema_manager {
+            if &active_manager.tidb == component {
+                // Print memory usage stats before clearing reference
+                info!(
+                    message = "Schema cache stats when stopping TiDB instance",
+                    instance = %component,
+                    entries = self.schema_cache.entry_count(),
+                    memory_usage_bytes = self.schema_cache.memory_usage(),
+                    memory_usage_kb = self.schema_cache.memory_usage() / 1024
+                );
+
+                // Take ownership and abort
+                if let Some(manager) = self.active_schema_manager.take() {
+                    manager.task_handle.abort();
+                    info!(message = "Aborted schema manager task for stopped component", instance = %component);
                 }
-                self.schema_manager_tidb = None;
             }
         }
 
         true
     }
 
-    async fn shutdown_all_components(self) {
+    async fn shutdown_all_components(mut self) {
+        // First, shut down schema manager if it exists
+        if let Some(manager) = self.active_schema_manager.take() {
+            info!(message = "Shutting down schema manager", instance = %manager.tidb);
+            manager.task_handle.abort();
+            info!(message = "Aborted schema manager task during shutdown");
+        }
+
+        // Then shut down all other components
         for (component, shutdown_notifier) in self.running_components {
             info!(message = "Shutting down TopSQL source.", topsql_source = %component);
             shutdown_notifier.shutdown();

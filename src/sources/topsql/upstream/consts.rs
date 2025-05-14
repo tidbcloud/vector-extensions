@@ -5,6 +5,7 @@ pub const LABEL_NAME: &str = "__name__";
 pub const LABEL_INSTANCE: &str = "instance";
 pub const LABEL_DB_NAME: &str = "db";
 pub const LABEL_TABLE_NAME: &str = "table";
+pub const LABEL_TABLE_ID: &str = "table_id";
 pub const LABEL_INSTANCE_TYPE: &str = "instance_type";
 pub const LABEL_SQL_DIGEST: &str = "sql_digest";
 pub const LABEL_PLAN_DIGEST: &str = "plan_digest";

@@ -6,7 +6,7 @@ use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::{
     consts::{
         LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, LABEL_PLAN_DIGEST,
-        LABEL_SQL_DIGEST, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
+        LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
     },
     utils::make_metric_like_log_event,
 };
@@ -17,7 +17,7 @@ pub trait UpstreamEventParser {
     fn parse(
         event: Self::UpstreamEvent,
         instance: String,
-        schema_cache: Option<Arc<SchemaCache>>,
+        schema_cache: Arc<SchemaCache>,
     ) -> Vec<LogEvent>;
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent>;
@@ -43,6 +43,7 @@ impl Default for Buf {
                 (LABEL_TAG_LABEL, String::new()),
                 (LABEL_DB_NAME, String::new()),
                 (LABEL_TABLE_NAME, String::new()),
+                (LABEL_TABLE_ID, String::new()),
             ],
             timestamps: vec![],
             values: vec![],
@@ -88,6 +89,11 @@ impl Buf {
 
     pub fn table_name(&mut self, table_name: impl Into<String>) -> &mut Self {
         self.labels[7].1 = table_name.into();
+        self
+    }
+
+    pub fn table_id(&mut self, table_id: impl Into<String>) -> &mut Self {
+        self.labels[8].1 = table_id.into();
         self
     }
 
