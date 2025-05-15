@@ -1,10 +1,12 @@
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
 use vector_lib::event::LogEvent;
 
+use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::{
     consts::{
-        LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, LABEL_PLAN_DIGEST, LABEL_SQL_DIGEST,
-        LABEL_TAG_LABEL,
+        LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, LABEL_PLAN_DIGEST,
+        LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
     },
     utils::make_metric_like_log_event,
 };
@@ -12,7 +14,11 @@ use crate::sources::topsql::upstream::{
 pub trait UpstreamEventParser {
     type UpstreamEvent;
 
-    fn parse(response: Self::UpstreamEvent, instance: String) -> Vec<LogEvent>;
+    fn parse(
+        event: Self::UpstreamEvent,
+        instance: String,
+        schema_cache: Arc<SchemaCache>,
+    ) -> Vec<LogEvent>;
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent>;
 
@@ -35,6 +41,9 @@ impl Default for Buf {
                 (LABEL_SQL_DIGEST, String::new()),
                 (LABEL_PLAN_DIGEST, String::new()),
                 (LABEL_TAG_LABEL, String::new()),
+                (LABEL_DB_NAME, String::new()),
+                (LABEL_TABLE_NAME, String::new()),
+                (LABEL_TABLE_ID, String::new()),
             ],
             timestamps: vec![],
             values: vec![],
@@ -70,6 +79,21 @@ impl Buf {
 
     pub fn tag_label(&mut self, tag_label: impl Into<String>) -> &mut Self {
         self.labels[5].1 = tag_label.into();
+        self
+    }
+
+    pub fn db_name(&mut self, db_name: impl Into<String>) -> &mut Self {
+        self.labels[6].1 = db_name.into();
+        self
+    }
+
+    pub fn table_name(&mut self, table_name: impl Into<String>) -> &mut Self {
+        self.labels[7].1 = table_name.into();
+        self
+    }
+
+    pub fn table_id(&mut self, table_id: impl Into<String>) -> &mut Self {
+        self.labels[8].1 = table_id.into();
         self
     }
 

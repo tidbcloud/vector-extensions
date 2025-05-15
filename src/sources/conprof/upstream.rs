@@ -2,19 +2,16 @@ use std::time::Duration;
 
 use base64::{prelude::*, Engine};
 use chrono::Utc;
-use reqwest::{Certificate, Client, Identity};
+use reqwest::Client;
 use vector::{internal_events::StreamClosedError, SourceSender};
-use vector_lib::{
-    internal_event::InternalEvent,
-    tls::TlsConfig,
-    {event::LogEvent, tls::TlsSettings},
-};
+use vector_lib::{event::LogEvent, internal_event::InternalEvent, tls::TlsConfig};
 
 use crate::sources::conprof::{
     shutdown::ShutdownSubscriber,
     tools::fetch_raw,
     topology::{Component, InstanceType},
 };
+use crate::utils::http::build_reqwest_client;
 
 pub struct ConprofSource {
     client: Client,
@@ -38,33 +35,14 @@ impl ConprofSource {
         // init_retry_delay: Duration,
         enable_tikv_heap_profile: bool,
     ) -> Option<Self> {
-        let mut builder = reqwest::Client::builder();
-        if let Some(tls) = tls.clone() {
-            let ca_file = tls.ca_file.clone().expect("tls ca file must be provided");
-            let ca = match tokio::fs::read(ca_file).await {
-                Ok(v) => v,
-                Err(err) => {
-                    error!(message = "Failed to read tls ca file", error = %err);
-                    return None;
-                }
-            };
-            let settings = TlsSettings::from_options(&Some(tls)).expect("invalid tls settings");
-            let (crt, key) = settings.identity_pem().expect("invalid identity pem");
-            builder = builder
-                .add_root_certificate(Certificate::from_pem(&ca).expect("invalid ca"))
-                .identity(Identity::from_pkcs8_pem(&crt, &key).expect("invalid crt & key"));
-        }
-        let client = match builder
-            .timeout(Duration::from_secs(60))
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-        {
+        let client = match build_reqwest_client(tls.clone(), None, None).await {
             Ok(client) => client,
             Err(err) => {
                 error!(message = "Failed to build reqwest client", %err);
                 return None;
             }
         };
+
         match component.conprof_address() {
             Some(address) => Some(ConprofSource {
                 client,
