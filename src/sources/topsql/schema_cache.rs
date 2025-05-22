@@ -64,6 +64,7 @@ pub struct PartitionDefinition {
 pub struct TableDetail {
     pub name: String,
     pub db: String,
+    #[allow(unused)]
     pub id: i64,
 }
 
