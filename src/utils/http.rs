@@ -38,7 +38,9 @@ pub async fn build_reqwest_client(
                 .identity(
                     Identity::from_pkcs8_pem(&crt, &key)
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
-                );
+                )
+                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_hostnames(true);
         }
     }
 
