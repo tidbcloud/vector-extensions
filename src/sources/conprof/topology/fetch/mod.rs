@@ -91,13 +91,10 @@ impl TopologyFetcher {
             .get_up_stores(components)
             .await
             .context(FetchStoreTopologySnafu)?;
-        // TODO: temprory disable tiproxy topology fetcher due to:
-        // `2025-06-04T12:38:35.393078Z ERROR source{component_kind="source" component_id=conprof component_type=conprof}: vector::sources::conprof::controller: Failed to fetch topology. error=Failed to fetch tiproxy topology: Failed to parse topology value Json text: invalid type: string "3080", expected u16 at line 1 column 172`
-        //
-        // tiproxy::TiProxyTopologyFetcher::new(&mut self.etcd_client)
-        //     .get_up_tiproxys(components)
-        //     .await
-        //     .context(FetchTiProxyTopologySnafu)?;
+        tiproxy::TiProxyTopologyFetcher::new(&mut self.etcd_client)
+            .get_up_tiproxys(components)
+            .await
+            .context(FetchTiProxyTopologySnafu)?;
         lightning::KubeLightningTopologyFetcher::new(self.kube_client.clone())
             .get_up_lightnings(components)
             .await

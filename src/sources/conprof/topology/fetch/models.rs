@@ -25,6 +25,12 @@ pub struct TopologyValue {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TiProxyTopologyValue {
+    pub status_port: String,
+}
+
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StoresResponse {
     pub stores: Vec<StoreItem>,
 }
