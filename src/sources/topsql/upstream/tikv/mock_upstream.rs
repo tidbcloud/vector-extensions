@@ -47,6 +47,7 @@ impl ResourceMeteringPubSub for MockResourceMeteringPubSubServer {
                         sql_digest: Some(b"sql_digest".to_vec()),
                         plan_digest: Some(b"plan_digest".to_vec()),
                         label: Some(1),
+                        table_id: Some(1),
                     }
                     .encode_to_vec(),
                     items: vec![GroupTagRecordItem {

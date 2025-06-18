@@ -2,14 +2,13 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use chrono::Utc;
 use rand::Rng;
-use reqwest::{Certificate, Client, Identity};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use vector::{
     config::{GenerateConfig, SourceConfig, SourceContext},
     event::LogEvent,
     internal_events::StreamClosedError,
-    tls::TlsSettings,
     SourceSender,
 };
 use vector_lib::{
@@ -21,6 +20,7 @@ use vector_lib::{
 };
 
 use super::topsql::topology::{InstanceType, TopologyFetcher};
+use crate::utils::http::build_reqwest_client;
 
 const DEFAULT_MAX_REGIONS_PER_PD_REQUEST: usize = 51200;
 
@@ -61,32 +61,11 @@ impl SourceConfig for KeyvizConfig {
             format!("http://{}", self.pd_address)
         };
 
-        let mut builder = reqwest::Client::builder();
-        if let Some(tls) = tls.clone() {
-            let ca_file = tls.ca_file.clone().expect("tls ca file must be provided");
-            let ca = match tokio::fs::read(ca_file).await {
-                Ok(v) => v,
-                Err(err) => {
-                    error!(message = "Failed to read tls ca file", error = %err);
-                    return Err(Box::new(err));
-                }
-            };
-            let settings = TlsSettings::from_options(&Some(tls)).expect("invalid tls settings");
-            let (crt, key) = settings.identity_pem().expect("invalid identity pem");
-            builder = builder
-                .add_root_certificate(Certificate::from_pem(&ca).expect("invalid ca"))
-                .identity(Identity::from_pkcs8_pem(&crt, &key).expect("invalid crt & key"));
-        }
-
-        let client = match builder
-            .timeout(Duration::from_secs(60))
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-        {
+        let client = match build_reqwest_client(tls.clone(), None, None).await {
             Ok(client) => client,
             Err(err) => {
                 error!(message = "Failed to build reqwest client", %err);
-                return Err(Box::new(err));
+                return Err(format!("Failed to build reqwest client: {}", err).into());
             }
         };
 
@@ -115,7 +94,7 @@ impl SourceConfig for KeyvizConfig {
             }
 
             {
-                let https = tls.is_some();
+                let tls = tls.clone();
                 let mut shutdown = cx.shutdown.clone();
                 let mut client = client.clone();
                 let mut out = cx.out.clone();
@@ -126,7 +105,7 @@ impl SourceConfig for KeyvizConfig {
                             _ = &mut shutdown => break,
                             _ = fetch_and_send_tidb_schema(
                                 &mut client,
-                                https,
+                                &tls,
                                 &mut etcd,
                                 &mut schema_version,
                                 &mut out,
@@ -398,7 +377,7 @@ async fn fetch_and_update_tidb_instances(
 
 async fn fetch_and_send_tidb_schema(
     client: &mut Client,
-    https: bool,
+    tls: &Option<TlsConfig>,
     etcd: &mut etcd_client::Client,
     schema_version: &mut i32,
     out: &mut SourceSender,
@@ -441,7 +420,7 @@ async fn fetch_and_send_tidb_schema(
         let idx = rand::thread_rng().gen_range(0..tidb_instances.len());
         tidb_instances[idx].clone()
     };
-    let dbinfos = match fetch_tidb_dbinfos(client, https, &tidb_instance).await {
+    let dbinfos = match fetch_tidb_dbinfos(client, tls, &tidb_instance).await {
         Ok(v) => v,
         Err(err) => {
             warn!(message = "Failed to fetch tidb db info", %err);
@@ -455,7 +434,7 @@ async fn fetch_and_send_tidb_schema(
             continue;
         }
         let tableinfos =
-            match fetch_tidb_tableinfos(client, https, &tidb_instance, &dbinfo.db_name.o).await {
+            match fetch_tidb_tableinfos(client, tls, &tidb_instance, &dbinfo.db_name.o).await {
                 Ok(v) => v,
                 Err(err) => {
                     update_success = false;
@@ -487,16 +466,17 @@ async fn fetch_and_send_tidb_schema(
 
 async fn fetch_tidb_dbinfos(
     client: &mut Client,
-    https: bool,
+    tls: &Option<TlsConfig>,
     tidb_instance: &str,
 ) -> reqwest::Result<Vec<DBInfo>> {
     let schema = if tidb_instance.starts_with("http") {
         ""
-    } else if https {
+    } else if tls.is_some() {
         "https://"
     } else {
         "http://"
     };
+
     client
         .get(format!("{}{}/schema", schema, tidb_instance))
         .send()
@@ -507,20 +487,23 @@ async fn fetch_tidb_dbinfos(
 
 async fn fetch_tidb_tableinfos(
     client: &mut Client,
-    https: bool,
+    tls: &Option<TlsConfig>,
     tidb_instance: &str,
     dbname: &str,
 ) -> reqwest::Result<Vec<TableInfo>> {
     let schema = if tidb_instance.starts_with("http") {
         ""
-    } else if https {
+    } else if tls.is_some() {
         "https://"
     } else {
         "http://"
     };
-    let dbname = url::form_urlencoded::byte_serialize(dbname.as_bytes()).collect::<String>();
+
     client
-        .get(format!("{}{}/schema/{}", schema, tidb_instance, dbname))
+        .get(format!(
+            "{}{}/schema/{}?id_name_only=true",
+            schema, tidb_instance, dbname
+        ))
         .send()
         .await?
         .json()

@@ -1,3 +1,4 @@
+mod lightning;
 mod models;
 mod pd;
 mod store;
@@ -22,6 +23,8 @@ use crate::sources::conprof::topology::Component;
 pub enum FetchError {
     #[snafu(display("Failed to build TLS settings: {}", source))]
     BuildTlsSettings { source: vector::tls::TlsError },
+    #[snafu(display("Failed to build kubernetes client: {}", source))]
+    BuildKubeClient { source: kube::Error },
     #[snafu(display("Failed to read ca file: {}", source))]
     ReadCaFile { source: std::io::Error },
     #[snafu(display("Failed to read crt file: {}", source))]
@@ -42,12 +45,15 @@ pub enum FetchError {
     FetchStoreTopology { source: store::FetchError },
     #[snafu(display("Failed to fetch tiproxy topology: {}", source))]
     FetchTiProxyTopology { source: tiproxy::FetchError },
+    #[snafu(display("Failed to fetch lightning topology: {}", source))]
+    FetchLightningTopology { source: lightning::FetchError },
 }
 
 pub struct TopologyFetcher {
     pd_address: String,
     http_client: HttpClient<hyper::Body>,
     etcd_client: etcd_client::Client,
+    kube_client: kube::Client,
 }
 
 impl TopologyFetcher {
@@ -59,11 +65,13 @@ impl TopologyFetcher {
         let pd_address = Self::polish_address(pd_address, &tls_config)?;
         let http_client = Self::build_http_client(&tls_config, proxy_config)?;
         let etcd_client = Self::build_etcd_client(&pd_address, &tls_config).await?;
+        let kube_client = Self::build_kube_client().await?;
 
         Ok(Self {
             pd_address,
             http_client,
             etcd_client,
+            kube_client,
         })
     }
 
@@ -87,6 +95,10 @@ impl TopologyFetcher {
             .get_up_tiproxys(components)
             .await
             .context(FetchTiProxyTopologySnafu)?;
+        lightning::KubeLightningTopologyFetcher::new(self.kube_client.clone())
+            .get_up_lightnings(components)
+            .await
+            .context(FetchLightningTopologySnafu)?;
         Ok(())
     }
 
@@ -119,6 +131,12 @@ impl TopologyFetcher {
         let http_client =
             HttpClient::new(tls_settings, proxy_config).context(BuildHttpClientSnafu)?;
         Ok(http_client)
+    }
+
+    async fn build_kube_client() -> Result<kube::Client, FetchError> {
+        kube::Client::try_default()
+            .await
+            .context(BuildKubeClientSnafu)
     }
 
     async fn build_etcd_client(
