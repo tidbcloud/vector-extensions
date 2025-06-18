@@ -26,6 +26,8 @@ pub enum FetchError {
     TopologyValueJsonFromStr { source: serde_json::Error },
     #[snafu(display("Failed to parse tiproxy address: {}", source))]
     ParseTiProxyAddress { source: utils::ParseError },
+    #[snafu(display("Failed to parse status_port: {}", source))]
+    ParseStatusPort { source: std::num::ParseIntError },
 }
 
 #[allow(clippy::upper_case_acronyms)]
@@ -36,7 +38,7 @@ enum EtcdTopology {
     },
     Info {
         address: String,
-        value: models::TopologyValue,
+        value: models::TiProxyTopologyValue,
     },
 }
 
@@ -69,15 +71,16 @@ impl<'a> TiProxyTopologyFetcher<'a> {
                     }
                 }
                 Some(EtcdTopology::Info { address, value }) => {
-                    let (host, port) =
+                    let (host, primary_port) =
                         utils::parse_host_port(&address).context(ParseTiProxyAddressSnafu)?;
+                    let secondary_port = value.status_port.parse::<u16>().context(ParseStatusPortSnafu)?;
                     tiproxys.push((
                         address,
                         Component {
                             instance_type: InstanceType::TiProxy,
                             host,
-                            primary_port: port,
-                            secondary_port: value.status_port,
+                            primary_port,
+                            secondary_port,
                         },
                     ));
                 }
@@ -139,7 +142,7 @@ impl<'a> TiProxyTopologyFetcher<'a> {
     }
 
     fn parse_info(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
-        let info = serde_json::from_str::<models::TopologyValue>(value)
+        let info = serde_json::from_str::<models::TiProxyTopologyValue>(value)
             .context(TopologyValueJsonFromStrSnafu)?;
         Ok(EtcdTopology::Info {
             address: address.to_owned(),
