@@ -24,7 +24,10 @@ pub mod upstream;
 #[derive(Debug, Clone)]
 pub struct TopSQLConfig {
     /// PLACEHOLDER
-    pub pd_address: String,
+    pub tidb_group: String,
+
+    /// PLACEHOLDER
+    pub pd_address: Option<String>,
 
     /// PLACEHOLDER
     pub tls: Option<TlsConfig>,
@@ -65,7 +68,8 @@ pub const fn default_downsampling_interval() -> u32 {
 impl GenerateConfig for TopSQLConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
-            pd_address: "127.0.0.1:2379".to_owned(),
+            tidb_group: String::new(),
+            pd_address: None,
             tls: None,
             init_retry_delay_seconds: default_init_retry_delay(),
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
@@ -82,6 +86,7 @@ impl SourceConfig for TopSQLConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
         self.validate_tls()?;
 
+        let tidb_group = self.tidb_group.clone();
         let pd_address = self.pd_address.clone();
         let tls = self.tls.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
@@ -99,6 +104,7 @@ impl SourceConfig for TopSQLConfig {
                 schema_update_interval,
                 tls,
                 &cx.proxy,
+                tidb_group,
                 cx.out,
             )
             .await

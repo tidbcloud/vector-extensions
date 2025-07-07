@@ -19,7 +19,7 @@ use vector_lib::{
     tls::TlsConfig,
 };
 
-use super::topsql::topology::{InstanceType, TopologyFetcher};
+use super::conprof::topology::{InstanceType, TopologyFetcher};
 use crate::utils::http::build_reqwest_client;
 
 const DEFAULT_MAX_REGIONS_PER_PD_REQUEST: usize = 51200;

@@ -2,6 +2,7 @@ mod models;
 mod pd;
 mod store;
 mod tidb;
+mod tidb_nextgen;
 mod utils;
 
 #[cfg(test)]
@@ -21,6 +22,8 @@ use crate::sources::topsql::topology::Component;
 pub enum FetchError {
     #[snafu(display("Failed to build TLS settings: {}", source))]
     BuildTlsSettings { source: vector::tls::TlsError },
+    #[snafu(display("Failed to build kubernetes client: {}", source))]
+    BuildKubeClient { source: kube::Error },
     #[snafu(display("Failed to read ca file: {}", source))]
     ReadCaFile { source: std::io::Error },
     #[snafu(display("Failed to read crt file: {}", source))]
@@ -39,28 +42,36 @@ pub enum FetchError {
     FetchTiDBTopology { source: tidb::FetchError },
     #[snafu(display("Failed to fetch store topology: {}", source))]
     FetchStoreTopology { source: store::FetchError },
+    #[snafu(display("Failed to fetch lightning topology: {}", source))]
+    FetchTiDBNextGenTopology { source: tidb_nextgen::FetchError },
 }
 
 pub struct TopologyFetcher {
-    pd_address: String,
-    http_client: HttpClient<hyper::Body>,
-    pub etcd_client: etcd_client::Client,
+    // pd_address: String,
+    // http_client: HttpClient<hyper::Body>,
+    // pub etcd_client: etcd_client::Client,
+    tidb_group: String,
+    kube_client: kube::Client,
 }
 
 impl TopologyFetcher {
     pub async fn new(
-        pd_address: String,
-        tls_config: Option<TlsConfig>,
-        proxy_config: &ProxyConfig,
+        // pd_address: String,
+        // tls_config: Option<TlsConfig>,
+        // proxy_config: &ProxyConfig,
+        tidb_group: String,
     ) -> Result<Self, FetchError> {
-        let pd_address = Self::polish_address(pd_address, &tls_config)?;
-        let http_client = Self::build_http_client(&tls_config, proxy_config)?;
-        let etcd_client = Self::build_etcd_client(&pd_address, &tls_config).await?;
+        // let pd_address = Self::polish_address(pd_address, &tls_config)?;
+        // let http_client = Self::build_http_client(&tls_config, proxy_config)?;
+        // let etcd_client = Self::build_etcd_client(&pd_address, &tls_config).await?;
+        let kube_client = Self::build_kube_client().await?;
 
         Ok(Self {
-            pd_address,
-            http_client,
-            etcd_client,
+            // pd_address,
+            // http_client,
+            // etcd_client,
+            tidb_group,
+            kube_client,
         })
     }
 
@@ -68,18 +79,25 @@ impl TopologyFetcher {
         &mut self,
         components: &mut HashSet<Component>,
     ) -> Result<(), FetchError> {
-        pd::PDTopologyFetcher::new(&self.pd_address, &self.http_client)
-            .get_up_pds(components)
-            .await
-            .context(FetchPDTopologySnafu)?;
-        tidb::TiDBTopologyFetcher::new(&mut self.etcd_client)
-            .get_up_tidbs(components)
-            .await
-            .context(FetchTiDBTopologySnafu)?;
-        store::StoreTopologyFetcher::new(&self.pd_address, &self.http_client)
-            .get_up_stores(components)
-            .await
-            .context(FetchStoreTopologySnafu)?;
+        // pd::PDTopologyFetcher::new(&self.pd_address, &self.http_client)
+        //     .get_up_pds(components)
+        //     .await
+        //     .context(FetchPDTopologySnafu)?;
+        // tidb::TiDBTopologyFetcher::new(&mut self.etcd_client)
+        //     .get_up_tidbs(components)
+        //     .await
+        //     .context(FetchTiDBTopologySnafu)?;
+        // store::StoreTopologyFetcher::new(&self.pd_address, &self.http_client)
+        //     .get_up_stores(components)
+        //     .await
+        //     .context(FetchStoreTopologySnafu)?;
+        tidb_nextgen::TiDBNextGenTopologyFetcher::new(
+            self.kube_client.clone(),
+            self.tidb_group.clone(),
+        )
+        .get_up_tidbs(components)
+        .await
+        .context(FetchTiDBNextGenTopologySnafu)?;
         Ok(())
     }
 
@@ -149,6 +167,12 @@ impl TopologyFetcher {
         };
 
         Ok(conn_opt)
+    }
+
+    async fn build_kube_client() -> Result<kube::Client, FetchError> {
+        kube::Client::try_default()
+            .await
+            .context(BuildKubeClientSnafu)
     }
 }
 
