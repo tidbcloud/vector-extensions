@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
-use vector::event::Event;
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use vector_lib::event::LogEvent;
+use vector::event::{Event, Metric, MetricKind, MetricTags, MetricValue};
 
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::{
@@ -109,15 +109,34 @@ impl Buf {
         self
     }
 
-    pub fn build_event(&mut self) -> Option<LogEvent> {
+    pub fn build_events(&mut self) -> Option<Vec<Event>> {
+        let mut tags = BTreeMap::new();
+        for (label, value) in &self.labels {
+            tags.insert(label.to_string(), value.clone());
+        }
+
         let res = if self.timestamps.is_empty() || self.values.is_empty() {
             None
         } else {
-            Some(make_metric_like_log_event(
-                &self.labels,
-                &self.timestamps,
-                &self.values,
-            ))
+            let mut events = vec![];
+            for (timestamp, value) in std::iter::zip(&self.timestamps, &self.values) {
+                let metric = Metric::new(
+                    self.labels[0].1.clone(),
+                    MetricKind::Absolute,
+                    MetricValue::Gauge {
+                        value: value.clone(),
+                    },
+                )
+                .with_timestamp(Some(timestamp.clone()))
+                .with_tags(Some(MetricTags::from(tags.clone())));
+                events.push(Event::Metric(metric));
+            }
+            Some(events)
+            // Some(make_metric_like_log_event(
+            //     &self.labels,
+            //     &self.timestamps,
+            //     &self.values,
+            // ))
         };
 
         self.timestamps.clear();

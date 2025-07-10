@@ -226,8 +226,8 @@ impl ResourceUsageRecordParser {
                                 None
                             }
                         }));
-                    if let Some(event) = buf.build_event() {
-                        logs.push(Event::Log(event));
+                    if let Some(mut e) = buf.build_events() {
+                        logs.append(&mut e);
                     }
                 )*
             };

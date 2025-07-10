@@ -291,7 +291,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
 
 impl TopSqlSubResponseParser {
     fn parse_tidb_record(record: TopSqlRecord, instance: String) -> Vec<Event> {
-        let mut logs = vec![];
+        let mut events = vec![];
 
         let mut buf = Buf::default();
         buf.instance(instance)
@@ -310,8 +310,8 @@ impl TopSqlSubResponseParser {
                                 None
                             }
                         }));
-                    if let Some(event) = buf.build_event() {
-                        logs.push(Event::Log(event));
+                    if let Some(mut e) = buf.build_events() {
+                        events.append(&mut e);
                     }
                 )*
             };
@@ -351,12 +351,12 @@ impl TopSqlSubResponseParser {
                         None
                     }
                 }));
-            if let Some(event) = buf.build_event() {
-                logs.push(Event::Log(event));
+            if let Some(mut e) = buf.build_events() {
+                events.append(&mut e);
             }
         }
 
-        logs
+        events
     }
 
     fn parse_tidb_sql_meta(sql_meta: SqlMeta) -> Vec<Event> {
@@ -392,19 +392,38 @@ impl TopSqlSubResponseParser {
     }
 
     fn parse_tidb_plan_meta(plan_meta: PlanMeta) -> Vec<Event> {
-        vec![Event::Log(make_metric_like_log_event(
-            &[
-                (LABEL_NAME, METRIC_NAME_PLAN_META.to_owned()),
-                (LABEL_PLAN_DIGEST, hex::encode_upper(plan_meta.plan_digest)),
-                (LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan),
-                (
-                    LABEL_ENCODED_NORMALIZED_PLAN,
-                    plan_meta.encoded_normalized_plan,
-                ),
-            ],
-            &[Utc::now()],
-            &[1.0],
-        ))]
+        let mut tags = BTreeMap::new();
+        tags.insert(
+            LABEL_PLAN_DIGEST.to_owned(),
+            hex::encode_upper(plan_meta.plan_digest),
+        );
+        tags.insert(LABEL_NORMALIZED_PLAN.to_owned(), plan_meta.normalized_plan);
+        tags.insert(
+            LABEL_ENCODED_NORMALIZED_PLAN.to_owned(),
+            plan_meta.encoded_normalized_plan,
+        );
+        let metric = Metric::new(
+            METRIC_NAME_PLAN_META,
+            MetricKind::Absolute,
+            MetricValue::Gauge { value: 1.0 },
+        )
+        .with_timestamp(Some(Utc::now()))
+        .with_tags(Some(MetricTags::from(tags)));
+        vec![Event::Metric(metric)]
+
+        // vec![Event::Log(make_metric_like_log_event(
+        //     &[
+        //         (LABEL_NAME, METRIC_NAME_PLAN_META.to_owned()),
+        //         (LABEL_PLAN_DIGEST, hex::encode_upper(plan_meta.plan_digest)),
+        //         (LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan),
+        //         (
+        //             LABEL_ENCODED_NORMALIZED_PLAN,
+        //             plan_meta.encoded_normalized_plan,
+        //         ),
+        //     ],
+        //     &[Utc::now()],
+        //     &[1.0],
+        // ))]
     }
 }
 
