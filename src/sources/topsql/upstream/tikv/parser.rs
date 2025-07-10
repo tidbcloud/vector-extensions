@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use prost::Message;
-use vector::event::LogEvent;
+use vector::event::Event;
 
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
@@ -25,7 +25,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         response: Self::UpstreamEvent,
         instance: String,
         schema_cache: Arc<SchemaCache>,
-    ) -> Vec<LogEvent> {
+    ) -> Vec<Event> {
         match response.record_oneof {
             Some(RecordOneof::Record(record)) => {
                 Self::parse_tikv_record(record, instance, schema_cache)
@@ -176,7 +176,7 @@ impl ResourceUsageRecordParser {
         record: GroupTagRecord,
         instance: String,
         schema_cache: Arc<SchemaCache>,
-    ) -> Vec<LogEvent> {
+    ) -> Vec<Event> {
         // Log schema cache info
         debug!(
             message = "Schema cache available in parse_tikv_record",
@@ -227,7 +227,7 @@ impl ResourceUsageRecordParser {
                             }
                         }));
                     if let Some(event) = buf.build_event() {
-                        logs.push(event);
+                        logs.push(Event::Log(event));
                     }
                 )*
             };

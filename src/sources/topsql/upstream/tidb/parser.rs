@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use chrono::Utc;
-use vector::event::LogEvent;
+use vector::event::{Event, Metric, MetricKind, MetricTags, MetricValue};
 
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
@@ -27,7 +27,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         response: Self::UpstreamEvent,
         instance: String,
         _schema_cache: Arc<SchemaCache>,
-    ) -> Vec<LogEvent> {
+    ) -> Vec<Event> {
         match response.resp_oneof {
             Some(RespOneof::Record(record)) => Self::parse_tidb_record(record, instance),
             Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
@@ -290,7 +290,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
 }
 
 impl TopSqlSubResponseParser {
-    fn parse_tidb_record(record: TopSqlRecord, instance: String) -> Vec<LogEvent> {
+    fn parse_tidb_record(record: TopSqlRecord, instance: String) -> Vec<Event> {
         let mut logs = vec![];
 
         let mut buf = Buf::default();
@@ -311,7 +311,7 @@ impl TopSqlSubResponseParser {
                             }
                         }));
                     if let Some(event) = buf.build_event() {
-                        logs.push(event);
+                        logs.push(Event::Log(event));
                     }
                 )*
             };
@@ -352,28 +352,47 @@ impl TopSqlSubResponseParser {
                     }
                 }));
             if let Some(event) = buf.build_event() {
-                logs.push(event);
+                logs.push(Event::Log(event));
             }
         }
 
         logs
     }
 
-    fn parse_tidb_sql_meta(sql_meta: SqlMeta) -> Vec<LogEvent> {
-        vec![make_metric_like_log_event(
-            &[
-                (LABEL_NAME, METRIC_NAME_SQL_META.to_owned()),
-                (LABEL_SQL_DIGEST, hex::encode_upper(sql_meta.sql_digest)),
-                (LABEL_NORMALIZED_SQL, sql_meta.normalized_sql),
-                (LABEL_IS_INTERNAL_SQL, sql_meta.is_internal_sql.to_string()),
-            ],
-            &[Utc::now()],
-            &[1.0],
-        )]
+    fn parse_tidb_sql_meta(sql_meta: SqlMeta) -> Vec<Event> {
+        let mut tags = BTreeMap::new();
+        tags.insert(
+            LABEL_SQL_DIGEST.to_owned(),
+            hex::encode_upper(sql_meta.sql_digest),
+        );
+        tags.insert(LABEL_NORMALIZED_SQL.to_owned(), sql_meta.normalized_sql);
+        tags.insert(
+            LABEL_IS_INTERNAL_SQL.to_owned(),
+            sql_meta.is_internal_sql.to_string(),
+        );
+        let metric = Metric::new(
+            METRIC_NAME_SQL_META,
+            MetricKind::Absolute,
+            MetricValue::Gauge { value: 1.0 },
+        )
+        .with_timestamp(Some(Utc::now()))
+        .with_tags(Some(MetricTags::from(tags)));
+        vec![Event::Metric(metric)]
+
+        // vec![make_metric_like_log_event(
+        //     &[
+        //         (LABEL_NAME, METRIC_NAME_SQL_META.to_owned()),
+        //         (LABEL_SQL_DIGEST, hex::encode_upper(sql_meta.sql_digest)),
+        //         (LABEL_NORMALIZED_SQL, sql_meta.normalized_sql),
+        //         (LABEL_IS_INTERNAL_SQL, sql_meta.is_internal_sql.to_string()),
+        //     ],
+        //     &[Utc::now()],
+        //     &[1.0],
+        // )]
     }
 
-    fn parse_tidb_plan_meta(plan_meta: PlanMeta) -> Vec<LogEvent> {
-        vec![make_metric_like_log_event(
+    fn parse_tidb_plan_meta(plan_meta: PlanMeta) -> Vec<Event> {
+        vec![Event::Log(make_metric_like_log_event(
             &[
                 (LABEL_NAME, METRIC_NAME_PLAN_META.to_owned()),
                 (LABEL_PLAN_DIGEST, hex::encode_upper(plan_meta.plan_digest)),
@@ -385,7 +404,7 @@ impl TopSqlSubResponseParser {
             ],
             &[Utc::now()],
             &[1.0],
-        )]
+        ))]
     }
 }
 

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use vector::event::Event;
 use std::sync::Arc;
 use vector_lib::event::LogEvent;
 
@@ -18,7 +19,7 @@ pub trait UpstreamEventParser {
         event: Self::UpstreamEvent,
         instance: String,
         schema_cache: Arc<SchemaCache>,
-    ) -> Vec<LogEvent>;
+    ) -> Vec<Event>;
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent>;
 
