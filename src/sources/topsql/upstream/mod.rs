@@ -6,8 +6,8 @@ mod consts;
 mod tls_proxy;
 mod utils;
 
-use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 
 use futures::StreamExt;
 use tokio::time;
@@ -65,6 +65,7 @@ pub struct TopSQLSource {
     top_n: usize,
     downsampling_interval: u32,
     schema_cache: Arc<SchemaCache>,
+    keyspace_to_vmtenants: HashMap<String, (String, String)>,
 }
 
 enum State {
@@ -83,6 +84,7 @@ impl TopSQLSource {
         top_n: usize,
         downsampling_interval: u32,
         schema_cache: Arc<SchemaCache>,
+        keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Option<Self> {
         let protocal = if tls.is_none() {
             "http".into()
@@ -107,6 +109,7 @@ impl TopSQLSource {
                 top_n,
                 downsampling_interval,
                 schema_cache,
+                keyspace_to_vmtenants,
             }),
             None => None,
         }
@@ -242,6 +245,7 @@ impl TopSQLSource {
                 response,
                 self.instance.clone(),
                 self.schema_cache.clone(),
+                self.keyspace_to_vmtenants.clone(),
             );
             batch.append(&mut events);
         }

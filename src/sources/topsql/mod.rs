@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use vector::config::{GenerateConfig, SourceConfig, SourceContext};
 use vector_lib::{
@@ -24,7 +24,13 @@ pub mod upstream;
 #[derive(Debug, Clone)]
 pub struct TopSQLConfig {
     /// PLACEHOLDER
-    pub tidb_group: String,
+    pub tidb_group: Option<String>,
+
+    /// PLACEHOLDER
+    pub label_k8s_instance: Option<String>,
+
+    /// PLACEHOLDER
+    pub keyspace_to_vmtenants: Option<String>,
 
     /// PLACEHOLDER
     pub pd_address: Option<String>,
@@ -68,7 +74,9 @@ pub const fn default_downsampling_interval() -> u32 {
 impl GenerateConfig for TopSQLConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
-            tidb_group: String::new(),
+            tidb_group: None,
+            label_k8s_instance: None,
+            keyspace_to_vmtenants: None,
             pd_address: None,
             tls: None,
             init_retry_delay_seconds: default_init_retry_delay(),
@@ -87,6 +95,8 @@ impl SourceConfig for TopSQLConfig {
         self.validate_tls()?;
 
         let tidb_group = self.tidb_group.clone();
+        let label_k8s_instance = self.label_k8s_instance.clone();
+        let keyspace_to_vmtenants = self.keyspace_to_vmtenants.clone();
         let pd_address = self.pd_address.clone();
         let tls = self.tls.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
@@ -94,6 +104,21 @@ impl SourceConfig for TopSQLConfig {
         let top_n = self.top_n;
         let downsampling_interval = self.downsampling_interval;
         let schema_update_interval = Duration::from_secs(60);
+
+        let mut keyspace_to_vmtenants_map = HashMap::new();
+        if let Some(keyspace_to_vmtenants) = keyspace_to_vmtenants {
+            keyspace_to_vmtenants.split(",").for_each(|kv| {
+                let items = kv.split(":").collect::<Vec<&str>>();
+                if items.len() != 3 {
+                    return;
+                }
+                keyspace_to_vmtenants_map.insert(
+                    items[0].to_string(),
+                    (items[1].to_string(), items[2].to_string()),
+                );
+            });
+        }
+
         Ok(Box::pin(async move {
             let controller = Controller::new(
                 pd_address,
@@ -105,6 +130,8 @@ impl SourceConfig for TopSQLConfig {
                 tls,
                 &cx.proxy,
                 tidb_group,
+                label_k8s_instance,
+                keyspace_to_vmtenants_map,
                 cx.out,
             )
             .await

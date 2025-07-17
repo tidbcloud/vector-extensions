@@ -51,18 +51,21 @@ impl TopSqlPubSub for MockTopSqlPubSubServer {
                 stmt_duration_sum_ns: 30,
                 stmt_duration_count: 20,
             }],
+            keyspace_name: Vec::new(),
         };
 
         let dump_sql_meta = SqlMeta {
             sql_digest: b"sql_digest".to_vec(),
             normalized_sql: "sql_text".to_owned(),
             is_internal_sql: false,
+            keyspace_name: Vec::new(),
         };
 
         let dump_plan_meta = PlanMeta {
             plan_digest: b"plan_digest".to_vec(),
             normalized_plan: "plan_text".to_owned(),
             encoded_normalized_plan: "encoded_plan".to_owned(),
+            keyspace_name: Vec::new(),
         };
 
         Ok(Response::new(Box::pin(stream::iter(vec![

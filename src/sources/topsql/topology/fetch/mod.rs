@@ -3,6 +3,7 @@ mod pd;
 mod store;
 mod tidb;
 mod tidb_nextgen;
+mod tikv_nextgen;
 mod utils;
 
 #[cfg(test)]
@@ -42,15 +43,18 @@ pub enum FetchError {
     FetchTiDBTopology { source: tidb::FetchError },
     #[snafu(display("Failed to fetch store topology: {}", source))]
     FetchStoreTopology { source: store::FetchError },
-    #[snafu(display("Failed to fetch lightning topology: {}", source))]
+    #[snafu(display("Failed to fetch tidb nextgen topology: {}", source))]
     FetchTiDBNextGenTopology { source: tidb_nextgen::FetchError },
+    #[snafu(display("Failed to fetch tikv nextgen topology: {}", source))]
+    FetchTiKVNextGenTopology { source: tikv_nextgen::FetchError },
 }
 
 pub struct TopologyFetcher {
     // pd_address: String,
     // http_client: HttpClient<hyper::Body>,
     // pub etcd_client: etcd_client::Client,
-    tidb_group: String,
+    tidb_group: Option<String>,
+    label_k8s_instance: Option<String>,
     kube_client: kube::Client,
 }
 
@@ -59,7 +63,8 @@ impl TopologyFetcher {
         // pd_address: String,
         // tls_config: Option<TlsConfig>,
         // proxy_config: &ProxyConfig,
-        tidb_group: String,
+        tidb_group: Option<String>,
+        label_k8s_instance: Option<String>,
     ) -> Result<Self, FetchError> {
         // let pd_address = Self::polish_address(pd_address, &tls_config)?;
         // let http_client = Self::build_http_client(&tls_config, proxy_config)?;
@@ -71,6 +76,7 @@ impl TopologyFetcher {
             // http_client,
             // etcd_client,
             tidb_group,
+            label_k8s_instance,
             kube_client,
         })
     }
@@ -91,83 +97,94 @@ impl TopologyFetcher {
         //     .get_up_stores(components)
         //     .await
         //     .context(FetchStoreTopologySnafu)?;
-        tidb_nextgen::TiDBNextGenTopologyFetcher::new(
-            self.kube_client.clone(),
-            self.tidb_group.clone(),
-        )
-        .get_up_tidbs(components)
-        .await
-        .context(FetchTiDBNextGenTopologySnafu)?;
+        if let Some(tidb_group) = &self.tidb_group {
+            tidb_nextgen::TiDBNextGenTopologyFetcher::new(
+                self.kube_client.clone(),
+                tidb_group.clone(),
+            )
+            .get_up_tidbs(components)
+            .await
+            .context(FetchTiDBNextGenTopologySnafu)?;
+        }
+        if let Some(label_k8s_instance) = &self.label_k8s_instance {
+            tikv_nextgen::TiKVNextGenTopologyFetcher::new(
+                self.kube_client.clone(),
+                label_k8s_instance.clone(),
+            )
+            .get_up_tikvs(components)
+            .await
+            .context(FetchTiKVNextGenTopologySnafu)?;
+        }
         Ok(())
     }
 
-    fn polish_address(
-        mut address: String,
-        tls_config: &Option<TlsConfig>,
-    ) -> Result<String, FetchError> {
-        let uri: hyper::Uri = address.parse().context(ParseAddressSnafu)?;
-        if uri.scheme().is_none() {
-            if tls_config.is_some() {
-                address = format!("https://{}", address);
-            } else {
-                address = format!("http://{}", address);
-            }
-        }
+    // fn polish_address(
+    //     mut address: String,
+    //     tls_config: &Option<TlsConfig>,
+    // ) -> Result<String, FetchError> {
+    //     let uri: hyper::Uri = address.parse().context(ParseAddressSnafu)?;
+    //     if uri.scheme().is_none() {
+    //         if tls_config.is_some() {
+    //             address = format!("https://{}", address);
+    //         } else {
+    //             address = format!("http://{}", address);
+    //         }
+    //     }
 
-        if address.ends_with('/') {
-            address.pop();
-        }
+    //     if address.ends_with('/') {
+    //         address.pop();
+    //     }
 
-        Ok(address)
-    }
+    //     Ok(address)
+    // }
 
-    fn build_http_client(
-        tls_config: &Option<TlsConfig>,
-        proxy_config: &ProxyConfig,
-    ) -> Result<HttpClient<hyper::Body>, FetchError> {
-        let tls_settings =
-            MaybeTlsSettings::tls_client(tls_config).context(BuildTlsSettingsSnafu)?;
-        let http_client =
-            HttpClient::new(tls_settings, proxy_config).context(BuildHttpClientSnafu)?;
-        Ok(http_client)
-    }
+    // fn build_http_client(
+    //     tls_config: &Option<TlsConfig>,
+    //     proxy_config: &ProxyConfig,
+    // ) -> Result<HttpClient<hyper::Body>, FetchError> {
+    //     let tls_settings =
+    //         MaybeTlsSettings::tls_client(tls_config).context(BuildTlsSettingsSnafu)?;
+    //     let http_client =
+    //         HttpClient::new(tls_settings, proxy_config).context(BuildHttpClientSnafu)?;
+    //     Ok(http_client)
+    // }
 
-    async fn build_etcd_client(
-        pd_address: &str,
-        tls_config: &Option<TlsConfig>,
-    ) -> Result<etcd_client::Client, FetchError> {
-        let etcd_connect_opt = Self::build_etcd_connect_opt(tls_config)?;
-        let etcd_client = etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
-            .await
-            .context(BuildEtcdClientSnafu)?;
-        Ok(etcd_client)
-    }
+    // async fn build_etcd_client(
+    //     pd_address: &str,
+    //     tls_config: &Option<TlsConfig>,
+    // ) -> Result<etcd_client::Client, FetchError> {
+    //     let etcd_connect_opt = Self::build_etcd_connect_opt(tls_config)?;
+    //     let etcd_client = etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
+    //         .await
+    //         .context(BuildEtcdClientSnafu)?;
+    //     Ok(etcd_client)
+    // }
 
-    fn build_etcd_connect_opt(
-        tls_config: &Option<TlsConfig>,
-    ) -> Result<Option<etcd_client::ConnectOptions>, FetchError> {
-        let conn_opt = if let Some(tls_config) = tls_config.as_ref() {
-            let mut tls_options = etcd_client::TlsOptions::new();
+    // fn build_etcd_connect_opt(
+    //     tls_config: &Option<TlsConfig>,
+    // ) -> Result<Option<etcd_client::ConnectOptions>, FetchError> {
+    //     let conn_opt = if let Some(tls_config) = tls_config.as_ref() {
+    //         let mut tls_options = etcd_client::TlsOptions::new();
 
-            if let Some(ca_file) = tls_config.ca_file.as_ref() {
-                let cacert = read(ca_file).context(ReadCaFileSnafu)?;
-                tls_options = tls_options.ca_certificate(etcd_client::Certificate::from_pem(cacert))
-            }
+    //         if let Some(ca_file) = tls_config.ca_file.as_ref() {
+    //             let cacert = read(ca_file).context(ReadCaFileSnafu)?;
+    //             tls_options = tls_options.ca_certificate(etcd_client::Certificate::from_pem(cacert))
+    //         }
 
-            if let (Some(crt_file), Some(key_file)) =
-                (tls_config.crt_file.as_ref(), tls_config.key_file.as_ref())
-            {
-                let cert = read(crt_file).context(ReadCrtFileSnafu)?;
-                let key = read(key_file).context(ReadKeyFileSnafu)?;
-                tls_options = tls_options.identity(etcd_client::Identity::from_pem(cert, key));
-            }
-            Some(etcd_client::ConnectOptions::new().with_tls(tls_options))
-        } else {
-            None
-        };
+    //         if let (Some(crt_file), Some(key_file)) =
+    //             (tls_config.crt_file.as_ref(), tls_config.key_file.as_ref())
+    //         {
+    //             let cert = read(crt_file).context(ReadCrtFileSnafu)?;
+    //             let key = read(key_file).context(ReadKeyFileSnafu)?;
+    //             tls_options = tls_options.identity(etcd_client::Identity::from_pem(cert, key));
+    //         }
+    //         Some(etcd_client::ConnectOptions::new().with_tls(tls_options))
+    //     } else {
+    //         None
+    //     };
 
-        Ok(conn_opt)
-    }
+    //     Ok(conn_opt)
+    // }
 
     async fn build_kube_client() -> Result<kube::Client, FetchError> {
         kube::Client::try_default()

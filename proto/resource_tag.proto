@@ -10,6 +10,7 @@ message ResourceGroupTag {
   // This is for TiKV resource_metering to collect execution information by the key label.
   optional ResourceGroupTagLabel label = 3;
   optional int64 table_id = 4;
+  optional bytes keyspace_name = 5;
 }
 
 enum ResourceGroupTagLabel {

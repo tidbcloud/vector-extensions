@@ -1,13 +1,13 @@
 use chrono::{DateTime, Utc};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use vector::event::{Event, Metric, MetricKind, MetricTags, MetricValue};
 
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::{
     consts::{
-        LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, LABEL_PLAN_DIGEST,
-        LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
+        LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_KEYSPACE_NAME, LABEL_NAME,
+        LABEL_PLAN_DIGEST, LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
     },
     utils::make_metric_like_log_event,
 };
@@ -19,6 +19,7 @@ pub trait UpstreamEventParser {
         event: Self::UpstreamEvent,
         instance: String,
         schema_cache: Arc<SchemaCache>,
+        keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Vec<Event>;
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent>;
@@ -45,6 +46,7 @@ impl Default for Buf {
                 (LABEL_DB_NAME, String::new()),
                 (LABEL_TABLE_NAME, String::new()),
                 (LABEL_TABLE_ID, String::new()),
+                (LABEL_KEYSPACE_NAME, String::new()),
             ],
             timestamps: vec![],
             values: vec![],
@@ -95,6 +97,31 @@ impl Buf {
 
     pub fn table_id(&mut self, table_id: impl Into<String>) -> &mut Self {
         self.labels[8].1 = table_id.into();
+        self
+    }
+
+    pub fn keyspace_name(&mut self, keyspace_name: impl Into<String>) -> &mut Self {
+        self.labels[9].1 = keyspace_name.into();
+        self
+    }
+
+    pub fn cluster_id(&mut self, cluster_id: impl Into<String>) -> &mut Self {
+        self.labels[10].1 = cluster_id.into();
+        self
+    }
+
+    pub fn tidb_cluster_id(&mut self, tidb_cluster_id: impl Into<String>) -> &mut Self {
+        self.labels[11].1 = tidb_cluster_id.into();
+        self
+    }
+
+    pub fn vm_account_id(&mut self, vm_account_id: impl Into<String>) -> &mut Self {
+        self.labels[12].1 = vm_account_id.into();
+        self
+    }
+
+    pub fn vm_project_id(&mut self, vm_project_id: impl Into<String>) -> &mut Self {
+        self.labels[13].1 = vm_project_id.into();
         self
     }
 

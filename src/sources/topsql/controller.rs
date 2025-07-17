@@ -32,6 +32,7 @@ pub struct Controller {
     schema_cache: Arc<SchemaCache>,
     schema_update_interval: Duration,
     active_schema_manager: Option<ActiveSchemaManager>,
+    keyspace_to_vmtenants: HashMap<String, (String, String)>,
 
     out: SourceSender,
 }
@@ -51,12 +52,14 @@ impl Controller {
         schema_update_interval: Duration,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
-        tidb_group: String,
+        tidb_group: Option<String>,
+        label_k8s_instance: Option<String>,
+        keyspace_to_vmtenants: HashMap<String, (String, String)>,
         out: SourceSender,
     ) -> vector::Result<Self> {
         // let topo_fetcher =
         //     TopologyFetcher::new(pd_address, tls_config.clone(), proxy_config).await?;
-        let topo_fetcher = TopologyFetcher::new(tidb_group).await?;
+        let topo_fetcher = TopologyFetcher::new(tidb_group, label_k8s_instance).await?;
         let (shutdown_notifier, shutdown_subscriber) = pair();
 
         // Initialize an empty schema cache to ensure all components always have a cache reference
@@ -76,6 +79,7 @@ impl Controller {
             schema_cache,
             schema_update_interval,
             active_schema_manager: None,
+            keyspace_to_vmtenants,
             out,
         })
     }
@@ -248,6 +252,7 @@ impl Controller {
             self.top_n,
             self.downsampling_interval,
             self.schema_cache.clone(),
+            self.keyspace_to_vmtenants.clone(),
         );
         let source = match source {
             Some(source) => source,

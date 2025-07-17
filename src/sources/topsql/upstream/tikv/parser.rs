@@ -25,10 +25,11 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         response: Self::UpstreamEvent,
         instance: String,
         schema_cache: Arc<SchemaCache>,
+        keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Vec<Event> {
         match response.record_oneof {
             Some(RecordOneof::Record(record)) => {
-                Self::parse_tikv_record(record, instance, schema_cache)
+                Self::parse_tikv_record(record, instance, schema_cache, keyspace_to_vmtenants)
             }
             None => vec![],
         }
@@ -47,7 +48,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         let mut ts_digests = BTreeMap::new();
         for response in responses {
             if let Some(RecordOneof::Record(record)) = response.record_oneof {
-                let (sql_digest, _, _, _) = match Self::decode_tag(&record.resource_group_tag) {
+                let (sql_digest, _, _, _, _) = match Self::decode_tag(&record.resource_group_tag) {
                     Some(tag) => tag,
                     None => continue,
                 };
@@ -124,7 +125,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
             }
         }
         if !ts_others.is_empty() {
-            let others_k = Self::encode_tag(vec![], vec![], None, None);
+            let others_k = Self::encode_tag(vec![], vec![], None, None, None);
             digest_items.insert(others_k.clone(), ts_others.into_values().collect());
         }
 
@@ -176,6 +177,7 @@ impl ResourceUsageRecordParser {
         record: GroupTagRecord,
         instance: String,
         schema_cache: Arc<SchemaCache>,
+        keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Vec<Event> {
         // Log schema cache info
         debug!(
@@ -191,17 +193,24 @@ impl ResourceUsageRecordParser {
 
         let mut logs = vec![];
 
-        let (sql_digest, plan_digest, tag_label, table_id) = decoded.unwrap();
+        let (sql_digest, plan_digest, tag_label, table_id, keyspace_name) = decoded.unwrap();
 
         let mut db_name = "".to_string();
         let mut table_name = "".to_string();
         let mut table_id_str = "".to_string();
+        let mut keyspace_name_str = "".to_string();
 
         if let Some(tid) = table_id {
             table_id_str = tid.to_string();
             if let Some(table_detail) = schema_cache.get(tid) {
                 db_name = table_detail.db.clone();
                 table_name = table_detail.name;
+            }
+        }
+
+        if let Some(ks) = keyspace_name {
+            if let Ok(ks) = String::from_utf8(ks) {
+                keyspace_name_str = ks;
             }
         }
 
@@ -213,7 +222,15 @@ impl ResourceUsageRecordParser {
             .tag_label(tag_label)
             .db_name(db_name)
             .table_name(table_name)
-            .table_id(table_id_str);
+            .table_id(table_id_str)
+            .keyspace_name(keyspace_name_str.clone())
+            .tidb_cluster_id(keyspace_name_str.clone())
+            .cluster_id(keyspace_name_str.clone());
+        if let Some((vm_account_id, vm_project_id)) = keyspace_to_vmtenants.get(&keyspace_name_str)
+        {
+            buf.vm_account_id(vm_account_id.clone())
+                .vm_project_id(vm_project_id.clone());
+        }
 
         macro_rules! append {
             ($( ($label_name:expr, $item_name:tt), )* ) => {
@@ -244,7 +261,7 @@ impl ResourceUsageRecordParser {
         logs
     }
 
-    fn decode_tag(tag: &[u8]) -> Option<(String, String, String, Option<i64>)> {
+    fn decode_tag(tag: &[u8]) -> Option<(String, String, String, Option<i64>, Option<Vec<u8>>)> {
         match ResourceGroupTag::decode(tag) {
             Ok(resource_tag) => {
                 if resource_tag.sql_digest.is_none() {
@@ -263,6 +280,7 @@ impl ResourceUsageRecordParser {
                         hex::encode_upper(resource_tag.plan_digest.unwrap_or_default()),
                         tag_label,
                         table_id,
+                        resource_tag.keyspace_name,
                     ))
                 }
             }
@@ -278,12 +296,14 @@ impl ResourceUsageRecordParser {
         plan_digest: Vec<u8>,
         table_id: Option<i64>,
         label: Option<i32>,
+        keyspace_name: Option<Vec<u8>>,
     ) -> Vec<u8> {
         ResourceGroupTag::encode_to_vec(&ResourceGroupTag {
             sql_digest: Some(sql_digest),
             plan_digest: Some(plan_digest),
             table_id,
             label,
+            keyspace_name,
         })
     }
 }
@@ -321,6 +341,7 @@ mod tests {
                         hex::decode(r.plan).unwrap(),
                         None,
                         None,
+                        None,
                     ),
                     items: r
                         .items
@@ -349,7 +370,7 @@ mod tests {
                 let cpu_time: u32 = record.items.iter().map(|i| i.cpu_time_ms).sum();
                 match ResourceUsageRecordParser::decode_tag(&record.resource_group_tag) {
                     None => others_cpu_time = cpu_time,
-                    Some((sql_digest, _, _, _)) => {
+                    Some((sql_digest, _, _, _, _)) => {
                         if sql_digest.is_empty() {
                             others_cpu_time = cpu_time;
                         } else {
@@ -374,7 +395,7 @@ mod tests {
         for record in &records {
             if let Some(RecordOneof::Record(record)) = &record.record_oneof {
                 if ResourceUsageRecordParser::decode_tag(&record.resource_group_tag)
-                    .map(|(sql_digest, _, _, _)| sql_digest)
+                    .map(|(sql_digest, _, _, _, _)| sql_digest)
                     .unwrap_or_default()
                     .is_empty()
                 {
@@ -408,7 +429,7 @@ mod tests {
         for record in &records {
             if let Some(RecordOneof::Record(record)) = &record.record_oneof {
                 if ResourceUsageRecordParser::decode_tag(&record.resource_group_tag)
-                    .map(|(sql_digest, _, _, _)| sql_digest)
+                    .map(|(sql_digest, _, _, _, _)| sql_digest)
                     .unwrap_or_default()
                     .is_empty()
                 {

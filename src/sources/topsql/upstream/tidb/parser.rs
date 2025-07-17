@@ -27,6 +27,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         response: Self::UpstreamEvent,
         instance: String,
         _schema_cache: Arc<SchemaCache>,
+        _keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Vec<Event> {
         match response.resp_oneof {
             Some(RespOneof::Record(record)) => Self::parse_tidb_record(record, instance),
@@ -165,6 +166,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                     sql_digest: digest.0,
                     plan_digest: digest.1,
                     items: items,
+                    keyspace_name: vec![],
                 })),
             })
         }
@@ -471,6 +473,7 @@ mod tests {
                             stmt_duration_count: i.stmt_duration_count,
                         })
                         .collect(),
+                    keyspace_name: vec![],
                 })),
             })
             .collect()
