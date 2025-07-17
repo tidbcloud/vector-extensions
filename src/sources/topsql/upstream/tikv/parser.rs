@@ -223,9 +223,7 @@ impl ResourceUsageRecordParser {
             .db_name(db_name)
             .table_name(table_name)
             .table_id(table_id_str)
-            .keyspace_name(keyspace_name_str.clone())
-            .tidb_cluster_id(keyspace_name_str.clone())
-            .cluster_id(keyspace_name_str.clone());
+            .keyspace_name(keyspace_name_str.clone());
         if let Some((vm_account_id, vm_project_id)) = keyspace_to_vmtenants.get(&keyspace_name_str)
         {
             buf.vm_account_id(vm_account_id.clone())
