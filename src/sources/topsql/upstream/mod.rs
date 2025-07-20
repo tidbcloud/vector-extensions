@@ -28,7 +28,10 @@ use crate::sources::topsql::{
     shutdown::ShutdownSubscriber,
     topology::{Component, InstanceType},
     upstream::{
-        parser::UpstreamEventParser, tidb::TiDBUpstream, tikv::TiKVUpstream, utils::instance_event,
+        parser::UpstreamEventParser,
+        tidb::TiDBUpstream,
+        tikv::TiKVUpstream,
+        utils::{instance_event, instance_event_with_tags},
     },
 };
 
@@ -258,9 +261,22 @@ impl TopSQLSource {
     }
 
     async fn handle_instance(&mut self) {
+        let mut batch = vec![];
         let event = instance_event(self.instance.clone(), self.instance_type.to_string());
-        if self.out.send_event(event).await.is_err() {
-            StreamClosedError { count: 1 }.emit();
+        batch.push(event);
+        for (cluster_id, (vm_account_id, vm_project_id)) in &self.keyspace_to_vmtenants {
+            let event = instance_event_with_tags(
+                self.instance.clone(),
+                self.instance_type.to_string(),
+                cluster_id.clone(),
+                vm_account_id.clone(),
+                vm_project_id.clone(),
+            );
+            batch.push(event);
+        }
+        let count = batch.len();
+        if self.out.send_batch(batch).await.is_err() {
+            StreamClosedError { count }.emit()
         }
     }
 
