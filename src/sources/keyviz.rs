@@ -1,9 +1,9 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use chrono::Utc;
 use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use vector::{
     config::{GenerateConfig, SourceConfig, SourceContext},
@@ -53,6 +53,12 @@ impl GenerateConfig for KeyvizConfig {
 #[typetag::serde(name = "keyviz")]
 impl SourceConfig for KeyvizConfig {
     async fn build(&self, mut cx: SourceContext) -> vector::Result<Source> {
+        use crate::common::features::is_nextgen_mode;
+
+        if is_nextgen_mode() {
+            // Keyviz is not supported in nextgen mode
+            return Err("Keyviz source is not supported in nextgen mode".into());
+        }
         self.validate_tls()?;
         let tls = self.tls.clone();
         let pd_address = if tls.is_some() {
@@ -69,16 +75,20 @@ impl SourceConfig for KeyvizConfig {
             }
         };
 
-        let mut topo = TopologyFetcher::new(pd_address.clone(), tls.clone(), &cx.proxy).await?;
-        let mut etcd = topo.etcd_client.clone();
         let max_regions_per_pd_request = self.max_regions_per_pd_request;
         Ok(Box::pin(async move {
             tokio::time::sleep(Duration::from_secs(30)).await; // protect crash loop
 
-            let tidb_instances = Arc::new(Mutex::new(Vec::new()));
+            // Since we already checked is_nextgen_mode() above, we know we're in legacy mode here
+            let topo = TopologyFetcher::new_legacy(pd_address.clone(), tls.clone(), &cx.proxy)
+                .await
+                .unwrap();
+            let etcd = topo.etcd_client().unwrap().clone();
+            let tidb_instances = Arc::new(Mutex::new(Vec::<String>::new()));
             {
                 let tidb_instances = tidb_instances.clone();
                 let mut shutdown = cx.shutdown.clone();
+                let mut topo = topo;
                 tokio::spawn(async move {
                     loop {
                         tokio::select! {
@@ -98,6 +108,7 @@ impl SourceConfig for KeyvizConfig {
                 let mut shutdown = cx.shutdown.clone();
                 let mut client = client.clone();
                 let mut out = cx.out.clone();
+                let mut etcd = etcd.clone();
                 tokio::spawn(async move {
                     let mut schema_version = -1;
                     loop {

@@ -17,22 +17,18 @@ use crate::sources::topsql::upstream::TopSQLSource;
 pub struct Controller {
     topo_fetch_interval: Duration,
     topo_fetcher: TopologyFetcher,
-
     components: HashSet<Component>,
     running_components: HashMap<Component, ShutdownNotifier>,
-
     shutdown_notifier: ShutdownNotifier,
     shutdown_subscriber: ShutdownSubscriber,
-
     tls: Option<TlsConfig>,
     init_retry_delay: Duration,
     top_n: usize,
     downsampling_interval: u32,
-
     schema_cache: Arc<SchemaCache>,
     schema_update_interval: Duration,
     active_schema_manager: Option<ActiveSchemaManager>,
-
+    keyspace_to_vmtenants: HashMap<String, (String, String)>,
     out: SourceSender,
 }
 
@@ -51,10 +47,19 @@ impl Controller {
         schema_update_interval: Duration,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
+        tidb_group: Option<String>,
+        label_k8s_instance: Option<String>,
+        keyspace_to_vmtenants: HashMap<String, (String, String)>,
         out: SourceSender,
     ) -> vector::Result<Self> {
-        let topo_fetcher =
-            TopologyFetcher::new(pd_address, tls_config.clone(), proxy_config).await?;
+        use crate::common::features::is_nextgen_mode;
+
+        let topo_fetcher = if is_nextgen_mode() {
+            TopologyFetcher::new_nextgen(tidb_group, label_k8s_instance).await?
+        } else {
+            TopologyFetcher::new_legacy(pd_address, tls_config.clone(), proxy_config).await?
+        };
+
         let (shutdown_notifier, shutdown_subscriber) = pair();
 
         // Initialize an empty schema cache to ensure all components always have a cache reference
@@ -74,6 +79,7 @@ impl Controller {
             schema_cache,
             schema_update_interval,
             active_schema_manager: None,
+            keyspace_to_vmtenants,
             out,
         })
     }
@@ -202,23 +208,34 @@ impl Controller {
             let cache = schema_manager.get_cache();
 
             // Convert ShutdownSubscriber to broadcast::Receiver<()>
-            let shutdown = self.shutdown_subscriber.subscribe();
+            let _shutdown = self.shutdown_subscriber.subscribe();
 
-            // Clone the etcd client for the schema manager
-            let etcd_client = self.topo_fetcher.etcd_client.clone();
+            use crate::common::features::is_nextgen_mode;
 
-            // Spawn the schema manager task
-            let task_handle = tokio::spawn(
-                schema_manager
-                    .run_update_loop_with_etcd(shutdown, etcd_client)
-                    .instrument(tracing::info_span!("topsql_schema_manager")),
-            );
+            if is_nextgen_mode() {
+                // Schema manager is not supported in nextgen mode
+                info!(message = "Schema manager is not supported in nextgen mode");
+            } else {
+                // Clone the etcd client for the schema manager
+                if let Some(etcd_client) = self.topo_fetcher.etcd_client() {
+                    let etcd_client = etcd_client.clone();
 
-            // Store the reference to the active schema manager
-            self.active_schema_manager = Some(ActiveSchemaManager {
-                tidb: tidb.clone(),
-                task_handle,
-            });
+                    // Spawn the schema manager task
+                    let task_handle = tokio::spawn(
+                        schema_manager
+                            .run_update_loop_with_etcd(_shutdown, etcd_client.clone())
+                            .instrument(tracing::info_span!("topsql_schema_manager")),
+                    );
+
+                    // Store the reference to the active schema manager
+                    self.active_schema_manager = Some(ActiveSchemaManager {
+                        tidb: tidb.clone(),
+                        task_handle,
+                    });
+                } else {
+                    error!(message = "Etcd client not available for schema manager");
+                }
+            }
 
             info!(
                 message = "Started schema manager successfully",
@@ -246,6 +263,7 @@ impl Controller {
             self.top_n,
             self.downsampling_interval,
             self.schema_cache.clone(),
+            self.keyspace_to_vmtenants.clone(),
         );
         let source = match source {
             Some(source) => source,

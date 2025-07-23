@@ -6,9 +6,9 @@ use ordered_float::NotNan;
 use vector::event::{KeyString, Value};
 use vector_lib::event::LogEvent;
 
-use crate::sources::topsql::upstream::consts::{
-    LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, METRIC_NAME_INSTANCE,
-};
+
+
+
 
 pub fn make_metric_like_log_event(
     labels: &[(&'static str, String)],
@@ -36,14 +36,6 @@ pub fn make_metric_like_log_event(
     log.into()
 }
 
-pub fn instance_event(instance: String, instance_type: String) -> LogEvent {
-    make_metric_like_log_event(
-        &[
-            (LABEL_NAME, METRIC_NAME_INSTANCE.to_owned()),
-            (LABEL_INSTANCE, instance),
-            (LABEL_INSTANCE_TYPE, instance_type),
-        ],
-        &[Utc::now()],
-        &[1.0],
-    )
-}
+
+
+

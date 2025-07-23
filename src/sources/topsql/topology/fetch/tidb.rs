@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
