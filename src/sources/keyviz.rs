@@ -1,4 +1,3 @@
-
 use chrono::Utc;
 use rand::Rng;
 use reqwest::Client;
@@ -80,9 +79,15 @@ impl SourceConfig for KeyvizConfig {
             tokio::time::sleep(Duration::from_secs(30)).await; // protect crash loop
 
             // Since we already checked is_nextgen_mode() above, we know we're in legacy mode here
-            let topo = TopologyFetcher::new_legacy(pd_address.clone(), tls.clone(), &cx.proxy)
-                .await
-                .unwrap();
+            let topo = TopologyFetcher::new(
+                pd_address.clone(),
+                tls.clone(),
+                &cx.proxy,
+                None, // tidb_group
+                None, // label_k8s_instance
+            )
+            .await
+            .unwrap();
             let etcd = topo.etcd_client().unwrap().clone();
             let tidb_instances = Arc::new(Mutex::new(Vec::<String>::new()));
             {

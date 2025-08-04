@@ -9,8 +9,3 @@ pub fn is_nextgen_mode() -> bool {
         false
     }
 }
-
-#[allow(dead_code)]
-pub fn is_legacy_mode() -> bool {
-    !is_nextgen_mode()
-} 

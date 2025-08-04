@@ -52,13 +52,14 @@ impl Controller {
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
         out: SourceSender,
     ) -> vector::Result<Self> {
-        use crate::common::features::is_nextgen_mode;
-
-        let topo_fetcher = if is_nextgen_mode() {
-            TopologyFetcher::new_nextgen(tidb_group, label_k8s_instance).await?
-        } else {
-            TopologyFetcher::new_legacy(pd_address, tls_config.clone(), proxy_config).await?
-        };
+        let topo_fetcher = TopologyFetcher::new(
+            pd_address,
+            tls_config.clone(),
+            proxy_config,
+            tidb_group,
+            label_k8s_instance,
+        )
+        .await?;
 
         let (shutdown_notifier, shutdown_subscriber) = pair();
 
@@ -208,7 +209,7 @@ impl Controller {
             let cache = schema_manager.get_cache();
 
             // Convert ShutdownSubscriber to broadcast::Receiver<()>
-            let _shutdown = self.shutdown_subscriber.subscribe();
+            let shutdown = self.shutdown_subscriber.subscribe();
 
             use crate::common::features::is_nextgen_mode;
 
@@ -223,7 +224,7 @@ impl Controller {
                     // Spawn the schema manager task
                     let task_handle = tokio::spawn(
                         schema_manager
-                            .run_update_loop_with_etcd(_shutdown, etcd_client.clone())
+                            .run_update_loop_with_etcd(shutdown, etcd_client.clone())
                             .instrument(tracing::info_span!("topsql_schema_manager")),
                     );
 

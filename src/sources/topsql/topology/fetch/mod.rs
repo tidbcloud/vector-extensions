@@ -21,10 +21,6 @@ use vector::config::ProxyConfig;
 use vector::http::HttpClient;
 use vector::tls::{MaybeTlsSettings, TlsConfig};
 
-// Import types needed for both modes
-use vector::config::ProxyConfig as VectorProxyConfig;
-use vector::tls::TlsConfig as VectorTlsConfig;
-
 #[derive(Debug, Snafu)]
 pub enum FetchError {
     #[snafu(display("Failed to build TLS settings: {}", source))]
@@ -35,6 +31,8 @@ pub enum FetchError {
     ReadCrtFile { source: std::io::Error },
     #[snafu(display("Failed to read key file: {}", source))]
     ReadKeyFile { source: std::io::Error },
+    #[snafu(display("Failed to parse address: {}", source))]
+    ParseAddress { source: http::uri::InvalidUri },
     #[snafu(display("Failed to build HTTP client: {}", source))]
     BuildHttpClient { source: vector::http::HttpError },
     #[snafu(display("Failed to build etcd client: {}", source))]
@@ -97,15 +95,21 @@ impl LegacyTopologyFetcher {
     }
 
     fn polish_address(
-        pd_address: String,
+        mut address: String,
         tls_config: &Option<TlsConfig>,
     ) -> Result<String, FetchError> {
-        let pd_address = if tls_config.is_some() {
-            format!("https://{}", pd_address)
-        } else {
-            format!("http://{}", pd_address)
-        };
-        Ok(pd_address)
+        let uri: hyper::Uri = address.parse().context(ParseAddressSnafu)?;
+        if uri.scheme().is_none() {
+            address = if tls_config.is_some() {
+                format!("https://{}", address)
+            } else {
+                format!("http://{}", address)
+            };
+        }
+        if address.ends_with('/') {
+            address.pop();
+        }
+        Ok(address)
     }
 
     fn build_http_client(
@@ -124,11 +128,11 @@ impl LegacyTopologyFetcher {
         pd_address: &str,
         tls_config: &Option<TlsConfig>,
     ) -> Result<etcd_client::Client, FetchError> {
-        let conn_opt = Self::build_etcd_connect_opt(tls_config)?;
-        let client = etcd_client::Client::connect(&[pd_address], conn_opt)
+        let etcd_connect_opt = Self::build_etcd_connect_opt(tls_config)?;
+        let etcd_client: etcd_client::Client = etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
             .await
             .context(BuildEtcdClientSnafu)?;
-        Ok(client)
+        Ok(etcd_client)
     }
 
     fn build_etcd_connect_opt(
@@ -224,57 +228,7 @@ enum TopologyFetcherImpl {
 }
 
 impl TopologyFetcher {
-    /// Create a new legacy topology fetcher
-    pub async fn new_legacy(
-        _pd_address: String,
-        _tls_config: Option<VectorTlsConfig>,
-        _proxy_config: &VectorProxyConfig,
-    ) -> Result<Self, FetchError> {
-        #[cfg(not(feature = "nextgen"))]
-        {
-            let fetcher =
-                LegacyTopologyFetcher::new(_pd_address, _tls_config, _proxy_config).await?;
-            Ok(Self {
-                inner: TopologyFetcherImpl::Legacy(fetcher),
-            })
-        }
-        #[cfg(feature = "nextgen")]
-        {
-            Err(FetchError::BuildKubeClient {
-                source: kube::Error::Api(kube::error::ErrorResponse {
-                    code: 400,
-                    message: "Legacy mode not supported in nextgen build".to_string(),
-                    reason: "NotSupported".to_string(),
-                    status: "Failure".to_string(),
-                }),
-            })
-        }
-    }
-
-    /// Create a new nextgen topology fetcher
-    pub async fn new_nextgen(
-        _tidb_group: Option<String>,
-        _label_k8s_instance: Option<String>,
-    ) -> Result<Self, FetchError> {
-        #[cfg(feature = "nextgen")]
-        {
-            let fetcher = NextgenTopologyFetcher::new(_tidb_group, _label_k8s_instance).await?;
-            Ok(Self {
-                inner: TopologyFetcherImpl::Nextgen(fetcher),
-            })
-        }
-        #[cfg(not(feature = "nextgen"))]
-        {
-            Err(FetchError::BuildEtcdClient {
-                source: etcd_client::Error::InvalidArgs(
-                    "Nextgen mode not supported in legacy build".to_string(),
-                ),
-            })
-        }
-    }
-
     /// Create a new topology fetcher based on the current feature configuration
-    #[allow(dead_code)]
     pub async fn new(
         pd_address: String,
         tls_config: Option<TlsConfig>,
