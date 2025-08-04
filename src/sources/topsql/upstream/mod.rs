@@ -53,8 +53,14 @@ pub trait Upstream: Send {
     ) -> Result<tonic::codec::Streaming<Self::UpstreamEvent>, tonic::Status>;
 }
 
-// Legacy TopSQL source
-pub struct LegacyTopSQLSource {
+// Common trait for TopSQL source behavior
+#[async_trait::async_trait]
+trait TopSQLSourceBehavior {
+    async fn handle_instance_event(&self, instance: &str, instance_type: &str, out: &mut SourceSender);
+}
+
+// Base TopSQL source with common functionality
+struct BaseTopSQLSource {
     instance: String,
     instance_type: InstanceType,
     uri: String,
@@ -68,8 +74,8 @@ pub struct LegacyTopSQLSource {
     schema_cache: Arc<SchemaCache>,
 }
 
-impl LegacyTopSQLSource {
-    pub fn new(
+impl BaseTopSQLSource {
+    fn new(
         component: Component,
         tls: Option<TlsConfig>,
         out: SourceSender,
@@ -84,7 +90,7 @@ impl LegacyTopSQLSource {
             "https".into()
         };
         match component.topsql_address() {
-            Some(address) => Some(LegacyTopSQLSource {
+            Some(address) => Some(BaseTopSQLSource {
                 instance: address.clone(),
                 instance_type: component.instance_type,
                 uri: if tls.is_some() {
@@ -93,7 +99,7 @@ impl LegacyTopSQLSource {
                     format!("http://{}", address)
                 },
                 tls,
-                protocal: protocal,
+                protocal,
                 out,
                 init_retry_delay,
                 retry_delay: init_retry_delay,
@@ -105,20 +111,20 @@ impl LegacyTopSQLSource {
         }
     }
 
-    pub async fn run(mut self, mut shutdown: ShutdownSubscriber) {
+    async fn run<B: TopSQLSourceBehavior>(mut self, mut shutdown: ShutdownSubscriber, behavior: B) {
         let shutdown_subscriber = shutdown.clone();
         tokio::select! {
-            _ = self.run_loop(shutdown_subscriber) => {}
+            _ = self.run_loop(shutdown_subscriber, &behavior) => {}
             _ = shutdown.done() => {}
         }
     }
 
-    async fn run_loop(&mut self, shutdown_subscriber: ShutdownSubscriber) {
+    async fn run_loop<B: TopSQLSourceBehavior>(&mut self, shutdown_subscriber: ShutdownSubscriber, behavior: &B) {
         loop {
             let shutdown_subscriber = shutdown_subscriber.clone();
             let state = match self.instance_type {
-                InstanceType::TiDB => self.run_once::<TiDBUpstream>(shutdown_subscriber).await,
-                InstanceType::TiKV => self.run_once::<TiKVUpstream>(shutdown_subscriber).await,
+                InstanceType::TiDB => self.run_once::<TiDBUpstream, B>(shutdown_subscriber, behavior).await,
+                InstanceType::TiKV => self.run_once::<TiKVUpstream, B>(shutdown_subscriber, behavior).await,
                 _ => unreachable!(),
             };
 
@@ -139,7 +145,7 @@ impl LegacyTopSQLSource {
         }
     }
 
-    async fn run_once<U: Upstream>(&mut self, shutdown_subscriber: ShutdownSubscriber) -> State {
+    async fn run_once<U: Upstream, B: TopSQLSourceBehavior>(&mut self, shutdown_subscriber: ShutdownSubscriber, behavior: &B) -> State {
         let response_stream = self.build_stream::<U>(shutdown_subscriber).await;
         let mut response_stream = match response_stream {
             Ok(stream) => stream,
@@ -178,7 +184,7 @@ impl LegacyTopSQLSource {
                         }
                     }
                 }
-                _ = instance_stream.next() => self.handle_instance().await,
+                _ = instance_stream.next() => self.handle_instance(behavior).await,
             }
         }
     }
@@ -246,11 +252,8 @@ impl LegacyTopSQLSource {
         }
     }
 
-    async fn handle_instance(&mut self) {
-        let event = instance_event(self.instance.clone(), self.instance_type.to_string());
-        if self.out.send_event(event).await.is_err() {
-            StreamClosedError { count: 1 }.emit();
-        }
+    async fn handle_instance<B: TopSQLSourceBehavior>(&mut self, behavior: &B) {
+        behavior.handle_instance_event(&self.instance, &self.instance_type.to_string(), &mut self.out).await;
     }
 
     fn on_connected(&mut self) {
@@ -259,20 +262,84 @@ impl LegacyTopSQLSource {
     }
 }
 
+// Legacy TopSQL source behavior
+struct LegacyTopSQLBehavior;
+
+#[async_trait::async_trait]
+impl TopSQLSourceBehavior for LegacyTopSQLBehavior {
+    async fn handle_instance_event(&self, instance: &str, instance_type: &str, out: &mut SourceSender) {
+        let event = instance_event(instance.to_string(), instance_type.to_string());
+        if out.send_event(event).await.is_err() {
+            StreamClosedError { count: 1 }.emit();
+        }
+    }
+}
+
+// Legacy TopSQL source
+pub struct LegacyTopSQLSource {
+    base: BaseTopSQLSource,
+}
+
+impl LegacyTopSQLSource {
+    pub fn new(
+        component: Component,
+        tls: Option<TlsConfig>,
+        out: SourceSender,
+        init_retry_delay: Duration,
+        top_n: usize,
+        downsampling_interval: u32,
+        schema_cache: Arc<SchemaCache>,
+    ) -> Option<Self> {
+        let base = BaseTopSQLSource::new(
+            component,
+            tls,
+            out,
+            init_retry_delay,
+            top_n,
+            downsampling_interval,
+            schema_cache,
+        )?;
+        Some(LegacyTopSQLSource { base })
+    }
+
+    pub async fn run(self, shutdown: ShutdownSubscriber) {
+        let behavior = LegacyTopSQLBehavior;
+        self.base.run(shutdown, behavior).await;
+    }
+}
+
+// Nextgen TopSQL source behavior
+struct NextgenTopSQLBehavior {
+    keyspace_to_vmtenants: HashMap<String, (String, String)>,
+}
+
+#[async_trait::async_trait]
+impl TopSQLSourceBehavior for NextgenTopSQLBehavior {
+    async fn handle_instance_event(&self, instance: &str, instance_type: &str, out: &mut SourceSender) {
+        let mut batch = vec![];
+        let event = instance_event_metric(instance.to_string(), instance_type.to_string());
+        batch.push(event);
+        for (cluster_id, (vm_account_id, vm_project_id)) in &self.keyspace_to_vmtenants {
+            let event = instance_event_with_tags(
+                instance.to_string(),
+                instance_type.to_string(),
+                cluster_id.clone(),
+                vm_account_id.clone(),
+                vm_project_id.clone(),
+            );
+            batch.push(event);
+        }
+        let count = batch.len();
+        if out.send_batch(batch).await.is_err() {
+            StreamClosedError { count }.emit()
+        }
+    }
+}
+
 // Nextgen TopSQL source
 pub struct NextgenTopSQLSource {
-    instance: String,
-    instance_type: InstanceType,
-    uri: String,
-    tls: Option<TlsConfig>,
-    protocal: String,
-    out: SourceSender,
-    init_retry_delay: Duration,
-    retry_delay: Duration,
-    top_n: usize,
-    downsampling_interval: u32,
-    schema_cache: Arc<SchemaCache>,
-    keyspace_to_vmtenants: HashMap<String, (String, String)>,
+    base: BaseTopSQLSource,
+    behavior: NextgenTopSQLBehavior,
 }
 
 impl NextgenTopSQLSource {
@@ -286,198 +353,21 @@ impl NextgenTopSQLSource {
         schema_cache: Arc<SchemaCache>,
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Option<Self> {
-        let protocal = if tls.is_none() {
-            "http".into()
-        } else {
-            "https".into()
-        };
-        match component.topsql_address() {
-            Some(address) => Some(NextgenTopSQLSource {
-                instance: address.clone(),
-                instance_type: component.instance_type,
-                uri: if tls.is_some() {
-                    format!("https://{}", address)
-                } else {
-                    format!("http://{}", address)
-                },
-                tls,
-                protocal: protocal,
-                out,
-                init_retry_delay,
-                retry_delay: init_retry_delay,
-                top_n,
-                downsampling_interval,
-                schema_cache,
-                keyspace_to_vmtenants: keyspace_to_vmtenants,
-            }),
-            None => None,
-        }
+        let base = BaseTopSQLSource::new(
+            component,
+            tls,
+            out,
+            init_retry_delay,
+            top_n,
+            downsampling_interval,
+            schema_cache,
+        )?;
+        let behavior = NextgenTopSQLBehavior { keyspace_to_vmtenants };
+        Some(NextgenTopSQLSource { base, behavior })
     }
 
-    pub async fn run(mut self, mut shutdown: ShutdownSubscriber) {
-        let shutdown_subscriber = shutdown.clone();
-        tokio::select! {
-            _ = self.run_loop(shutdown_subscriber) => {}
-            _ = shutdown.done() => {}
-        }
-    }
-
-    async fn run_loop(&mut self, shutdown_subscriber: ShutdownSubscriber) {
-        loop {
-            let shutdown_subscriber = shutdown_subscriber.clone();
-            let state = match self.instance_type {
-                InstanceType::TiDB => self.run_once::<TiDBUpstream>(shutdown_subscriber).await,
-                InstanceType::TiKV => self.run_once::<TiKVUpstream>(shutdown_subscriber).await,
-                _ => unreachable!(),
-            };
-
-            match state {
-                State::RetryNow => debug!("Retrying immediately."),
-                State::RetryDelay => {
-                    self.retry_delay *= 2;
-                    if self.retry_delay > MAX_RETRY_DELAY {
-                        self.retry_delay = MAX_RETRY_DELAY;
-                    }
-                    info!(
-                        timeout_secs = self.retry_delay.as_secs_f64(),
-                        "Retrying after timeout."
-                    );
-                    time::sleep(self.retry_delay).await;
-                }
-            }
-        }
-    }
-
-    async fn run_once<U: Upstream>(&mut self, shutdown_subscriber: ShutdownSubscriber) -> State {
-        let response_stream = self.build_stream::<U>(shutdown_subscriber).await;
-        let mut response_stream = match response_stream {
-            Ok(stream) => stream,
-            Err(state) => return state,
-        };
-        self.on_connected();
-
-        let mut tick_stream = IntervalStream::new(time::interval(Duration::from_secs(1)));
-        let mut instance_stream = IntervalStream::new(time::interval(Duration::from_secs(30)));
-        let mut responses = vec![];
-        let mut last_event_recv_ts = chrono::Local::now().timestamp();
-        loop {
-            tokio::select! {
-                response = response_stream.next() => {
-                    match response {
-                        Some(Ok(response)) => {
-                            register!(BytesReceived {
-                                protocol: self.protocal.clone().into(),
-                            })
-                            .emit(ByteSize(response.size_of()));
-                            responses.push(response);
-                            last_event_recv_ts = chrono::Local::now().timestamp();
-                        },
-                        Some(Err(error)) => {
-                            error!(message = "Failed to fetch events.", error = %error);
-                            break State::RetryDelay;
-                        },
-                        None => break State::RetryNow,
-                    }
-                }
-                _ = tick_stream.next() => {
-                    if chrono::Local::now().timestamp() > last_event_recv_ts + 10 {
-                        if !responses.is_empty() {
-                            self.handle_responses::<U>(responses).await;
-                            responses = vec![];
-                        }
-                    }
-                }
-                _ = instance_stream.next() => self.handle_instance().await,
-            }
-        }
-    }
-
-    async fn build_stream<U: Upstream>(
-        &self,
-        shutdown_subscriber: ShutdownSubscriber,
-    ) -> Result<tonic::codec::Streaming<U::UpstreamEvent>, State> {
-        let endpoint = U::build_endpoint(self.uri.clone(), &self.tls, shutdown_subscriber).await;
-        let endpoint = match endpoint {
-            Ok(endpoint) => endpoint,
-            Err(error) => {
-                error!(message = "Failed to build endpoint.", error = %error);
-                return Err(State::RetryDelay);
-            }
-        };
-
-        let channel = endpoint.connect().await;
-        let channel = match channel {
-            Ok(channel) => channel,
-            Err(error) => {
-                error!(message = "Failed to connect to the server.", error = %error);
-                return Err(State::RetryDelay);
-            }
-        };
-
-        let client = U::build_client(channel);
-        let response_stream = match U::build_stream(client).await {
-            Ok(stream) => stream,
-            Err(error) => {
-                error!(message = "Failed to set up subscription.", error = %error);
-                return Err(State::RetryDelay);
-            }
-        };
-
-        Ok(response_stream)
-    }
-
-    async fn handle_responses<U: Upstream>(&mut self, responses: Vec<U::UpstreamEvent>) {
-        // truncate top n
-        let mut responses = if self.top_n > 0 {
-            U::UpstreamEventParser::keep_top_n(responses, self.top_n)
-        } else {
-            responses
-        };
-        // downsample
-        if self.downsampling_interval > 1 {
-            U::UpstreamEventParser::downsampling(&mut responses, self.downsampling_interval);
-        }
-        // parse
-        let mut batch = vec![];
-        for response in responses {
-            let mut events = U::UpstreamEventParser::parse(
-                response,
-                self.instance.clone(),
-                self.schema_cache.clone(),
-            );
-            batch.append(&mut events);
-        }
-        // send
-        let count = batch.len();
-        register!(EventsReceived {}).emit(CountByteSize(count, batch.size_of().into()));
-        if self.out.send_batch(batch).await.is_err() {
-            StreamClosedError { count }.emit()
-        }
-    }
-
-    async fn handle_instance(&mut self) {
-        let mut batch = vec![];
-        let event = instance_event_metric(self.instance.clone(), self.instance_type.to_string());
-        batch.push(event);
-        for (cluster_id, (vm_account_id, vm_project_id)) in &self.keyspace_to_vmtenants {
-            let event = instance_event_with_tags(
-                self.instance.clone(),
-                self.instance_type.to_string(),
-                cluster_id.clone(),
-                vm_account_id.clone(),
-                vm_project_id.clone(),
-            );
-            batch.push(event);
-        }
-        let count = batch.len();
-        if self.out.send_batch(batch).await.is_err() {
-            StreamClosedError { count }.emit()
-        }
-    }
-
-    fn on_connected(&mut self) {
-        self.retry_delay = self.init_retry_delay;
-        info!("Connected to the upstream.");
+    pub async fn run(self, shutdown: ShutdownSubscriber) {
+        self.base.run(shutdown, self.behavior).await;
     }
 }
 
