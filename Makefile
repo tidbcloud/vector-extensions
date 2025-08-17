@@ -1,6 +1,6 @@
 export AUTOINSTALL ?= false
 
-export RUST_VERSION ?= $(shell cat rust-toolchain)
+export RUST_VERSION ?= $(shell sed -n 's/^channel *= *"\?\([^"]*\)"\?/\1/p' rust-toolchain.toml)
 
 .PHONY: fmt
 fmt:
