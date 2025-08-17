@@ -2,6 +2,7 @@ use std::io::Error;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use bytes::BytesMut;
 use file_source::paths_provider::glob::{Glob, MatchOptions};
 use file_source::paths_provider::PathsProvider;
 use file_source::FileSourceInternalEvents;
@@ -121,17 +122,19 @@ impl<'a> InternalEvent for PathGlobbingError<'a> {
             path = %self.path.display(),
         );
         counter!(
-            "component_errors_total", 1,
+            "component_errors_total",
             "error_code" => "globbing",
             "error_type" => error_type::READER_FAILED,
             "stage" => error_stage::RECEIVING,
             "path" => self.path.to_string_lossy().into_owned(),
-        );
+        )
+        .increment(1);
         // deprecated
         counter!(
-            "glob_errors_total", 1,
+            "glob_errors_total",
             "path" => self.path.to_string_lossy().into_owned(),
-        );
+        )
+        .increment(1);
     }
 }
 
@@ -164,6 +167,8 @@ impl FileSourceInternalEvents for OnlyGlob {
     fn emit_path_globbing_failed(&self, path: &Path, error: &Error) {
         emit!(PathGlobbingError { path, error });
     }
+
+    fn emit_file_line_too_long(&self, _: &BytesMut, _: usize, _: usize) {}
 }
 
 #[cfg(test)]

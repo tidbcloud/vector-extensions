@@ -9,7 +9,7 @@ use vector_lib::tls::{tls_connector_builder, MaybeTlsSettings, TlsConfig};
 use crate::sources::topsql::shutdown::ShutdownSubscriber;
 
 pub async fn tls_proxy(
-    tls_config: &Option<TlsConfig>,
+    tls_config: Option<&TlsConfig>,
     address: &str,
     mut shutdown_subscriber: ShutdownSubscriber,
 ) -> vector::Result<u16> {
@@ -33,7 +33,7 @@ pub async fn tls_proxy(
 }
 
 async fn tls_connect(
-    tls_config: &Option<TlsConfig>,
+    tls_config: Option<&TlsConfig>,
     address: &str,
 ) -> vector::Result<SslStream<TcpStream>> {
     let uri = address.parse::<http::Uri>()?;

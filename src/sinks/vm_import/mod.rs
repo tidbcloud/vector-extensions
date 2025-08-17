@@ -78,7 +78,7 @@ impl SinkConfig for VMImportConfig {
     ) -> vector::Result<(sinks::VectorSink, sinks::Healthcheck)> {
         let endpoint_tmp = self.endpoint.clone().try_into()?;
 
-        let tls_settings = TlsSettings::from_options(&self.tls)?;
+        let tls_settings = TlsSettings::from_options(self.tls.as_ref())?;
         let batch_settings = self.batch.into_batch_settings()?;
         let request_settings = self.request.into_settings();
 

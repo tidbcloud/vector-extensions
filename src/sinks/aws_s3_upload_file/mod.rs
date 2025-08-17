@@ -69,6 +69,12 @@ pub struct S3UploadFileConfig {
     /// The expire time of uploaded file records which used to prevent duplicate uploads.
     #[serde(alias = "expire_after", default = "default_expire_after_secs")]
     pub expire_after_secs: u64,
+
+    /// Specifies which addressing style to use.
+    ///
+    /// This controls if the bucket name is in the hostname or part of the URL.
+    #[serde(default = "default_force_path_style")]
+    pub force_path_style: Option<bool>,
 }
 
 pub fn default_delay_upload_secs() -> u64 {
@@ -77,6 +83,10 @@ pub fn default_delay_upload_secs() -> u64 {
 
 pub fn default_expire_after_secs() -> u64 {
     1800
+}
+
+pub fn default_force_path_style() -> Option<bool> {
+    None
 }
 
 impl GenerateConfig for S3UploadFileConfig {
@@ -92,6 +102,7 @@ impl GenerateConfig for S3UploadFileConfig {
             data_dir: None,
             delay_upload_secs: default_delay_upload_secs(),
             expire_after_secs: default_expire_after_secs(),
+            force_path_style: None,
         })
         .unwrap()
     }
@@ -145,7 +156,14 @@ impl S3UploadFileConfig {
     }
 
     pub async fn create_service(&self, proxy: &ProxyConfig) -> vector::Result<S3Service> {
-        s3_common::config::create_service(&self.region, &self.auth, proxy, &self.tls).await
+        s3_common::config::create_service(
+            &self.region,
+            &self.auth,
+            proxy,
+            self.tls.as_ref(),
+            self.force_path_style.unwrap_or(true),
+        )
+        .await
     }
 }
 

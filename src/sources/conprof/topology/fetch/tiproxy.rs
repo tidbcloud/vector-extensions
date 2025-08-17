@@ -73,7 +73,10 @@ impl<'a> TiProxyTopologyFetcher<'a> {
                 Some(EtcdTopology::Info { address, value }) => {
                     let (host, primary_port) =
                         utils::parse_host_port(&address).context(ParseTiProxyAddressSnafu)?;
-                    let secondary_port = value.status_port.parse::<u16>().context(ParseStatusPortSnafu)?;
+                    let secondary_port = value
+                        .status_port
+                        .parse::<u16>()
+                        .context(ParseStatusPortSnafu)?;
                     tiproxys.push((
                         address,
                         Component {

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use rand::prelude::SliceRandom;
+use rand::prelude::IndexedRandom;
 use serde::{Deserialize, Serialize};
 
 #[allow(clippy::upper_case_acronyms)]
@@ -83,7 +83,7 @@ impl PDResponseGenerator {
             .collect::<Vec<_>>();
 
         let cluster_id = rand::random::<u64>();
-        let leader = pd_infos.choose(&mut rand::thread_rng()).unwrap().clone();
+        let leader = pd_infos.choose(&mut rand::rng()).unwrap().clone();
 
         PDResponseGenerator {
             cluster_id,

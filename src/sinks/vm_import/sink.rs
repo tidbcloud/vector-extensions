@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{future::Future, io::Write};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use flate2::write::GzEncoder;
@@ -26,7 +26,6 @@ impl VMImportSink {
     }
 }
 
-#[async_trait::async_trait]
 impl HttpSink for VMImportSink {
     type Input = PartitionInnerBuffer<serde_json::Value, PartitionKey>;
     type Output = PartitionInnerBuffer<Vec<BoxedRawValue>, PartitionKey>;
@@ -36,23 +35,28 @@ impl HttpSink for VMImportSink {
         VMImportSinkEventEncoder::new(self.endpoint_template.clone())
     }
 
-    async fn build_request(&self, output: Self::Output) -> vector::Result<Request<Bytes>> {
-        let (events, key) = output.into_parts();
+    fn build_request(
+        &self,
+        events: Self::Output,
+    ) -> impl Future<Output = vector::Result<http::Request<Bytes>>> + Send {
+        async move {
+            let (events, key) = events.into_parts();
 
-        let uri = key.endpoint.parse::<Uri>()?;
+            let uri = key.endpoint.parse::<Uri>()?;
 
-        let buffer = BytesMut::new();
-        let mut w = GzEncoder::new(buffer.writer(), Compression::default());
+            let buffer = BytesMut::new();
+            let mut w = GzEncoder::new(buffer.writer(), Compression::default());
 
-        for event in events {
-            w.write_all(event.get().as_bytes())?;
-            w.write_all(b"\n")?;
+            for event in events {
+                w.write_all(event.get().as_bytes())?;
+                w.write_all(b"\n")?;
+            }
+            let body = w.finish()?.into_inner().freeze();
+
+            let builder = Request::post(uri).header("Content-Encoding", "gzip");
+            let request = builder.body(body).unwrap();
+
+            Ok(request)
         }
-        let body = w.finish()?.into_inner().freeze();
-
-        let builder = Request::post(uri).header("Content-Encoding", "gzip");
-        let request = builder.body(body).unwrap();
-
-        Ok(request)
     }
 }

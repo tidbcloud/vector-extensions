@@ -24,7 +24,7 @@ pub async fn build_reqwest_client(
                 }
             };
 
-            let settings = TlsSettings::from_options(&Some(tls.clone()))
+            let settings = TlsSettings::from_options(Some(&tls.clone()))
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
             let (crt, key) = settings
                 .identity_pem()

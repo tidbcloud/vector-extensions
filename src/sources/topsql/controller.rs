@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rand::seq::SliceRandom;
-use rand::thread_rng;
 use tracing::instrument::Instrument;
 use vector::shutdown::ShutdownSignal;
 use vector::SourceSender;
@@ -162,7 +161,7 @@ impl Controller {
 
         // Shuffle TiDB instances to distribute load
         let mut shuffled_components = tidb_components.clone();
-        shuffled_components.shuffle(&mut thread_rng());
+        shuffled_components.shuffle(&mut rand::rng());
 
         // Use the method to update schema_manager
         self.update_schema_manager_with_components(&shuffled_components)

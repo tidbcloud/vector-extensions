@@ -40,7 +40,7 @@ pub trait Upstream: Send {
 
     async fn build_endpoint(
         address: String,
-        tls_config: &Option<vector::tls::TlsConfig>,
+        tls_config: Option<&vector::tls::TlsConfig>,
         shutdown_subscriber: ShutdownSubscriber,
     ) -> vector::Result<Endpoint>;
 
@@ -194,7 +194,8 @@ impl TopSQLSource {
         &self,
         shutdown_subscriber: ShutdownSubscriber,
     ) -> Result<tonic::codec::Streaming<U::UpstreamEvent>, State> {
-        let endpoint = U::build_endpoint(self.uri.clone(), &self.tls, shutdown_subscriber).await;
+        let endpoint =
+            U::build_endpoint(self.uri.clone(), self.tls.as_ref(), shutdown_subscriber).await;
         let endpoint = match endpoint {
             Ok(endpoint) => endpoint,
             Err(error) => {

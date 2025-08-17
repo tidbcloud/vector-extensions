@@ -23,7 +23,7 @@ impl Upstream for TiKVUpstream {
 
     async fn build_endpoint(
         address: String,
-        tls_config: &Option<vector::tls::TlsConfig>,
+        tls_config: Option<&vector::tls::TlsConfig>,
         shutdown_subscriber: ShutdownSubscriber,
     ) -> vector::Result<Endpoint> {
         let endpoint = if tls_config.is_none() {

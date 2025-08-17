@@ -7,7 +7,9 @@ use vector::{
     config::{GenerateConfig, SinkConfig, SinkContext},
     gcp::{GcpAuthConfig, GcpAuthenticator},
     http::HttpClient,
-    sinks::gcs_common::config::{build_healthcheck, GcsPredefinedAcl, GcsStorageClass, BASE_URL},
+    sinks::gcs_common::config::{
+        build_healthcheck, default_endpoint, GcsPredefinedAcl, GcsStorageClass,
+    },
     sinks::Healthcheck,
 };
 use vector_config::NamedComponent;
@@ -102,12 +104,12 @@ impl GenerateConfig for GcsUploadFileSinkConfig {
 impl SinkConfig for GcsUploadFileSinkConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
         let auth = self.auth.build(Scope::DevStorageReadWrite).await?;
-        let tls = TlsSettings::from_options(&self.tls)?;
+        let tls = TlsSettings::from_options(self.tls.as_ref())?;
         let client = HttpClient::new(tls, cx.proxy())?;
         let healthcheck = build_healthcheck(
             self.bucket.clone(),
             client.clone(),
-            format!("{}{}", BASE_URL, self.bucket),
+            format!("{}/{}", default_endpoint(), self.bucket),
             auth.clone(),
         )?;
         let sink = self.build_sink(client, self.bucket.clone(), auth, cx)?;

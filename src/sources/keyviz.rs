@@ -417,7 +417,7 @@ async fn fetch_and_send_tidb_schema(
         if tidb_instances.is_empty() {
             return;
         }
-        let idx = rand::thread_rng().gen_range(0..tidb_instances.len());
+        let idx = rand::rng().random_range(0..tidb_instances.len());
         tidb_instances[idx].clone()
     };
     let dbinfos = match fetch_tidb_dbinfos(client, tls, &tidb_instance).await {

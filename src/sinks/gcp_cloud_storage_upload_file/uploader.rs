@@ -9,7 +9,8 @@ use md5::{Digest, Md5};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use vector::{
-    gcp::GcpAuthenticator, http::HttpClient, serde::json, sinks::gcs_common::config::BASE_URL,
+    gcp::GcpAuthenticator, http::HttpClient, serde::json,
+    sinks::gcs_common::config::default_endpoint,
 };
 
 use crate::common::checkpointer::UploadKey;
@@ -73,8 +74,10 @@ impl GCSUploader {
 
     async fn fetch_md5_hash(&mut self, upload_key: &UploadKey) -> Option<String> {
         let uri = format!(
-            "{}{}/{}",
-            BASE_URL, upload_key.bucket, upload_key.object_key
+            "{}/{}/{}",
+            default_endpoint(),
+            upload_key.bucket,
+            upload_key.object_key
         )
         .parse::<Uri>()
         .unwrap();
@@ -113,8 +116,10 @@ impl GCSUploader {
 
     async fn create_resumable_upload(&mut self, upload_key: &UploadKey) -> io::Result<Uri> {
         let uri = format!(
-            "{}{}/{}",
-            BASE_URL, upload_key.bucket, upload_key.object_key
+            "{}/{}/{}",
+            default_endpoint(),
+            upload_key.bucket,
+            upload_key.object_key
         )
         .parse::<Uri>()
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;

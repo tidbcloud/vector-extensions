@@ -54,7 +54,7 @@ impl TopologyFetcher {
         proxy_config: &ProxyConfig,
     ) -> Result<Self, FetchError> {
         let pd_address = Self::polish_address(pd_address, &tls_config)?;
-        let http_client = Self::build_http_client(&tls_config, proxy_config)?;
+        let http_client = Self::build_http_client(tls_config.as_ref(), proxy_config)?;
         let etcd_client = Self::build_etcd_client(&pd_address, &tls_config).await?;
 
         Ok(Self {
@@ -104,7 +104,7 @@ impl TopologyFetcher {
     }
 
     fn build_http_client(
-        tls_config: &Option<TlsConfig>,
+        tls_config: Option<&TlsConfig>,
         proxy_config: &ProxyConfig,
     ) -> Result<HttpClient<hyper::Body>, FetchError> {
         let tls_settings =
