@@ -23,27 +23,37 @@ pub mod upstream;
 #[configurable_component(source("topsql"))]
 #[derive(Debug, Clone)]
 pub struct TopSQLConfig {
-    /// PLACEHOLDER
+    /// PD address for legacy mode
     pub pd_address: String,
 
-    /// PLACEHOLDER
+    /// TLS configuration
     pub tls: Option<TlsConfig>,
 
-    /// PLACEHOLDER
+    /// Initial retry delay in seconds
     #[serde(default = "default_init_retry_delay")]
     pub init_retry_delay_seconds: f64,
 
-    /// PLACEHOLDER
+    /// Topology fetch interval in seconds
     #[serde(default = "default_topology_fetch_interval")]
     pub topology_fetch_interval_seconds: f64,
 
-    /// PLACEHOLDER
+    /// Top N queries to collect
     #[serde(default = "default_top_n")]
     pub top_n: usize,
 
-    /// PLACEHOLDER
+    /// Downsampling interval
     #[serde(default = "default_downsampling_interval")]
     pub downsampling_interval: u32,
+
+    /// TiDB group for nextgen mode
+    pub tidb_group: Option<String>,
+
+    /// Kubernetes instance label for nextgen mode
+    pub label_k8s_instance: Option<String>,
+
+    /// Keyspace to VM tenants mapping for nextgen mode
+    #[serde(skip)]
+    pub keyspace_to_vmtenants: Option<std::collections::HashMap<String, (String, String)>>,
 }
 
 pub const fn default_init_retry_delay() -> f64 {
@@ -71,6 +81,9 @@ impl GenerateConfig for TopSQLConfig {
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
             top_n: default_top_n(),
             downsampling_interval: default_downsampling_interval(),
+            tidb_group: None,
+            label_k8s_instance: None,
+            keyspace_to_vmtenants: None,
         })
         .unwrap()
     }
@@ -82,13 +95,18 @@ impl SourceConfig for TopSQLConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
         self.validate_tls()?;
 
-        let pd_address = self.pd_address.clone();
         let tls = self.tls.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
         let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
         let top_n = self.top_n;
         let downsampling_interval = self.downsampling_interval;
         let schema_update_interval = Duration::from_secs(60);
+
+        let pd_address = self.pd_address.clone();
+        let tidb_group = self.tidb_group.clone();
+        let label_k8s_instance = self.label_k8s_instance.clone();
+        let keyspace_to_vmtenants = self.keyspace_to_vmtenants.clone().unwrap_or_default();
+
         Ok(Box::pin(async move {
             let controller = Controller::new(
                 pd_address,
@@ -99,6 +117,9 @@ impl SourceConfig for TopSQLConfig {
                 schema_update_interval,
                 tls,
                 &cx.proxy,
+                tidb_group,
+                label_k8s_instance,
+                keyspace_to_vmtenants,
                 cx.out,
             )
             .await

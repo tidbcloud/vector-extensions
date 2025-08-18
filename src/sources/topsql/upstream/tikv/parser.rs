@@ -284,6 +284,7 @@ impl ResourceUsageRecordParser {
             plan_digest: Some(plan_digest),
             table_id,
             label,
+            keyspace_name: None,
         })
     }
 }

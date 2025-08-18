@@ -77,6 +77,8 @@ default = [
     "sinks",
 ]
 sources = ["sources-logs", "vector/sources-metrics"]
+# Enable nextgen functionality for TiDB/TiKV
+nextgen = []
 sources-logs = [
   "vector/sources-amqp",
   "vector/sources-aws_kinesis_firehose",
