@@ -79,6 +79,8 @@ default = [
     "vector/unix",
     "vector/enterprise",
 ]
+# Enable nextgen functionality for TiDB/TiKV
+nextgen = []
 sources = ["sources-logs", "sources-metrics"]
 sources-logs = [
     "vector/sources-amqp",

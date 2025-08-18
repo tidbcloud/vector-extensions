@@ -4,7 +4,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use ordered_float::NotNan;
 use vector::event::{KeyString, Value};
-use vector_lib::event::LogEvent;
+use vector_lib::event::{Event, LogEvent, Metric, MetricKind, MetricTags, MetricValue};
 
 use crate::sources::topsql::upstream::consts::{
     LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, METRIC_NAME_INSTANCE,
@@ -46,4 +46,43 @@ pub fn instance_event(instance: String, instance_type: String) -> LogEvent {
         &[Utc::now()],
         &[1.0],
     )
+}
+
+pub fn instance_event_metric(instance: String, instance_type: String) -> Event {
+    let mut tags = BTreeMap::new();
+    tags.insert(LABEL_INSTANCE.to_owned(), instance);
+    tags.insert(LABEL_INSTANCE_TYPE.to_owned(), instance_type);
+    let metric = Metric::new(
+        METRIC_NAME_INSTANCE,
+        MetricKind::Absolute,
+        MetricValue::Gauge { value: 1.0 },
+    )
+    .with_timestamp(Some(Utc::now()))
+    .with_tags(Some(MetricTags::from(tags)));
+    Event::Metric(metric)
+}
+
+pub fn instance_event_with_tags(
+    instance: String,
+    instance_type: String,
+    cluster_id: String,
+    vm_account_id: String,
+    vm_project_id: String,
+) -> Event {
+    let mut tags = BTreeMap::new();
+    tags.insert(LABEL_INSTANCE.to_owned(), instance);
+    tags.insert(LABEL_INSTANCE_TYPE.to_owned(), instance_type);
+    tags.insert("cluster_id".to_string(), cluster_id.clone());
+    tags.insert("tidb_cluster_id".to_string(), cluster_id.clone());
+    tags.insert("keyspace_name".to_string(), cluster_id.clone());
+    tags.insert("vm_account_id".to_string(), vm_account_id.clone());
+    tags.insert("vm_project_id".to_string(), vm_project_id.clone());
+    let metric = Metric::new(
+        METRIC_NAME_INSTANCE,
+        MetricKind::Absolute,
+        MetricValue::Gauge { value: 1.0 },
+    )
+    .with_timestamp(Some(Utc::now()))
+    .with_tags(Some(MetricTags::from(tags)));
+    Event::Metric(metric)
 }

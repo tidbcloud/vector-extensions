@@ -4,18 +4,22 @@ mod store;
 mod tidb;
 mod utils;
 
+mod tidb_nextgen;
+mod tikv_nextgen;
+
 #[cfg(test)]
 mod mock;
 
-use std::collections::HashSet;
-use std::fs::read;
-
+use crate::sources::topsql::topology::Component;
 use snafu::{ResultExt, Snafu};
+use std::collections::HashSet;
+
+// Import dependencies
+use kube;
+use std::fs::read;
 use vector::config::ProxyConfig;
 use vector::http::HttpClient;
 use vector::tls::{MaybeTlsSettings, TlsConfig};
-
-use crate::sources::topsql::topology::Component;
 
 #[derive(Debug, Snafu)]
 pub enum FetchError {
@@ -33,21 +37,28 @@ pub enum FetchError {
     BuildHttpClient { source: vector::http::HttpError },
     #[snafu(display("Failed to build etcd client: {}", source))]
     BuildEtcdClient { source: etcd_client::Error },
+    #[snafu(display("Failed to build kubernetes client: {}", source))]
+    BuildKubeClient { source: kube::Error },
     #[snafu(display("Failed to fetch pd topology: {}", source))]
     FetchPDTopology { source: pd::FetchError },
     #[snafu(display("Failed to fetch tidb topology: {}", source))]
     FetchTiDBTopology { source: tidb::FetchError },
     #[snafu(display("Failed to fetch store topology: {}", source))]
     FetchStoreTopology { source: store::FetchError },
+    #[snafu(display("Failed to fetch tidb nextgen topology: {}", source))]
+    FetchTiDBNextGenTopology { source: tidb_nextgen::FetchError },
+    #[snafu(display("Failed to fetch tikv nextgen topology: {}", source))]
+    FetchTiKVNextGenTopology { source: tikv_nextgen::FetchError },
 }
 
-pub struct TopologyFetcher {
+// Legacy topology fetcher
+pub struct LegacyTopologyFetcher {
     pd_address: String,
     http_client: HttpClient<hyper::Body>,
     pub etcd_client: etcd_client::Client,
 }
 
-impl TopologyFetcher {
+impl LegacyTopologyFetcher {
     pub async fn new(
         pd_address: String,
         tls_config: Option<TlsConfig>,
@@ -89,17 +100,15 @@ impl TopologyFetcher {
     ) -> Result<String, FetchError> {
         let uri: hyper::Uri = address.parse().context(ParseAddressSnafu)?;
         if uri.scheme().is_none() {
-            if tls_config.is_some() {
-                address = format!("https://{}", address);
+            address = if tls_config.is_some() {
+                format!("https://{}", address)
             } else {
-                address = format!("http://{}", address);
-            }
+                format!("http://{}", address)
+            };
         }
-
         if address.ends_with('/') {
             address.pop();
         }
-
         Ok(address)
     }
 
@@ -109,6 +118,7 @@ impl TopologyFetcher {
     ) -> Result<HttpClient<hyper::Body>, FetchError> {
         let tls_settings =
             MaybeTlsSettings::tls_client(tls_config).context(BuildTlsSettingsSnafu)?;
+
         let http_client =
             HttpClient::new(tls_settings, proxy_config).context(BuildHttpClientSnafu)?;
         Ok(http_client)
@@ -119,7 +129,7 @@ impl TopologyFetcher {
         tls_config: &Option<TlsConfig>,
     ) -> Result<etcd_client::Client, FetchError> {
         let etcd_connect_opt = Self::build_etcd_connect_opt(tls_config)?;
-        let etcd_client = etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
+        let etcd_client: etcd_client::Client = etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
             .await
             .context(BuildEtcdClientSnafu)?;
         Ok(etcd_client)
@@ -152,6 +162,116 @@ impl TopologyFetcher {
     }
 }
 
+// Nextgen topology fetcher
+pub struct NextgenTopologyFetcher {
+    tidb_group: Option<String>,
+    label_k8s_instance: Option<String>,
+    kube_client: kube::Client,
+}
+
+impl NextgenTopologyFetcher {
+    pub async fn new(
+        tidb_group: Option<String>,
+        label_k8s_instance: Option<String>,
+    ) -> Result<Self, FetchError> {
+        let kube_client = Self::build_kube_client().await?;
+
+        Ok(Self {
+            tidb_group,
+            label_k8s_instance,
+            kube_client,
+        })
+    }
+
+    pub async fn get_up_components(
+        &mut self,
+        components: &mut HashSet<Component>,
+    ) -> Result<(), FetchError> {
+        if let Some(tidb_group) = &self.tidb_group {
+            tidb_nextgen::TiDBNextGenTopologyFetcher::new(
+                self.kube_client.clone(),
+                tidb_group.clone(),
+            )
+            .get_up_tidbs(components)
+            .await
+            .context(FetchTiDBNextGenTopologySnafu)?;
+        }
+        if let Some(label_k8s_instance) = &self.label_k8s_instance {
+            tikv_nextgen::TiKVNextGenTopologyFetcher::new(
+                self.kube_client.clone(),
+                label_k8s_instance.clone(),
+            )
+            .get_up_tikvs(components)
+            .await
+            .context(FetchTiKVNextGenTopologySnafu)?;
+        }
+        Ok(())
+    }
+
+    async fn build_kube_client() -> Result<kube::Client, FetchError> {
+        let client = kube::Client::try_default()
+            .await
+            .context(BuildKubeClientSnafu)?;
+        Ok(client)
+    }
+}
+
+// Unified topology fetcher that abstracts over both implementations
+pub struct TopologyFetcher {
+    inner: TopologyFetcherImpl,
+}
+
+// Internal enum to handle different implementations
+enum TopologyFetcherImpl {
+    Legacy(LegacyTopologyFetcher),
+    Nextgen(NextgenTopologyFetcher),
+}
+
+impl TopologyFetcher {
+    /// Create a new topology fetcher based on the current feature configuration
+    pub async fn new(
+        pd_address: String,
+        tls_config: Option<TlsConfig>,
+        proxy_config: &ProxyConfig,
+        tidb_group: Option<String>,
+        label_k8s_instance: Option<String>,
+    ) -> Result<Self, FetchError> {
+        // Use runtime mode to determine which implementation to use
+        use crate::common::features::is_nextgen_mode;
+
+        if is_nextgen_mode() {
+            let fetcher = NextgenTopologyFetcher::new(tidb_group, label_k8s_instance).await?;
+            Ok(Self {
+                inner: TopologyFetcherImpl::Nextgen(fetcher),
+            })
+        } else {
+            let fetcher = LegacyTopologyFetcher::new(pd_address, tls_config, proxy_config).await?;
+            Ok(Self {
+                inner: TopologyFetcherImpl::Legacy(fetcher),
+            })
+        }
+    }
+
+    /// Fetch topology components and populate the provided set
+    pub async fn get_up_components(
+        &mut self,
+        components: &mut HashSet<Component>,
+    ) -> Result<(), FetchError> {
+        match &mut self.inner {
+            TopologyFetcherImpl::Legacy(fetcher) => fetcher.get_up_components(components).await,
+            TopologyFetcherImpl::Nextgen(fetcher) => fetcher.get_up_components(components).await,
+        }
+    }
+
+    /// Get the etcd client (only available in legacy mode)
+    pub fn etcd_client(&self) -> Option<&etcd_client::Client> {
+        match &self.inner {
+            TopologyFetcherImpl::Legacy(fetcher) => Some(&fetcher.etcd_client),
+            TopologyFetcherImpl::Nextgen(_) => None,
+        }
+    }
+}
+
 // #[cfg(test)]
 // mod tests {
 //     use vector::tls::TlsConfig;
@@ -172,12 +292,17 @@ impl TopologyFetcher {
 //         });
 
 //         let proxy_config = ProxyConfig::from_env();
-//         let mut fetcher =
-//             TopologyFetcher::new("localhost:2379".to_owned(), tls_config, &proxy_config)
-//                 .await
-//                 .unwrap();
+
+//         let mut topo = TopologyFetcher::new(
+//             "127.0.0.1:2379".to_string(),
+//             tls_config,
+//             &proxy_config,
+//         )
+//         .await
+//         .unwrap();
+
 //         let mut components = HashSet::new();
-//         fetcher.get_up_components(&mut components).await.unwrap();
-//         // println!("{:#?}", components);
+//         topo.get_up_components(&mut components).await.unwrap();
+//         println!("{:?}", components);
 //     }
 // }
