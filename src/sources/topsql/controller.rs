@@ -39,7 +39,7 @@ struct ActiveSchemaManager {
 
 impl Controller {
     pub async fn new(
-        pd_address: String,
+        pd_address: Option<String>,
         topo_fetch_interval: Duration,
         init_retry_delay: Duration,
         top_n: usize,
