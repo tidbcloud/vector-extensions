@@ -49,6 +49,8 @@ pub enum FetchError {
     FetchTiDBNextGenTopology { source: tidb_nextgen::FetchError },
     #[snafu(display("Failed to fetch tikv nextgen topology: {}", source))]
     FetchTiKVNextGenTopology { source: tikv_nextgen::FetchError },
+    #[snafu(display("Configuration error: {}", message))]
+    ConfigurationError { message: String },
 }
 
 // Legacy topology fetcher
@@ -230,7 +232,7 @@ enum TopologyFetcherImpl {
 impl TopologyFetcher {
     /// Create a new topology fetcher based on the current feature configuration
     pub async fn new(
-        pd_address: String,
+        pd_address: Option<String>,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         tidb_group: Option<String>,
@@ -245,6 +247,10 @@ impl TopologyFetcher {
                 inner: TopologyFetcherImpl::Nextgen(fetcher),
             })
         } else {
+            // In legacy mode, pd_address is required
+            let pd_address = pd_address.ok_or_else(|| FetchError::ConfigurationError { 
+                message: "PD address is required in legacy mode".to_string()
+            })?;
             let fetcher = LegacyTopologyFetcher::new(pd_address, tls_config, proxy_config).await?;
             Ok(Self {
                 inner: TopologyFetcherImpl::Legacy(fetcher),

@@ -24,7 +24,7 @@ pub mod upstream;
 #[derive(Debug, Clone)]
 pub struct TopSQLConfig {
     /// PD address for legacy mode
-    pub pd_address: String,
+    pub pd_address: Option<String>,
 
     /// TLS configuration
     pub tls: Option<TlsConfig>,
@@ -75,7 +75,7 @@ pub const fn default_downsampling_interval() -> u32 {
 impl GenerateConfig for TopSQLConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
-            pd_address: "127.0.0.1:2379".to_owned(),
+            pd_address: Some("127.0.0.1:2379".to_owned()),
             tls: None,
             init_retry_delay_seconds: default_init_retry_delay(),
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
