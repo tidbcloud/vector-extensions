@@ -37,7 +37,13 @@ impl Collector {
 
     /// Run the collector for all enabled tables
     pub async fn run(self) {
-        info!("Starting collector for instance: {}", self.instance);
+        let enabled_tables: Vec<&str> = self.tables.iter()
+            .filter(|t| t.enabled)
+            .map(|t| t.source_table.as_str())
+            .collect();
+
+        info!("Starting collector for {} with {} tables: [{}]",
+              self.instance, enabled_tables.len(), enabled_tables.join(", "));
 
         // Start collection tasks for each enabled table
         for table in &self.tables {
@@ -59,8 +65,6 @@ impl Collector {
                 });
             }
         }
-
-        info!("Started all collection tasks for instance: {}", self.instance);
     }
 
     /// Collect data from a specific table
@@ -84,16 +88,16 @@ impl Collector {
             _ => collection_config.short_interval,
         };
 
-        info!("Starting collection for table {} with {}s interval", table.source_table, interval);
+        info!("Starting collection for table {} with {}s interval from instance {}", table.source_table, interval, instance);
 
         // Get table schema once at startup
         let column_types = match Self::get_table_schema(&table, &database_config).await {
             Ok(schema) => {
-                info!("Retrieved schema for table {}: {} columns", table.source_table, schema.len());
+                debug!("Retrieved schema for table {} from instance {}: {} columns", table.source_table, instance, schema.len());
                 schema
             }
             Err(e) => {
-                error!("Failed to get schema for table {}: {}", table.source_table, e);
+                error!("Failed to get schema for table {} from instance {}: {}", table.source_table, instance, e);
                 return;
             }
         };
@@ -111,7 +115,7 @@ impl Collector {
             interval_timer.tick().await;
             
             // Query the table data using cached schema for proper type conversion
-            match Self::query_table_data(&table, &database_config, &column_types).await {
+            match Self::query_table_data(&table, &database_config, &column_types, &instance).await {
                 Ok(data) => {
                     if !data.is_empty() {
                         let data_len = data.len();
@@ -138,9 +142,9 @@ impl Collector {
                             
                             // Use send_batch for efficient bulk transmission
                             if let Err(e) = out.send_batch(events_to_send).await {
-                                error!("Failed to send batch for table {}: {}", table.source_table, e);
+                                error!("Failed to send batch for table {} from instance {}: {}", table.source_table, instance, e);
                             } else {
-                                info!("Sent batch of {} events for table {}", batch_size_sent, table.source_table);
+                                info!("Sent batch of {} events for table {} from instance {}", batch_size_sent, table.source_table, instance);
                                 last_send_time = std::time::Instant::now();
                                 is_first_batch = false; // Schema sent, future batches don't need it
                                 
@@ -208,6 +212,7 @@ impl Collector {
         table: &TableConfig,
         database_config: &DatabaseConfig,
         column_types: &HashMap<String, (String, bool)>,
+        instance: &str,
     ) -> Result<Vec<HashMap<String, Value>>, Box<dyn std::error::Error + Send + Sync>> {
         // Build connection string
         let url = format!(
@@ -234,7 +239,7 @@ impl Collector {
         
         // Execute query
         let rows = sqlx::query(&sql).fetch_all(&pool).await?;
-        info!("Query returned {} rows for {}.{}", rows.len(), table.source_schema, table.source_table);
+        debug!("Query returned {} rows for {}.{} from instance {}", rows.len(), table.source_schema, table.source_table, instance);
         
         // Convert rows to HashMap format using cached schema
         let mut result = Vec::new();

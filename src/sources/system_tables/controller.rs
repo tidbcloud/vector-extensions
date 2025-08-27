@@ -9,11 +9,13 @@ use vector_lib::tls::TlsConfig;
 use crate::sources::system_tables::{
     collector::Collector, DatabaseConfig, CollectionConfig, TableConfig,
 };
+use crate::sources::topsql::topology::{Component, FetchError, InstanceType, TopologyFetcher};
 
 /// Main controller for system_tables source
 pub struct Controller {
     topology_fetch_interval: Duration,
-    tidb_instances: HashSet<String>,
+    topology_fetcher: TopologyFetcher,
+    tidb_components: HashSet<Component>,
     running_collectors: HashMap<String, tokio::task::JoinHandle<()>>,
     database_config: DatabaseConfig,
     collection_config: CollectionConfig,
@@ -36,9 +38,25 @@ impl Controller {
         proxy_config: &ProxyConfig,
         out: SourceSender,
     ) -> vector::Result<Self> {
+        // Create topology fetcher based on configuration
+        let topology_fetcher = if let Some(pd_addr) = pd_address {
+            TopologyFetcher::new(
+                pd_addr,
+                tls.clone(),
+                proxy_config,
+                tidb_group,
+                None, // label_k8s_instance not used for system_tables
+            )
+            .await
+            .map_err(|e| format!("Failed to create topology fetcher: {}", e))?
+        } else {
+            return Err("PD address is required for system_tables source".into());
+        };
+
         Ok(Self {
             topology_fetch_interval,
-            tidb_instances: HashSet::new(),
+            topology_fetcher,
+            tidb_components: HashSet::new(),
             running_collectors: HashMap::new(),
             database_config,
             collection_config,
@@ -75,93 +93,104 @@ impl Controller {
     }
 
     /// Fetch TiDB instances and update collectors
-    async fn fetch_and_update_tidb_instances(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut new_instances = HashSet::new();
+    async fn fetch_and_update_tidb_instances(&mut self) -> Result<(), FetchError> {
+        let mut new_components = HashSet::new();
 
-        // For now, use the configured database as the primary instance
-        // In a real implementation, you would fetch from PD or K8s
-        let primary_instance = format!("{}:{}", self.database_config.host, self.database_config.port);
-        new_instances.insert(primary_instance);
+        // Fetch topology from PD/etcd or K8s
+        self.topology_fetcher
+            .get_up_components(&mut new_components)
+            .await?;
 
-        // If PD address is configured, try to fetch additional instances
-        // TODO: Implement PD-based TiDB discovery
-        // For now, just use the primary instance
+        // Filter only TiDB components
+        let tidb_components: HashSet<Component> = new_components
+            .into_iter()
+            .filter(|c| c.instance_type == InstanceType::TiDB)
+            .collect();
 
-        // Update collectors based on instance changes
-        self.update_collectors(new_instances).await;
+        // Only log if there are changes in TiDB components
+        if tidb_components != self.tidb_components {
+            info!("TiDB topology changed: {} components discovered", tidb_components.len());
+            for component in &tidb_components {
+                info!("  TiDB instance: {}:{}", component.host, component.primary_port);
+            }
+        } else {
+            debug!("TiDB topology unchanged: {} components", tidb_components.len());
+        }
+
+        // Update collectors based on component changes
+        self.update_collectors(tidb_components).await;
 
         Ok(())
     }
 
-    /// Fetch TiDB instances from PD (simplified implementation)
-    async fn fetch_tidb_from_pd(&self, _pd_address: &str) -> Result<HashSet<String>, Box<dyn std::error::Error>> {
-        // Simplified: return empty set for now
-        // In a real implementation, you would query PD API to get TiDB instances
-        Ok(HashSet::new())
-    }
 
-    /// Update collectors based on new TiDB instances
-    async fn update_collectors(&mut self, new_instances: HashSet<String>) {
+
+    /// Update collectors based on new TiDB components
+    async fn update_collectors(&mut self, new_components: HashSet<Component>) {
         // Clone tables first to avoid borrowing issues
         let tables = self.tables.clone();
-        
+
         // Separate tables into cluster-level and instance-level
         let (cluster_tables, instance_tables): (Vec<_>, Vec<_>) = tables
             .iter()
             .partition(|table| table.source_table.starts_with("CLUSTER_"));
 
-        info!("Table classification: {} cluster tables, {} instance tables", 
-              cluster_tables.len(), instance_tables.len());
+        debug!("Table classification: {} cluster tables, {} instance tables",
+               cluster_tables.len(), instance_tables.len());
 
         // For cluster-level tables, only start one collector on the primary instance
         if !cluster_tables.is_empty() {
-            let primary_instance = new_instances.iter().next().cloned();
-            if let Some(primary_instance) = primary_instance {
-                let cluster_collector_key = format!("{}_cluster", primary_instance);
+            let primary_component = new_components.iter().next().cloned();
+            if let Some(primary_component) = primary_component {
+                let cluster_collector_key = format!("{}:{}_cluster", primary_component.host, primary_component.primary_port);
                 if !self.running_collectors.contains_key(&cluster_collector_key) {
                     let cluster_tables_owned: Vec<TableConfig> = cluster_tables.into_iter().cloned().collect();
-                    self.start_collector_with_tables(&primary_instance, cluster_tables_owned, &cluster_collector_key).await;
+                    self.start_collector_with_tables(&primary_component, cluster_tables_owned, &cluster_collector_key).await;
                 }
             }
         }
 
         // For instance-level tables, start collectors on all instances
         if !instance_tables.is_empty() {
-            for instance in &new_instances {
-                let instance_collector_key = format!("{}_instance", instance);
+            for component in &new_components {
+                let instance_collector_key = format!("{}:{}_instance", component.host, component.primary_port);
                 if !self.running_collectors.contains_key(&instance_collector_key) {
                     let instance_tables_owned: Vec<TableConfig> = instance_tables.iter().map(|t| (*t).clone()).collect();
-                    self.start_collector_with_tables(instance, instance_tables_owned, &instance_collector_key).await;
+                    self.start_collector_with_tables(component, instance_tables_owned, &instance_collector_key).await;
                 }
             }
         }
 
         // Stop collectors for removed instances
-        let current_instances: HashSet<_> = self.running_collectors.keys()
-            .filter_map(|key| {
-                if key.ends_with("_cluster") || key.ends_with("_instance") {
-                    key.split('_').next().map(|s| s.to_string())
-                } else {
-                    Some(key.clone())
-                }
-            })
+        let current_component_keys: HashSet<_> = self.tidb_components.iter()
+            .map(|c| format!("{}:{}", c.host, c.primary_port))
             .collect();
-        
-        for instance in current_instances.difference(&new_instances) {
-            self.stop_collector_by_instance(instance).await;
+        let new_component_keys: HashSet<_> = new_components.iter()
+            .map(|c| format!("{}:{}", c.host, c.primary_port))
+            .collect();
+
+        for removed_key in current_component_keys.difference(&new_component_keys) {
+            self.stop_collector_by_instance(removed_key).await;
         }
 
-        // Update the instance set
-        self.tidb_instances = new_instances;
+        // Update the component set
+        self.tidb_components = new_components;
     }
     
-    /// Start a collector for a specific TiDB instance with specific tables
-    async fn start_collector_with_tables(&mut self, instance: &str, tables: Vec<TableConfig>, collector_key: &str) {
-        info!("Starting collector for TiDB instance: {} with {} tables (key: {})", instance, tables.len(), collector_key);
+    /// Start a collector for a specific TiDB component with specific tables
+    async fn start_collector_with_tables(&mut self, component: &Component, tables: Vec<TableConfig>, collector_key: &str) {
+        let table_names: Vec<&str> = tables.iter().map(|t| t.source_table.as_str()).collect();
+        info!("Starting collector for {}:{} with tables: [{}]",
+              component.host, component.primary_port, table_names.join(", "));
+
+        // Create a database config specific to this TiDB instance
+        let mut instance_db_config = self.database_config.clone();
+        instance_db_config.host = component.host.clone();
+        instance_db_config.port = component.primary_port;
 
         let collector = Collector::new(
-            instance.to_string(),
-            self.database_config.clone(),
+            format!("{}:{}", component.host, component.primary_port),
+            instance_db_config,
             self.collection_config.clone(),
             tables,
             self.out.clone(),
@@ -172,7 +201,6 @@ impl Controller {
         });
 
         self.running_collectors.insert(collector_key.to_string(), handle);
-        info!("Started collector for TiDB instance: {} (key: {})", instance, collector_key);
     }
 
     /// Stop a collector for a specific TiDB instance

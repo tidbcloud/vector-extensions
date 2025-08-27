@@ -19,7 +19,7 @@ mod collector;
 #[derive(Debug, Clone)]
 pub struct SystemTablesConfig {
     /// PD address for legacy mode (to discover TiDB instances)
-    pub pd_address: Option<String>,
+    pub pd_address: String,
 
     /// TiDB group name for nextgen mode
     pub tidb_group: Option<String>,
@@ -121,7 +121,7 @@ pub const fn default_topology_fetch_interval() -> f64 {
 impl GenerateConfig for SystemTablesConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
-            pd_address: Some("127.0.0.1:2379".to_owned()),
+            pd_address: "127.0.0.1:2379".to_owned(),
             tidb_group: None,
             database_username: "root".to_owned(),
             database_password: "".to_owned(),
@@ -155,7 +155,7 @@ impl GenerateConfig for SystemTablesConfig {
 impl SourceConfig for SystemTablesConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
-        let pd_address = self.pd_address.clone();
+        let pd_address = Some(self.pd_address.clone());
         let tidb_group = self.tidb_group.clone();
         
         // Create DatabaseConfig from flat fields
