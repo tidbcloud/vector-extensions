@@ -86,9 +86,9 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             for e in evicted {
                 others.timestamp_sec = *ts;
                 others.cpu_time_ms += e.cpu_time_ms;
-                others.stmt_exec_count = e.stmt_exec_count;
-                others.stmt_duration_sum_ns = e.stmt_duration_sum_ns;
-                others.stmt_duration_count = e.stmt_duration_count;
+                others.stmt_exec_count += e.stmt_exec_count;
+                others.stmt_duration_sum_ns += e.stmt_duration_sum_ns;
+                others.stmt_duration_count += e.stmt_duration_count;
                 for (k, v) in &e.stmt_kv_exec_count {
                     match others.stmt_kv_exec_count.get(k) {
                         None => {
