@@ -1,0 +1,105 @@
+# Example configuration for system_tables source and deltalake sink
+
+sources:
+  system_tables:
+    type: "system_tables"
+    
+    # PD address for legacy mode (to discover TiDB instances)
+    pd_address: "127.0.0.1:2379"
+    
+    # Database connection configuration
+    database:
+      username: "root"
+      password: ""
+      host: "127.0.0.1"
+      port: 4000
+      database: "test"
+      max_connections: 10
+      connect_timeout: 30
+    
+    # Collection interval configuration
+    collection:
+      short_interval: 5      # 5 seconds for high-frequency tables
+      long_interval: 1800    # 30 minutes for low-frequency tables
+      retention_days: 7
+    
+    # Tables to collect data from
+    tables:
+      - source_schema: "information_schema"
+        source_table: "PROCESSLIST"
+        dest_table: "hist_processlist"
+        collection_interval: "short"
+        where_clause: "command != 'Sleep'"
+        enabled: true
+      
+      - source_schema: "information_schema"
+        source_table: "INNODB_TRX"
+        dest_table: "hist_innodb_trx"
+        collection_interval: "short"
+        enabled: true
+      
+      - source_schema: "information_schema"
+        source_table: "TIDB_TRX"
+        dest_table: "hist_tidb_trx"
+        collection_interval: "short"
+        enabled: true
+      
+      - source_schema: "information_schema"
+        source_table: "TIDB_INDEX_USAGE"
+        dest_table: "hist_tidb_index_usage"
+        collection_interval: "long"
+        enabled: true
+      
+      - source_schema: "information_schema"
+        source_table: "MEMORY_USAGE"
+        dest_table: "hist_memory_usage"
+        collection_interval: "short"
+        enabled: true
+
+sinks:
+  deltalake:
+    type: "deltalake"
+    inputs: ["system_tables"]
+    
+    # Base path for Delta Lake tables
+    base_path: "./delta-tables"
+    
+    # Table configurations
+    tables:
+      - name: "hist_processlist"
+        partition_by: ["date", "instance"]
+        schema_evolution: true
+      
+      - name: "hist_innodb_trx"
+        partition_by: ["date", "instance"]
+        schema_evolution: true
+      
+      - name: "hist_tidb_trx"
+        partition_by: ["date", "instance"]
+        schema_evolution: true
+      
+      - name: "hist_tidb_index_usage"
+        partition_by: ["date", "instance"]
+        schema_evolution: true
+      
+      - name: "hist_memory_usage"
+        partition_by: ["date", "instance"]
+        schema_evolution: true
+    
+    # Write configuration
+    write:
+      batch_size: 1000
+      timeout_secs: 30
+      compression: "snappy"
+    
+    # Storage options for cloud storage (optional)
+    # storage_options:
+    #   AWS_ACCESS_KEY_ID: "your-key"
+    #   AWS_SECRET_ACCESS_KEY: "your-secret"
+    #   AWS_DEFAULT_REGION: "us-west-2"
+
+# Global configuration
+data_dir: "/tmp/vector"
+log_schema:
+  source_type: "log"
+  timestamp: "timestamp"
