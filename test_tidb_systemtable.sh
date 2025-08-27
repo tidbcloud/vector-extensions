@@ -75,11 +75,11 @@ sinks:
     type: "deltalake"
     inputs: ["system_tables"]
     base_path: "${BASE_PATH}"
-    batch_size: 1000            # 最小批处理大小，让批处理更容易触发
-    timeout_secs: 60          # 减少超时时间，更快触发批处理
+    batch_size: 1000            # Minimum batch size to make batching easier to trigger
+    timeout_secs: 60          # Reduce timeout for faster batch triggering
     compression: "snappy"
-    # Delta Lake 优化配置
-    # 使用批处理和超时来减少文件数量
+    # Delta Lake optimization configuration
+    # Use batching and timeout to reduce file count
 
 data_dir: "/tmp/vector"
 log_schema:

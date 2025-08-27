@@ -22,10 +22,10 @@ use vector_lib::{
     tls::TlsConfig,
 };
 
+use crate::common::topology::{Component, InstanceType};
 use crate::sources::topsql::{
     schema_cache::SchemaCache,
     shutdown::ShutdownSubscriber,
-    topology::{Component, InstanceType},
     upstream::{
         parser::UpstreamEventParser,
         tidb::TiDBUpstream,

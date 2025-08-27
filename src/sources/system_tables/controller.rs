@@ -9,7 +9,8 @@ use vector_lib::tls::TlsConfig;
 use crate::sources::system_tables::{
     collector::Collector, DatabaseConfig, CollectionConfig, TableConfig,
 };
-use crate::sources::topsql::topology::{Component, FetchError, InstanceType, TopologyFetcher};
+use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetcher};
+use crate::common::features::is_nextgen_mode;
 
 /// Main controller for system_tables source
 pub struct Controller {
@@ -30,6 +31,7 @@ impl Controller {
     pub async fn new(
         pd_address: Option<String>,
         tidb_group: Option<String>,
+        label_k8s_instance: Option<String>,
         topology_fetch_interval: Duration,
         database_config: DatabaseConfig,
         collection_config: CollectionConfig,
@@ -38,19 +40,35 @@ impl Controller {
         proxy_config: &ProxyConfig,
         out: SourceSender,
     ) -> vector::Result<Self> {
-        // Create topology fetcher based on configuration
-        let topology_fetcher = if let Some(pd_addr) = pd_address {
+        // Create topology fetcher based on nextgen mode and configuration
+        let topology_fetcher = if is_nextgen_mode() {
+            // Nextgen mode: use K8s-based topology fetching
+            info!("Using nextgen mode for topology discovery");
+            if tidb_group.is_none() && label_k8s_instance.is_none() {
+                return Err("In nextgen mode, either tidb_group or label_k8s_instance must be specified".into());
+            }
+            TopologyFetcher::new(
+                String::new(), // Empty PD address for nextgen mode
+                tls.clone(),
+                proxy_config,
+                tidb_group.clone(),
+                label_k8s_instance.clone(),
+            )
+            .await
+            .map_err(|e| format!("Failed to create nextgen topology fetcher: {}", e))?
+        } else {
+            // Legacy mode: use PD/etcd-based topology fetching
+            info!("Using legacy mode for topology discovery");
+            let pd_addr = pd_address.ok_or("In legacy mode, pd_address must be specified")?;
             TopologyFetcher::new(
                 pd_addr,
                 tls.clone(),
                 proxy_config,
-                tidb_group,
-                None, // label_k8s_instance not used for system_tables
+                tidb_group.clone(),
+                label_k8s_instance.clone(),
             )
             .await
-            .map_err(|e| format!("Failed to create topology fetcher: {}", e))?
-        } else {
-            return Err("PD address is required for system_tables source".into());
+            .map_err(|e| format!("Failed to create legacy topology fetcher: {}", e))?
         };
 
         Ok(Self {

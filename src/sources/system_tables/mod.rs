@@ -19,10 +19,13 @@ mod collector;
 #[derive(Debug, Clone)]
 pub struct SystemTablesConfig {
     /// PD address for legacy mode (to discover TiDB instances)
-    pub pd_address: String,
+    pub pd_address: Option<String>,
 
     /// TiDB group name for nextgen mode
     pub tidb_group: Option<String>,
+
+    /// Kubernetes instance label for nextgen mode
+    pub label_k8s_instance: Option<String>,
 
     /// Database username
     pub database_username: String,
@@ -121,8 +124,9 @@ pub const fn default_topology_fetch_interval() -> f64 {
 impl GenerateConfig for SystemTablesConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
-            pd_address: "127.0.0.1:2379".to_owned(),
+            pd_address: Some("127.0.0.1:2379".to_owned()),
             tidb_group: None,
+            label_k8s_instance: None,
             database_username: "root".to_owned(),
             database_password: "".to_owned(),
             database_host: "127.0.0.1".to_owned(),
@@ -155,8 +159,9 @@ impl GenerateConfig for SystemTablesConfig {
 impl SourceConfig for SystemTablesConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
-        let pd_address = Some(self.pd_address.clone());
+        let pd_address = self.pd_address.clone();
         let tidb_group = self.tidb_group.clone();
+        let label_k8s_instance = self.label_k8s_instance.clone();
         
         // Create DatabaseConfig from flat fields
         let database_config = DatabaseConfig {
@@ -185,6 +190,7 @@ impl SourceConfig for SystemTablesConfig {
             let controller = Controller::new(
                 pd_address,
                 tidb_group,
+                label_k8s_instance,
                 topology_fetch_interval,
                 database_config,
                 collection_config,

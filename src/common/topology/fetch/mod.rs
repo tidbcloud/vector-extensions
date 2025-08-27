@@ -10,7 +10,7 @@ mod tikv_nextgen;
 #[cfg(test)]
 mod mock;
 
-use crate::sources::topsql::topology::Component;
+use crate::common::topology::Component;
 use snafu::{ResultExt, Snafu};
 use std::collections::HashSet;
 
