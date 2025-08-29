@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use vector::config::{GenerateConfig, SourceConfig, SourceContext};
 use vector_lib::{
     config::{DataType, LogNamespace, SourceOutput},
@@ -7,12 +8,11 @@ use vector_lib::{
     source::Source,
     tls::TlsConfig,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::sources::system_tables::controller::Controller;
 
-mod controller;
 mod collector;
+mod controller;
 
 /// Configuration for the system_tables source
 #[configurable_component(source("system_tables"))]
@@ -52,8 +52,11 @@ pub struct SystemTablesConfig {
     /// Tables to collect data from (array of table configurations)
     pub tables: Vec<TableConfig>,
 
-    /// TLS configuration
-    pub tls: Option<TlsConfig>,
+    /// TLS configuration for PD/etcd connections
+    pub pd_tls: Option<TlsConfig>,
+
+    /// TLS configuration for database connections
+    pub database_tls: Option<TlsConfig>,
 
     /// TiDB topology fetch interval in seconds
     #[serde(default = "default_topology_fetch_interval")]
@@ -70,6 +73,7 @@ pub struct DatabaseConfig {
     pub database: String,
     pub max_connections: Option<u32>,
     pub connect_timeout: Option<u64>,
+    pub tls: Option<TlsConfig>,
 }
 
 /// Collection interval configuration
@@ -137,17 +141,16 @@ impl GenerateConfig for SystemTablesConfig {
             short_interval: 5,
             long_interval: 1800,
             retention_days: 7,
-            tables: vec![
-                TableConfig {
-                    source_schema: "information_schema".to_owned(),
-                    source_table: "PROCESSLIST".to_owned(),
-                    dest_table: "hist_processlist".to_owned(),
-                    collection_interval: "short".to_owned(),
-                    where_clause: Some("command != 'Sleep'".to_owned()),
-                    enabled: true,
-                }
-            ],
-            tls: None,
+            tables: vec![TableConfig {
+                source_schema: "information_schema".to_owned(),
+                source_table: "PROCESSLIST".to_owned(),
+                dest_table: "hist_processlist".to_owned(),
+                collection_interval: "short".to_owned(),
+                where_clause: Some("command != 'Sleep'".to_owned()),
+                enabled: true,
+            }],
+            pd_tls: None,
+            database_tls: None,
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
         })
         .unwrap()
@@ -162,7 +165,7 @@ impl SourceConfig for SystemTablesConfig {
         let pd_address = self.pd_address.clone();
         let tidb_group = self.tidb_group.clone();
         let label_k8s_instance = self.label_k8s_instance.clone();
-        
+
         // Create DatabaseConfig from flat fields
         let database_config = DatabaseConfig {
             username: self.database_username.clone(),
@@ -172,19 +175,20 @@ impl SourceConfig for SystemTablesConfig {
             database: self.database_name.clone(),
             max_connections: self.database_max_connections,
             connect_timeout: self.database_connect_timeout,
+            tls: self.database_tls.clone(),
         };
-        
+
         // Create CollectionConfig from flat fields
         let collection_config = CollectionConfig {
             short_interval: self.short_interval,
             long_interval: self.long_interval,
             retention_days: self.retention_days,
         };
-        
+
         // Use tables directly from configuration
         let tables = self.tables.clone();
-        
-        let tls = self.tls.clone();
+
+        let pd_tls = self.pd_tls.clone();
 
         Ok(Box::pin(async move {
             let controller = Controller::new(
@@ -195,7 +199,7 @@ impl SourceConfig for SystemTablesConfig {
                 database_config,
                 collection_config,
                 tables,
-                tls,
+                pd_tls,
                 &cx.proxy,
                 cx.out,
             )

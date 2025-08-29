@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
 use vector::{
     config::{GenerateConfig, SinkConfig, SinkContext},
     sinks::Healthcheck,
@@ -10,7 +11,6 @@ use vector_lib::{
     configurable::configurable_component,
     sink::VectorSink,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::sinks::deltalake::processor::DeltaLakeSink;
 
@@ -24,8 +24,6 @@ mod writer;
 pub struct DeltaLakeConfig {
     /// Base path for Delta Lake tables
     pub base_path: String,
-
-
 
     /// Batch size for writing
     #[serde(default = "default_batch_size")]
@@ -138,25 +136,20 @@ impl SinkConfig for DeltaLakeConfig {
 impl DeltaLakeConfig {
     fn build_processor(&self, _cx: SinkContext) -> vector::Result<VectorSink> {
         let base_path = PathBuf::from(&self.base_path);
-        
+
         // Tables are discovered dynamically from events
         // Default partition configuration will be applied to all tables
         let table_configs: Vec<DeltaTableConfig> = Vec::new();
-        
+
         let write_config = WriteConfig {
             batch_size: self.batch_size,
             timeout_secs: self.timeout_secs,
             compression: self.compression.clone(),
         };
-        
+
         let storage_options = self.storage_options.clone();
 
-        let sink = DeltaLakeSink::new(
-            base_path,
-            table_configs,
-            write_config,
-            storage_options,
-        );
+        let sink = DeltaLakeSink::new(base_path, table_configs, write_config, storage_options);
 
         Ok(VectorSink::from_event_streamsink(sink))
     }
@@ -164,24 +157,29 @@ impl DeltaLakeConfig {
     fn build_healthcheck(&self) -> vector::Result<Healthcheck> {
         // Simple healthcheck that verifies the base path is writable
         let base_path = PathBuf::from(&self.base_path);
-        
+
         let healthcheck = Box::pin(async move {
             // Check if directory exists and is writable
             if !base_path.exists() {
                 if let Err(e) = std::fs::create_dir_all(&base_path) {
-                    return Err(format!("Failed to create directory {}: {}", base_path.display(), e).into());
+                    return Err(format!(
+                        "Failed to create directory {}: {}",
+                        base_path.display(),
+                        e
+                    )
+                    .into());
                 }
             }
-            
+
             // Try to create a test file
             let test_file = base_path.join(".healthcheck");
             if let Err(e) = std::fs::write(&test_file, "test") {
                 return Err(format!("Failed to write to {}: {}", base_path.display(), e).into());
             }
-            
+
             // Clean up test file
             let _ = std::fs::remove_file(test_file);
-            
+
             Ok(())
         });
 

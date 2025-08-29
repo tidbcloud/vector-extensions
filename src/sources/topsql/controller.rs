@@ -8,9 +8,9 @@ use vector::shutdown::ShutdownSignal;
 use vector::SourceSender;
 use vector_lib::{config::proxy::ProxyConfig, tls::TlsConfig};
 
+use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetcher};
 use crate::sources::topsql::schema_cache::{SchemaCache, SchemaManager};
 use crate::sources::topsql::shutdown::{pair, ShutdownNotifier, ShutdownSubscriber};
-use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetcher};
 use crate::sources::topsql::upstream::TopSQLSource;
 
 pub struct Controller {

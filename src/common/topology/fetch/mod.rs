@@ -131,9 +131,10 @@ impl LegacyTopologyFetcher {
         tls_config: &Option<TlsConfig>,
     ) -> Result<etcd_client::Client, FetchError> {
         let etcd_connect_opt = Self::build_etcd_connect_opt(tls_config)?;
-        let etcd_client: etcd_client::Client = etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
-            .await
-            .context(BuildEtcdClientSnafu)?;
+        let etcd_client: etcd_client::Client =
+            etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
+                .await
+                .context(BuildEtcdClientSnafu)?;
         Ok(etcd_client)
     }
 

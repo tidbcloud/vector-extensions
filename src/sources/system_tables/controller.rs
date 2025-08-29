@@ -6,11 +6,11 @@ use vector::SourceSender;
 use vector_lib::config::proxy::ProxyConfig;
 use vector_lib::tls::TlsConfig;
 
-use crate::sources::system_tables::{
-    collector::Collector, DatabaseConfig, CollectionConfig, TableConfig,
-};
-use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetcher};
 use crate::common::features::is_nextgen_mode;
+use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetcher};
+use crate::sources::system_tables::{
+    collector::Collector, CollectionConfig, DatabaseConfig, TableConfig,
+};
 
 /// Main controller for system_tables source
 pub struct Controller {
@@ -21,9 +21,10 @@ pub struct Controller {
     database_config: DatabaseConfig,
     collection_config: CollectionConfig,
     tables: Vec<TableConfig>,
-    tls: Option<TlsConfig>,
+    #[allow(dead_code)]
     proxy_config: ProxyConfig,
     out: SourceSender,
+    shared_pool: Option<sqlx::mysql::MySqlPool>,
 }
 
 impl Controller {
@@ -36,7 +37,7 @@ impl Controller {
         database_config: DatabaseConfig,
         collection_config: CollectionConfig,
         tables: Vec<TableConfig>,
-        tls: Option<TlsConfig>,
+        pd_tls: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         out: SourceSender,
     ) -> vector::Result<Self> {
@@ -45,11 +46,14 @@ impl Controller {
             // Nextgen mode: use K8s-based topology fetching
             info!("Using nextgen mode for topology discovery");
             if tidb_group.is_none() && label_k8s_instance.is_none() {
-                return Err("In nextgen mode, either tidb_group or label_k8s_instance must be specified".into());
+                return Err(
+                    "In nextgen mode, either tidb_group or label_k8s_instance must be specified"
+                        .into(),
+                );
             }
             TopologyFetcher::new(
                 String::new(), // Empty PD address for nextgen mode
-                tls.clone(),
+                None,          // No TLS needed for nextgen mode (uses K8s API)
                 proxy_config,
                 tidb_group.clone(),
                 label_k8s_instance.clone(),
@@ -60,9 +64,23 @@ impl Controller {
             // Legacy mode: use PD/etcd-based topology fetching
             info!("Using legacy mode for topology discovery");
             let pd_addr = pd_address.ok_or("In legacy mode, pd_address must be specified")?;
+
+            // Log TLS configuration for debugging
+            if let Some(ref tls_config) = pd_tls {
+                info!("Legacy mode using TLS configuration for PD/etcd connections");
+                if tls_config.ca_file.is_some() {
+                    info!("  CA file configured: {:?}", tls_config.ca_file);
+                }
+                if tls_config.crt_file.is_some() && tls_config.key_file.is_some() {
+                    info!("  Client certificate and key configured");
+                }
+            } else {
+                info!("Legacy mode using insecure connections to PD/etcd");
+            }
+
             TopologyFetcher::new(
                 pd_addr,
-                tls.clone(),
+                pd_tls.clone(), // Use the pd_tls parameter
                 proxy_config,
                 tidb_group.clone(),
                 label_k8s_instance.clone(),
@@ -79,10 +97,78 @@ impl Controller {
             database_config,
             collection_config,
             tables,
-            tls,
             proxy_config: proxy_config.clone(),
             out,
+            shared_pool: None,
         })
+    }
+
+    /// Get or create shared connection pool
+    async fn get_shared_pool(
+        &mut self,
+    ) -> Result<&sqlx::mysql::MySqlPool, Box<dyn std::error::Error + Send + Sync>> {
+        if self.shared_pool.is_none() {
+            let mut url = format!(
+                "mysql://{}:{}@{}:{}/{}",
+                self.database_config.username,
+                &self.database_config.password,
+                self.database_config.host,
+                self.database_config.port,
+                self.database_config.database
+            );
+
+            // Add TLS parameters if database TLS is configured
+            if let Some(ref tls_config) = self.database_config.tls {
+                let mut tls_params = Vec::new();
+
+                // Set SSL mode based on verification settings
+                if tls_config.verify_certificate.unwrap_or(true) {
+                    if tls_config.verify_hostname.unwrap_or(true) {
+                        tls_params.push("ssl-mode=VERIFY_IDENTITY".to_string());
+                    } else {
+                        tls_params.push("ssl-mode=VERIFY_CA".to_string());
+                    }
+                } else {
+                    tls_params.push("ssl-mode=REQUIRED".to_string());
+                }
+
+                // Add CA certificate if provided
+                if let Some(ref ca_file) = tls_config.ca_file {
+                    tls_params.push(format!("ssl-ca={}", ca_file.display()));
+                }
+
+                // Add client certificate if provided
+                if let Some(ref crt_file) = tls_config.crt_file {
+                    tls_params.push(format!("ssl-cert={}", crt_file.display()));
+                }
+
+                // Add client key if provided
+                if let Some(ref key_file) = tls_config.key_file {
+                    tls_params.push(format!("ssl-key={}", key_file.display()));
+                }
+
+                if !tls_params.is_empty() {
+                    url.push('?');
+                    url.push_str(&tls_params.join("&"));
+                }
+
+                info!("Creating shared connection pool with TLS enabled");
+            } else {
+                info!("Creating shared connection pool without TLS");
+            }
+
+            let pool = sqlx::mysql::MySqlPoolOptions::new()
+                .max_connections(self.database_config.max_connections.unwrap_or(10)) // 增加连接数，因为是共享的
+                .acquire_timeout(std::time::Duration::from_secs(
+                    self.database_config.connect_timeout.unwrap_or(30) as u64,
+                ))
+                .connect(&url)
+                .await?;
+
+            self.shared_pool = Some(pool);
+        }
+
+        Ok(self.shared_pool.as_ref().unwrap())
     }
 
     /// Run the main controller loop
@@ -127,12 +213,21 @@ impl Controller {
 
         // Only log if there are changes in TiDB components
         if tidb_components != self.tidb_components {
-            info!("TiDB topology changed: {} components discovered", tidb_components.len());
+            info!(
+                "TiDB topology changed: {} components discovered",
+                tidb_components.len()
+            );
             for component in &tidb_components {
-                info!("  TiDB instance: {}:{}", component.host, component.primary_port);
+                info!(
+                    "  TiDB instance: {}:{}",
+                    component.host, component.primary_port
+                );
             }
         } else {
-            debug!("TiDB topology unchanged: {} components", tidb_components.len());
+            debug!(
+                "TiDB topology unchanged: {} components",
+                tidb_components.len()
+            );
         }
 
         // Update collectors based on component changes
@@ -140,8 +235,6 @@ impl Controller {
 
         Ok(())
     }
-
-
 
     /// Update collectors based on new TiDB components
     async fn update_collectors(&mut self, new_components: HashSet<Component>) {
@@ -153,17 +246,29 @@ impl Controller {
             .iter()
             .partition(|table| table.source_table.starts_with("CLUSTER_"));
 
-        debug!("Table classification: {} cluster tables, {} instance tables",
-               cluster_tables.len(), instance_tables.len());
+        debug!(
+            "Table classification: {} cluster tables, {} instance tables",
+            cluster_tables.len(),
+            instance_tables.len()
+        );
 
         // For cluster-level tables, only start one collector on the primary instance
         if !cluster_tables.is_empty() {
             let primary_component = new_components.iter().next().cloned();
             if let Some(primary_component) = primary_component {
-                let cluster_collector_key = format!("{}:{}_cluster", primary_component.host, primary_component.primary_port);
+                let cluster_collector_key = format!(
+                    "{}:{}_cluster",
+                    primary_component.host, primary_component.primary_port
+                );
                 if !self.running_collectors.contains_key(&cluster_collector_key) {
-                    let cluster_tables_owned: Vec<TableConfig> = cluster_tables.into_iter().cloned().collect();
-                    self.start_collector_with_tables(&primary_component, cluster_tables_owned, &cluster_collector_key).await;
+                    let cluster_tables_owned: Vec<TableConfig> =
+                        cluster_tables.into_iter().cloned().collect();
+                    self.start_collector_with_tables(
+                        &primary_component,
+                        cluster_tables_owned,
+                        &cluster_collector_key,
+                    )
+                    .await;
                 }
             }
         }
@@ -171,19 +276,32 @@ impl Controller {
         // For instance-level tables, start collectors on all instances
         if !instance_tables.is_empty() {
             for component in &new_components {
-                let instance_collector_key = format!("{}:{}_instance", component.host, component.primary_port);
-                if !self.running_collectors.contains_key(&instance_collector_key) {
-                    let instance_tables_owned: Vec<TableConfig> = instance_tables.iter().map(|t| (*t).clone()).collect();
-                    self.start_collector_with_tables(component, instance_tables_owned, &instance_collector_key).await;
+                let instance_collector_key =
+                    format!("{}:{}_instance", component.host, component.primary_port);
+                if !self
+                    .running_collectors
+                    .contains_key(&instance_collector_key)
+                {
+                    let instance_tables_owned: Vec<TableConfig> =
+                        instance_tables.iter().map(|t| (*t).clone()).collect();
+                    self.start_collector_with_tables(
+                        component,
+                        instance_tables_owned,
+                        &instance_collector_key,
+                    )
+                    .await;
                 }
             }
         }
 
         // Stop collectors for removed instances
-        let current_component_keys: HashSet<_> = self.tidb_components.iter()
+        let current_component_keys: HashSet<_> = self
+            .tidb_components
+            .iter()
             .map(|c| format!("{}:{}", c.host, c.primary_port))
             .collect();
-        let new_component_keys: HashSet<_> = new_components.iter()
+        let new_component_keys: HashSet<_> = new_components
+            .iter()
             .map(|c| format!("{}:{}", c.host, c.primary_port))
             .collect();
 
@@ -194,17 +312,35 @@ impl Controller {
         // Update the component set
         self.tidb_components = new_components;
     }
-    
+
     /// Start a collector for a specific TiDB component with specific tables
-    async fn start_collector_with_tables(&mut self, component: &Component, tables: Vec<TableConfig>, collector_key: &str) {
+    async fn start_collector_with_tables(
+        &mut self,
+        component: &Component,
+        tables: Vec<TableConfig>,
+        collector_key: &str,
+    ) {
         let table_names: Vec<&str> = tables.iter().map(|t| t.source_table.as_str()).collect();
-        info!("Starting collector for {}:{} with tables: [{}]",
-              component.host, component.primary_port, table_names.join(", "));
+        info!(
+            "Starting collector for {}:{} with tables: [{}]",
+            component.host,
+            component.primary_port,
+            table_names.join(", ")
+        );
 
         // Create a database config specific to this TiDB instance
         let mut instance_db_config = self.database_config.clone();
         instance_db_config.host = component.host.clone();
         instance_db_config.port = component.primary_port;
+
+        // Get shared connection pool
+        let shared_pool = match self.get_shared_pool().await {
+            Ok(pool) => pool.clone(),
+            Err(e) => {
+                error!("Failed to get shared connection pool: {}", e);
+                return;
+            }
+        };
 
         let collector = Collector::new(
             format!("{}:{}", component.host, component.primary_port),
@@ -212,13 +348,15 @@ impl Controller {
             self.collection_config.clone(),
             tables,
             self.out.clone(),
+            shared_pool,
         );
 
         let handle = tokio::spawn(async move {
             collector.run().await;
         });
 
-        self.running_collectors.insert(collector_key.to_string(), handle);
+        self.running_collectors
+            .insert(collector_key.to_string(), handle);
     }
 
     /// Stop a collector for a specific TiDB instance
@@ -232,11 +370,13 @@ impl Controller {
 
     /// Stop all collectors for a specific instance
     async fn stop_collector_by_instance(&mut self, instance: &str) {
-        let keys_to_remove: Vec<String> = self.running_collectors.keys()
+        let keys_to_remove: Vec<String> = self
+            .running_collectors
+            .keys()
             .filter(|key| key.starts_with(instance))
             .cloned()
             .collect();
-        
+
         for key in keys_to_remove {
             self.stop_collector(&key).await;
         }

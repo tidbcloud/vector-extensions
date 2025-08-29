@@ -1,22 +1,22 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use deltalake::kernel::{DataType as DeltaDataType, StructField};
+use deltalake::protocol::SaveMode;
 use {
     arrow::array::{
-        ArrayRef, BooleanBuilder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, 
-        StringArray, StringBuilder, UInt32Builder, UInt64Builder,
+        ArrayRef, BooleanBuilder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
+        Int8Builder, StringArray, StringBuilder, UInt32Builder, UInt64Builder,
     },
     arrow::datatypes::{DataType, Field, Schema, TimeUnit},
     arrow::record_batch::RecordBatch,
-    deltalake::operations::write::WriteBuilder,
     deltalake::operations::create::CreateBuilder,
+    deltalake::operations::write::WriteBuilder,
     deltalake::DeltaTableBuilder,
 };
-use deltalake::protocol::SaveMode;
-use deltalake::kernel::{StructField, DataType as DeltaDataType};
 
-use vector_lib::event::{LogEvent, Value as LogValue};
 use vector_lib::event::Event;
+use vector_lib::event::{LogEvent, Value as LogValue};
 
 use crate::sinks::deltalake::{DeltaTableConfig, WriteConfig};
 
@@ -24,7 +24,9 @@ use crate::sinks::deltalake::{DeltaTableConfig, WriteConfig};
 pub struct DeltaLakeWriter {
     table_path: PathBuf,
     table_config: DeltaTableConfig,
+    #[allow(dead_code)]
     write_config: WriteConfig,
+    #[allow(dead_code)]
     storage_options: Option<HashMap<String, String>>,
     schema: Option<Schema>,
     /// Cached schema information from source (table_name -> (field_name -> mysql_type))
@@ -66,7 +68,7 @@ impl DeltaLakeWriter {
 
         // Convert events to Arrow record batch
         let record_batch = self.events_to_record_batch(events)?;
-        
+
         // Write to Delta Lake
         self.write_to_delta_lake(record_batch).await?;
 
@@ -89,16 +91,16 @@ impl DeltaLakeWriter {
             fixed_schema.clone()
         } else {
             // Build fixed schema from first event and cache it
-        let first_event = &events[0];
+            let first_event = &events[0];
             let schema = self.build_fixed_schema(first_event)?;
             self.fixed_arrow_schema = Some(schema.clone());
-        self.schema = Some(schema.clone());
+            self.schema = Some(schema.clone());
             schema
         };
 
         // Convert events to columns
         let mut columns: Vec<ArrayRef> = Vec::new();
-        
+
         for field in &schema.fields {
             let column = self.create_column(field, &events)?;
             columns.push(column);
@@ -110,30 +112,33 @@ impl DeltaLakeWriter {
     }
 
     /// Build a fixed schema from the first event that will be consistent across all batches
-    fn build_fixed_schema(&mut self, event: &Event) -> Result<Schema, Box<dyn std::error::Error + Send + Sync>> {
+    fn build_fixed_schema(
+        &mut self,
+        event: &Event,
+    ) -> Result<Schema, Box<dyn std::error::Error + Send + Sync>> {
         if let Event::Log(log_event) = event {
             let mut fields = Vec::new();
             let mut added_fields = std::collections::HashSet::new();
-            
+
             // First, extract and cache the MySQL schema metadata from the event
             self.extract_and_cache_mysql_schema(log_event);
-            
+
             // Get table name for schema lookup
             let table_name = log_event
                 .get("_vector_table")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "unknown_table".to_string());
-            
+
             // Build fixed field list based on cached MySQL schema and Vector system fields
-            
+
             // 1. Add Vector system fields first
             let standard_fields = [
                 "_vector_table",
                 "_vector_source_table",
                 "_vector_source_schema",
                 "_vector_instance",
-                "_vector_timestamp"
+                "_vector_timestamp",
             ];
 
             for field_name in &standard_fields {
@@ -145,17 +150,17 @@ impl DeltaLakeWriter {
             fields.push(Field::new("date", DataType::Utf8, false));
             added_fields.insert("date".to_string());
 
-
-
             // 3. Add all MySQL data fields from cached schema (in deterministic order)
             if let Some(table_schema) = self.cached_source_schemas.get(&table_name) {
                 // Sort field names to ensure consistent order
                 let mut field_names: Vec<_> = table_schema.keys().collect();
                 field_names.sort();
-                
+
                 for field_name in field_names {
                     // Skip if conflicts with Vector system fields or is metadata field
-                    if !added_fields.contains(field_name) && !field_name.starts_with("_schema_metadata") {
+                    if !added_fields.contains(field_name)
+                        && !field_name.starts_with("_schema_metadata")
+                    {
                         if let Some(mysql_type) = table_schema.get(field_name) {
                             let data_type = self.mysql_type_to_arrow_type(mysql_type);
                             fields.push(Field::new(field_name, data_type, true));
@@ -165,14 +170,22 @@ impl DeltaLakeWriter {
                 }
             } else {
                 // Fallback: add fields from current event if no schema cache available
-                warn!("No cached schema found for table {}, using fields from current event", table_name);
-            if let Some(iter) = log_event.all_event_fields() {
-                    let mut event_fields: Vec<_> = iter.map(|(key, value)| (key.as_ref().to_string(), value)).collect();
+                warn!(
+                    "No cached schema found for table {}, using fields from current event",
+                    table_name
+                );
+                if let Some(iter) = log_event.all_event_fields() {
+                    let mut event_fields: Vec<_> = iter
+                        .map(|(key, value)| (key.as_ref().to_string(), value))
+                        .collect();
                     event_fields.sort_by_key(|(key, _)| key.clone());
-                    
+
                     for (key_str, value) in event_fields {
-                        if !added_fields.contains(&key_str) && !key_str.starts_with("_schema_metadata") {
-                            let data_type = self.get_arrow_type_from_schema(log_event, &key_str, value);
+                        if !added_fields.contains(&key_str)
+                            && !key_str.starts_with("_schema_metadata")
+                        {
+                            let data_type =
+                                self.get_arrow_type_from_schema(log_event, &key_str, value);
                             fields.push(Field::new(&key_str, data_type, true));
                             added_fields.insert(key_str);
                         }
@@ -180,7 +193,11 @@ impl DeltaLakeWriter {
                 }
             }
 
-            info!("Built fixed schema with {} fields for table {}", fields.len(), table_name);
+            info!(
+                "Built fixed schema with {} fields for table {}",
+                fields.len(),
+                table_name
+            );
             Ok(Schema::new(fields))
         } else {
             Err("Event is not a log event".into())
@@ -195,7 +212,7 @@ impl DeltaLakeWriter {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "unknown_table".to_string());
-        
+
         // Only extract if not already cached
         if !self.cached_source_schemas.contains_key(&table_name) {
             if let Some(schema_metadata) = log_event.get("_schema_metadata") {
@@ -206,8 +223,12 @@ impl DeltaLakeWriter {
                             table_schema.insert(field.to_string(), mysql_type.to_string());
                         }
                     }
-                    
-                    info!("Cached MySQL schema for table {} with {} fields", table_name, table_schema.len());
+
+                    info!(
+                        "Cached MySQL schema for table {} with {} fields",
+                        table_name,
+                        table_schema.len()
+                    );
                     self.cached_source_schemas.insert(table_name, table_schema);
                 }
             }
@@ -215,14 +236,19 @@ impl DeltaLakeWriter {
     }
 
     /// Get Arrow data type from cached schema or extract from event and cache
-    fn get_arrow_type_from_schema(&mut self, log_event: &LogEvent, field_name: &str, value: &LogValue) -> DataType {
+    fn get_arrow_type_from_schema(
+        &mut self,
+        log_event: &LogEvent,
+        field_name: &str,
+        value: &LogValue,
+    ) -> DataType {
         // Get table name for schema cache key
         let table_name = log_event
             .get("_vector_table")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "unknown_table".to_string());
-        
+
         // Check if we already have cached schema for this table
         if let Some(table_schema) = self.cached_source_schemas.get(&table_name) {
             if let Some(mysql_type) = table_schema.get(field_name) {
@@ -231,7 +257,7 @@ impl DeltaLakeWriter {
                 return arrow_type;
             }
         }
-        
+
         // Try to extract and cache schema from this event's _schema_metadata
         if let Some(schema_metadata) = log_event.get("_schema_metadata") {
             if let Some(schema_obj) = schema_metadata.as_object() {
@@ -242,10 +268,11 @@ impl DeltaLakeWriter {
                         table_schema.insert(field.to_string(), mysql_type.to_string());
                     }
                 }
-                
+
                 // Schema cached successfully
-                self.cached_source_schemas.insert(table_name.clone(), table_schema);
-                
+                self.cached_source_schemas
+                    .insert(table_name.clone(), table_schema);
+
                 // Now get the type for current field
                 if let Some(cached_schema) = self.cached_source_schemas.get(&table_name) {
                     if let Some(mysql_type) = cached_schema.get(field_name) {
@@ -256,7 +283,7 @@ impl DeltaLakeWriter {
                 }
             }
         }
-        
+
         // Fallback to inference if schema not available
         self.infer_arrow_type(field_name, value)
     }
@@ -266,8 +293,6 @@ impl DeltaLakeWriter {
         let delta_type = self.arrow_type_to_delta_type(field.data_type());
         StructField::new(field.name().clone(), delta_type, field.is_nullable())
     }
-
-
 
     /// Convert Arrow DataType to Delta DataType
     fn arrow_type_to_delta_type(&self, arrow_type: &DataType) -> DeltaDataType {
@@ -295,7 +320,7 @@ impl DeltaLakeWriter {
     /// Convert MySQL type to Arrow DataType
     fn mysql_type_to_arrow_type(&self, mysql_type: &str) -> DataType {
         let mysql_type_lower = mysql_type.to_lowercase();
-        
+
         if mysql_type_lower.contains("tinyint(1)") {
             DataType::Boolean
         } else if mysql_type_lower.contains("bigint") {
@@ -328,14 +353,15 @@ impl DeltaLakeWriter {
             DataType::Date32
         } else if mysql_type_lower.contains("time") {
             DataType::Time64(arrow::datatypes::TimeUnit::Microsecond)
-        } else if mysql_type_lower.contains("longtext") || 
-                  mysql_type_lower.contains("mediumtext") || 
-                  mysql_type_lower.contains("text") ||
-                  mysql_type_lower.contains("varchar") || 
-                  mysql_type_lower.contains("char") ||
-                  mysql_type_lower.contains("blob") ||
-                  mysql_type_lower.contains("longblob") ||
-                  mysql_type_lower.contains("mediumblob") {
+        } else if mysql_type_lower.contains("longtext")
+            || mysql_type_lower.contains("mediumtext")
+            || mysql_type_lower.contains("text")
+            || mysql_type_lower.contains("varchar")
+            || mysql_type_lower.contains("char")
+            || mysql_type_lower.contains("blob")
+            || mysql_type_lower.contains("longblob")
+            || mysql_type_lower.contains("mediumblob")
+        {
             // Handle all text and blob types as Utf8
             DataType::Utf8
         } else {
@@ -354,7 +380,7 @@ impl DeltaLakeWriter {
             LogValue::Null => DataType::Utf8, // Default for null values
             _ => DataType::Utf8,
         };
-        
+
         // Converting LogValue to Arrow type
         data_type
     }
@@ -365,23 +391,31 @@ impl DeltaLakeWriter {
         if !matches!(value, LogValue::Null) {
             return self.value_to_arrow_type(value);
         }
-        
+
         // For null values, try to infer type from field name
         let field_upper = field_name.to_uppercase();
-        
+
         // Numeric fields that should be integers
-        if field_upper.contains("COUNT") || field_upper.contains("ID") || field_upper.contains("SIZE") {
+        if field_upper.contains("COUNT")
+            || field_upper.contains("ID")
+            || field_upper.contains("SIZE")
+        {
             // Inferring Int64 for COUNT field
             return DataType::Int64;
         }
-        
+
         // Numeric fields that should be floats
-        if field_upper.contains("LATENCY") || field_upper.contains("MEM") || field_upper.contains("TIME") || 
-           field_upper.contains("BYTES") || field_upper.contains("ROWS") || field_upper.contains("BACKOFF") {
+        if field_upper.contains("LATENCY")
+            || field_upper.contains("MEM")
+            || field_upper.contains("TIME")
+            || field_upper.contains("BYTES")
+            || field_upper.contains("ROWS")
+            || field_upper.contains("BACKOFF")
+        {
             // Inferring Float64 for LATENCY field
             return DataType::Float64;
         }
-        
+
         // Default to string for unknown fields
         // Default to Utf8 for unknown fields
         DataType::Utf8
@@ -401,18 +435,36 @@ impl DeltaLakeWriter {
                 for event in events.iter() {
                     if let Event::Log(log_event) = event {
                         let value_opt = match field.name().as_str() {
-                            "_vector_table" => log_event.get("_vector_table").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            "_vector_source_table" => log_event.get("_vector_source_table").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            "_vector_source_schema" => log_event.get("_vector_source_schema").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            "_vector_instance" => log_event.get("_vector_instance").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            "_vector_timestamp" => log_event.get("_vector_timestamp").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            "_vector_table" => log_event
+                                .get("_vector_table")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            "_vector_source_table" => log_event
+                                .get("_vector_source_table")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            "_vector_source_schema" => log_event
+                                .get("_vector_source_schema")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            "_vector_instance" => log_event
+                                .get("_vector_instance")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            "_vector_timestamp" => log_event
+                                .get("_vector_timestamp")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
                             "date" => {
                                 // Extract date from _vector_timestamp for partitioning
-                                let date_str = log_event.get("_vector_timestamp")
+                                let date_str = log_event
+                                    .get("_vector_timestamp")
                                     .and_then(|v| v.as_str())
                                     .map(|timestamp_str| {
                                         // Parse ISO 8601 timestamp and extract date part
-                                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&timestamp_str) {
+                                        if let Ok(dt) =
+                                            chrono::DateTime::parse_from_rfc3339(&timestamp_str)
+                                        {
                                             dt.format("%Y-%m-%d").to_string()
                                         } else {
                                             // Fallback: try to extract date from other timestamp formats
@@ -428,7 +480,7 @@ impl DeltaLakeWriter {
                                         chrono::Utc::now().format("%Y-%m-%d").to_string()
                                     });
                                 Some(date_str)
-                            },
+                            }
 
                             _ => {
                                 // For data fields, try exact match first, then case-insensitive match
@@ -440,7 +492,9 @@ impl DeltaLakeWriter {
                                     if let Some(iter) = log_event.all_event_fields() {
                                         let mut found_value = None;
                                         for (key, value) in iter {
-                                            if key.as_ref().to_lowercase() == field_name.to_lowercase() {
+                                            if key.as_ref().to_lowercase()
+                                                == field_name.to_lowercase()
+                                            {
                                                 found_value = Some(value.to_string());
                                                 break;
                                             }
@@ -452,12 +506,12 @@ impl DeltaLakeWriter {
                                 }
                             }
                         };
-                        if let Some(s) = value_opt { 
+                        if let Some(s) = value_opt {
                             // Trim quotes from string values to avoid query issues
                             let trimmed = s.trim_matches('"');
-                            builder.append_value(trimmed); 
-                        } else { 
-                            builder.append_null(); 
+                            builder.append_value(trimmed);
+                        } else {
+                            builder.append_null();
                         }
                     } else {
                         builder.append_null();
@@ -708,25 +762,38 @@ impl DeltaLakeWriter {
                 Ok(Arc::new(array))
             }
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                let mut builder = arrow::array::TimestampMicrosecondBuilder::with_capacity(events.len());
+                let mut builder =
+                    arrow::array::TimestampMicrosecondBuilder::with_capacity(events.len());
                 for event in events.iter() {
                     if let Event::Log(log_event) = event {
                         match log_event.get(field.name().as_str()) {
                             Some(LogValue::Bytes(bytes)) => {
                                 // Try to parse timestamp string
-                                                           if let Ok(s) = std::str::from_utf8(bytes.as_ref()) {
-                               if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(s) {
-                                   let microseconds = timestamp.timestamp_micros();
-                                   builder.append_value(microseconds);
-                               } else if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-                                   let microseconds = naive_dt.and_utc().timestamp_micros();
-                                   builder.append_value(microseconds);
-                               } else {
-                                   warn!("Failed to parse timestamp '{}' for field '{}'", s, field.name());
-                                   builder.append_null();
-                               }
+                                if let Ok(s) = std::str::from_utf8(bytes.as_ref()) {
+                                    if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(s) {
+                                        let microseconds = timestamp.timestamp_micros();
+                                        builder.append_value(microseconds);
+                                    } else if let Ok(naive_dt) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
+                                        let microseconds = naive_dt.and_utc().timestamp_micros();
+                                        builder.append_value(microseconds);
+                                    } else {
+                                        warn!(
+                                            "Failed to parse timestamp '{}' for field '{}'",
+                                            s,
+                                            field.name()
+                                        );
+                                        builder.append_null();
+                                    }
                                 } else {
-                                    warn!("Failed to decode bytes as UTF-8 for timestamp field '{}'", field.name());
+                                    warn!(
+                                        "Failed to decode bytes as UTF-8 for timestamp field '{}'",
+                                        field.name()
+                                    );
                                     builder.append_null();
                                 }
                             }
@@ -734,7 +801,11 @@ impl DeltaLakeWriter {
                                 builder.append_null();
                             }
                             Some(other_value) => {
-                                warn!("Timestamp field '{}' received unexpected value type: {:?}", field.name(), other_value);
+                                warn!(
+                                    "Timestamp field '{}' received unexpected value type: {:?}",
+                                    field.name(),
+                                    other_value
+                                );
                                 builder.append_null();
                             }
                             None => {
@@ -754,13 +825,11 @@ impl DeltaLakeWriter {
                     .iter()
                     .map(|event| {
                         if let Event::Log(log_event) = event {
-                            log_event
-                                .get(field.name().as_str())
-                                .map(|v| {
-                                    // Trim quotes from string values to avoid query issues
-                                    let s = v.to_string();
-                                    s.trim_matches('"').to_string()
-                                })
+                            log_event.get(field.name().as_str()).map(|v| {
+                                // Trim quotes from string values to avoid query issues
+                                let s = v.to_string();
+                                s.trim_matches('"').to_string()
+                            })
                         } else {
                             None
                         }
@@ -783,7 +852,10 @@ impl DeltaLakeWriter {
         // Build Delta table
         let table = if self.table_path.join("_delta_log").exists() {
             // Load existing table and check partition configuration
-            info!("Loading existing Delta table at {}", self.table_path.display());
+            info!(
+                "Loading existing Delta table at {}",
+                self.table_path.display()
+            );
             let existing_table = DeltaTableBuilder::from_uri(self.table_path.to_string_lossy())
                 .load()
                 .await?;
@@ -792,21 +864,34 @@ impl DeltaLakeWriter {
             existing_table
         } else {
             // Create new table with proper writer features
-            info!("Creating new Delta table at {} for table {}", self.table_path.display(), self.table_config.name);
+            info!(
+                "Creating new Delta table at {} for table {}",
+                self.table_path.display(),
+                self.table_config.name
+            );
             let schema = self.schema.as_ref().ok_or("Schema not available")?;
 
             let mut create_builder = CreateBuilder::new()
                 .with_location(self.table_path.to_string_lossy())
-                .with_columns(schema.fields().iter().map(|field| {
-                    self.arrow_field_to_delta_field(field)
-                }));
+                .with_columns(
+                    schema
+                        .fields()
+                        .iter()
+                        .map(|field| self.arrow_field_to_delta_field(field)),
+                );
 
             // Add partition columns if configured
             if let Some(partition_cols) = &self.table_config.partition_by {
-                info!("Setting partition columns for table {}: {:?}", self.table_config.name, partition_cols);
+                info!(
+                    "Setting partition columns for table {}: {:?}",
+                    self.table_config.name, partition_cols
+                );
                 create_builder = create_builder.with_partition_columns(partition_cols.clone());
             } else {
-                info!("No partition columns configured for table {}", self.table_config.name);
+                info!(
+                    "No partition columns configured for table {}",
+                    self.table_config.name
+                );
             }
 
             create_builder.await?
@@ -824,13 +909,17 @@ impl DeltaLakeWriter {
 
         let write_result = write_builder.await?;
 
-        info!("Successfully wrote data to Delta Lake table at {}, version: {:?}", 
-              self.table_path.display(), write_result.version());
+        info!(
+            "Successfully wrote data to Delta Lake table at {}, version: {:?}",
+            self.table_path.display(),
+            write_result.version()
+        );
 
         Ok(())
     }
 
     /// Fallback: write events to JSON files
+    #[allow(dead_code)]
     async fn write_to_json_files(
         &self,
         events: Vec<Event>,
