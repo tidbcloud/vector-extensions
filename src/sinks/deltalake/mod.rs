@@ -25,9 +25,7 @@ pub struct DeltaLakeConfig {
     /// Base path for Delta Lake tables
     pub base_path: String,
 
-    /// Table names (comma-separated). Optional; if omitted, tables are discovered dynamically from events.
-    #[serde(default)]
-    pub table_names: Option<String>,
+
 
     /// Batch size for writing
     #[serde(default = "default_batch_size")]
@@ -109,7 +107,6 @@ impl GenerateConfig for DeltaLakeConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
             base_path: "./delta-tables".to_owned(),
-            table_names: None,
             batch_size: default_batch_size(),
             timeout_secs: default_timeout_secs(),
             compression: default_compression(),
@@ -142,20 +139,9 @@ impl DeltaLakeConfig {
     fn build_processor(&self, _cx: SinkContext) -> vector::Result<VectorSink> {
         let base_path = PathBuf::from(&self.base_path);
         
-        // Parse table names from comma-separated string when provided; otherwise allow dynamic tables
-        let table_configs: Vec<DeltaTableConfig> = match &self.table_names {
-            Some(names) => names
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(|table_name| DeltaTableConfig {
-                    name: table_name.to_string(),
-                    partition_by: Some(vec!["date".to_string(), "instance".to_string()]),
-                    schema_evolution: Some(true),
-                })
-                .collect(),
-            None => Vec::new(),
-        };
+        // Tables are discovered dynamically from events
+        // Default partition configuration will be applied to all tables
+        let table_configs: Vec<DeltaTableConfig> = Vec::new();
         
         let write_config = WriteConfig {
             batch_size: self.batch_size,

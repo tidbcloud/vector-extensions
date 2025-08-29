@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use futures::{Stream, StreamExt, stream::BoxStream};
+use futures::{StreamExt, stream::BoxStream};
 use tokio::sync::Mutex;
-use vector_lib::event::{Event, LogEvent};
+use vector_lib::event::Event;
 use vector_lib::sink::StreamSink;
 
 use crate::sinks::deltalake::{
@@ -71,7 +71,15 @@ impl DeltaLakeSink {
         // Write each table's events
         for (table_name, table_events) in table_events {
             if let Err(e) = self.write_table_events(&table_name, table_events).await {
-                error!("Failed to write events to table {}: {}", table_name, e);
+                let error_msg = e.to_string();
+                if error_msg.contains("log segment") ||
+                   error_msg.contains("Invalid table version") ||
+                   error_msg.contains("not found") ||
+                   error_msg.contains("No such file or directory") {
+                    panic!("Delta Lake corruption detected for table {}: {}", table_name, error_msg);
+                } else {
+                    error!("Failed to write events to table {}: {}", table_name, e);
+                }
             }
         }
 
@@ -94,7 +102,7 @@ impl DeltaLakeSink {
                 .cloned()
                 .unwrap_or_else(|| DeltaTableConfig {
                     name: table_name.to_string(),
-                    partition_by: None,
+                    partition_by: Some(vec!["date".to_string(), "_vector_instance".to_string()]),
                     schema_evolution: Some(true),
                 });
             

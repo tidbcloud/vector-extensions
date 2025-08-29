@@ -60,31 +60,12 @@ sinks:
   deltalake:
     type: "deltalake"
     inputs: ["system_tables"]
-    
+
     # Base path for Delta Lake tables
     base_path: "./delta-tables"
-    
-    # Table configurations
-    tables:
-      - name: "hist_processlist"
-        partition_by: ["date", "instance"]
-        schema_evolution: true
-      
-      - name: "hist_innodb_trx"
-        partition_by: ["date", "instance"]
-        schema_evolution: true
-      
-      - name: "hist_tidb_trx"
-        partition_by: ["date", "instance"]
-        schema_evolution: true
-      
-      - name: "hist_tidb_index_usage"
-        partition_by: ["date", "instance"]
-        schema_evolution: true
-      
-      - name: "hist_memory_usage"
-        partition_by: ["date", "instance"]
-        schema_evolution: true
+
+    # Tables are automatically discovered from events (_vector_table field)
+    # All tables are automatically partitioned by date and _vector_instance
     
     # Write configuration
     write:

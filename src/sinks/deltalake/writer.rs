@@ -4,14 +4,16 @@ use std::path::PathBuf;
 use {
     arrow::array::{
         ArrayRef, BooleanBuilder, Float64Builder, Int16Builder, Int32Builder, Int64Builder, Int8Builder, 
-        StringArray, StringBuilder, TimestampMicrosecondArray, UInt32Builder, UInt64Builder,
+        StringArray, StringBuilder, UInt32Builder, UInt64Builder,
     },
     arrow::datatypes::{DataType, Field, Schema, TimeUnit},
     arrow::record_batch::RecordBatch,
     deltalake::operations::write::WriteBuilder,
+    deltalake::operations::create::CreateBuilder,
     deltalake::DeltaTableBuilder,
 };
 use deltalake::protocol::SaveMode;
+use deltalake::kernel::{StructField, DataType as DeltaDataType};
 
 use vector_lib::event::{LogEvent, Value as LogValue};
 use vector_lib::event::Event;
@@ -128,18 +130,24 @@ impl DeltaLakeWriter {
             // 1. Add Vector system fields first
             let standard_fields = [
                 "_vector_table",
-                "_vector_source_table", 
+                "_vector_source_table",
                 "_vector_source_schema",
                 "_vector_instance",
                 "_vector_timestamp"
             ];
-            
+
             for field_name in &standard_fields {
                 fields.push(Field::new(*field_name, DataType::Utf8, false));
                 added_fields.insert(field_name.to_string());
             }
 
-            // 2. Add all MySQL data fields from cached schema (in deterministic order)
+            // Add date field for partitioning (derived from _vector_timestamp)
+            fields.push(Field::new("date", DataType::Utf8, false));
+            added_fields.insert("date".to_string());
+
+
+
+            // 3. Add all MySQL data fields from cached schema (in deterministic order)
             if let Some(table_schema) = self.cached_source_schemas.get(&table_name) {
                 // Sort field names to ensure consistent order
                 let mut field_names: Vec<_> = table_schema.keys().collect();
@@ -253,6 +261,37 @@ impl DeltaLakeWriter {
         self.infer_arrow_type(field_name, value)
     }
 
+    /// Convert Arrow Field to Delta StructField
+    fn arrow_field_to_delta_field(&self, field: &Field) -> StructField {
+        let delta_type = self.arrow_type_to_delta_type(field.data_type());
+        StructField::new(field.name().clone(), delta_type, field.is_nullable())
+    }
+
+
+
+    /// Convert Arrow DataType to Delta DataType
+    fn arrow_type_to_delta_type(&self, arrow_type: &DataType) -> DeltaDataType {
+        match arrow_type {
+            DataType::Boolean => DeltaDataType::BOOLEAN,
+            DataType::Int8 => DeltaDataType::BYTE,
+            DataType::Int16 => DeltaDataType::SHORT,
+            DataType::Int32 => DeltaDataType::INTEGER,
+            DataType::Int64 => DeltaDataType::LONG,
+            DataType::UInt32 => DeltaDataType::INTEGER, // Delta Lake doesn't have unsigned types
+            DataType::UInt64 => DeltaDataType::LONG,
+            DataType::Float32 => DeltaDataType::FLOAT,
+            DataType::Float64 => DeltaDataType::DOUBLE,
+            DataType::Utf8 => DeltaDataType::STRING,
+            DataType::LargeUtf8 => DeltaDataType::STRING,
+            DataType::Binary => DeltaDataType::BINARY,
+            DataType::LargeBinary => DeltaDataType::BINARY,
+            DataType::Timestamp(_, _) => DeltaDataType::TIMESTAMP,
+            DataType::Date32 => DeltaDataType::DATE,
+            DataType::Date64 => DeltaDataType::DATE,
+            _ => DeltaDataType::STRING, // Default fallback
+        }
+    }
+
     /// Convert MySQL type to Arrow DataType
     fn mysql_type_to_arrow_type(&self, mysql_type: &str) -> DataType {
         let mysql_type_lower = mysql_type.to_lowercase();
@@ -283,7 +322,8 @@ impl DeltaLakeWriter {
             // For decimal, we'll use Float64 as a reasonable approximation
             DataType::Float64
         } else if mysql_type_lower.contains("timestamp") || mysql_type_lower.contains("datetime") {
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+            // Use Utf8 instead of Timestamp to avoid writer feature requirements
+            DataType::Utf8
         } else if mysql_type_lower.contains("date") {
             DataType::Date32
         } else if mysql_type_lower.contains("time") {
@@ -366,6 +406,30 @@ impl DeltaLakeWriter {
                             "_vector_source_schema" => log_event.get("_vector_source_schema").and_then(|v| v.as_str()).map(|s| s.to_string()),
                             "_vector_instance" => log_event.get("_vector_instance").and_then(|v| v.as_str()).map(|s| s.to_string()),
                             "_vector_timestamp" => log_event.get("_vector_timestamp").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            "date" => {
+                                // Extract date from _vector_timestamp for partitioning
+                                let date_str = log_event.get("_vector_timestamp")
+                                    .and_then(|v| v.as_str())
+                                    .map(|timestamp_str| {
+                                        // Parse ISO 8601 timestamp and extract date part
+                                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&timestamp_str) {
+                                            dt.format("%Y-%m-%d").to_string()
+                                        } else {
+                                            // Fallback: try to extract date from other timestamp formats
+                                            if timestamp_str.len() >= 10 {
+                                                timestamp_str[..10].to_string()
+                                            } else {
+                                                chrono::Utc::now().format("%Y-%m-%d").to_string()
+                                            }
+                                        }
+                                    })
+                                    .unwrap_or_else(|| {
+                                        // Ensure we always have a date value for consistency
+                                        chrono::Utc::now().format("%Y-%m-%d").to_string()
+                                    });
+                                Some(date_str)
+                            },
+
                             _ => {
                                 // For data fields, try exact match first, then case-insensitive match
                                 let field_name = field.name();
@@ -718,22 +782,47 @@ impl DeltaLakeWriter {
 
         // Build Delta table
         let table = if self.table_path.join("_delta_log").exists() {
-            // Load existing table
-            DeltaTableBuilder::from_uri(self.table_path.to_string_lossy())
+            // Load existing table and check partition configuration
+            info!("Loading existing Delta table at {}", self.table_path.display());
+            let existing_table = DeltaTableBuilder::from_uri(self.table_path.to_string_lossy())
                 .load()
-                .await?
+                .await?;
+
+            // Use existing table - partition configuration is set during initial creation
+            existing_table
         } else {
-            // Create new table
-            let _schema = self.schema.as_ref().ok_or("Schema not available")?;
-            DeltaTableBuilder::from_uri(self.table_path.to_string_lossy())
-                .build()?
+            // Create new table with proper writer features
+            info!("Creating new Delta table at {} for table {}", self.table_path.display(), self.table_config.name);
+            let schema = self.schema.as_ref().ok_or("Schema not available")?;
+
+            let mut create_builder = CreateBuilder::new()
+                .with_location(self.table_path.to_string_lossy())
+                .with_columns(schema.fields().iter().map(|field| {
+                    self.arrow_field_to_delta_field(field)
+                }));
+
+            // Add partition columns if configured
+            if let Some(partition_cols) = &self.table_config.partition_by {
+                info!("Setting partition columns for table {}: {:?}", self.table_config.name, partition_cols);
+                create_builder = create_builder.with_partition_columns(partition_cols.clone());
+            } else {
+                info!("No partition columns configured for table {}", self.table_config.name);
+            }
+
+            create_builder.await?
         };
 
         // Write data
-        let write_result = WriteBuilder::new(table.log_store(), table.state)
-            .with_input_batches(vec![record_batch])
-            .with_save_mode(SaveMode::Append)
-            .await?;
+        let write_builder = WriteBuilder::new(table.log_store(), table.state)
+            .with_input_batches(vec![record_batch.clone()])
+            .with_save_mode(SaveMode::Append);
+
+        // Note: Partition columns are set during table creation, not during write
+
+        // TODO: Add writer features for compatibility when API is available
+        // write_builder = write_builder.with_writer_features(Some(vec![WriterFeatures::TimestampWithoutTimezone]));
+
+        let write_result = write_builder.await?;
 
         info!("Successfully wrote data to Delta Lake table at {}, version: {:?}", 
               self.table_path.display(), write_result.version());

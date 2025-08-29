@@ -80,6 +80,7 @@ sinks:
     compression: "snappy"
     # Delta Lake optimization configuration
     # Use batching and timeout to reduce file count
+    # Tables are automatically discovered and partitioned by date and _vector_instance
 
 data_dir: "/tmp/vector"
 log_schema:
