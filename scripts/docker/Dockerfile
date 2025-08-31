@@ -1,4 +1,4 @@
-FROM docker.io/debian:bullseye
+FROM docker.io/debian:13-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata systemd curl binutils
 
 ARG TARGETARCH
