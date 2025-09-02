@@ -178,7 +178,8 @@ impl BaseTopSQLSource {
         let mut instance_stream = IntervalStream::new(time::interval(Duration::from_secs(30)));
         let mut responses = vec![];
         let mut last_event_recv_ts = chrono::Local::now().timestamp();
-        loop {
+        info!(message = "Starting TopSQL source loop", instance = %self.instance, instance_type = %self.instance_type);
+        let exit_state = loop {
             tokio::select! {
                 response = response_stream.next() => {
                     match response {
@@ -207,7 +208,10 @@ impl BaseTopSQLSource {
                 }
                 _ = instance_stream.next() => self.handle_instance(behavior).await,
             }
-        }
+        };
+  
+        info!(message = "TopSQL source loop ended", instance = %self.instance, instance_type = %self.instance_type, exit_state = ?exit_state);
+        exit_state
     }
 
     async fn build_stream<U: Upstream>(
@@ -464,6 +468,7 @@ impl TopSQLSource {
     }
 }
 
+#[derive(Debug)]
 enum State {
     RetryNow,
     RetryDelay,

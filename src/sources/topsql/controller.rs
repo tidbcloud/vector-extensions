@@ -12,6 +12,7 @@ use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetch
 use crate::sources::topsql::schema_cache::{SchemaCache, SchemaManager};
 use crate::sources::topsql::shutdown::{pair, ShutdownNotifier, ShutdownSubscriber};
 use crate::sources::topsql::upstream::TopSQLSource;
+use crate::common::features::is_nextgen_mode;
 
 pub struct Controller {
     topo_fetch_interval: Duration,
@@ -142,7 +143,7 @@ impl Controller {
         };
 
         // If we need to update the schema manager, find an available TiDB instance
-        if need_update_schema_manager {
+        if need_update_schema_manager && !is_nextgen_mode() {
             self.update_schema_manager(&latest_components).await;
         }
 
@@ -170,7 +171,6 @@ impl Controller {
         let mut shuffled_components = tidb_components.clone();
         shuffled_components.shuffle(&mut rand::rng());
 
-        // Use the method to update schema_manager
         self.update_schema_manager_with_components(&shuffled_components)
             .await;
     }
@@ -184,8 +184,6 @@ impl Controller {
 
         // Try each TiDB instance until one succeeds
         for tidb in tidb_components {
-            info!(message = "Trying schema manager with TiDB instance", instance = %tidb);
-
             let tidb_address = format!("{}:{}", tidb.host, tidb.secondary_port);
 
             // Use async constructor with TLS configuration and pass existing schema_cache
@@ -210,12 +208,11 @@ impl Controller {
             // Convert ShutdownSubscriber to broadcast::Receiver<()>
             let shutdown = self.shutdown_subscriber.subscribe();
 
-            use crate::common::features::is_nextgen_mode;
-
             if is_nextgen_mode() {
                 // Schema manager is not supported in nextgen mode
                 info!(message = "Schema manager is not supported in nextgen mode");
             } else {
+                info!(message = "Trying schema manager with TiDB instance", instance = %tidb);
                 // Clone the etcd client for the schema manager
                 if let Some(etcd_client) = self.topo_fetcher.etcd_client() {
                     let etcd_client = etcd_client.clone();
@@ -235,16 +232,16 @@ impl Controller {
                 } else {
                     error!(message = "Etcd client not available for schema manager");
                 }
-            }
 
-            info!(
-                message = "Started schema manager successfully",
-                instance = %tidb,
-                entries = cache.entry_count(),
-                schema_version = cache.schema_version(),
-                memory_usage_bytes = cache.memory_usage(),
-                memory_usage_kb = cache.memory_usage() / 1024
-            );
+                info!(
+                    message = "Started schema manager successfully",
+                    instance = %tidb,
+                    entries = cache.entry_count(),
+                    schema_version = cache.schema_version(),
+                    memory_usage_bytes = cache.memory_usage(),
+                    memory_usage_kb = cache.memory_usage() / 1024
+                );
+            }
 
             // Successfully started, exit the loop
             return;
