@@ -52,8 +52,8 @@ impl Controller {
                 );
             }
             TopologyFetcher::new(
-                String::new(), // Empty PD address for nextgen mode
-                None,          // No TLS needed for nextgen mode (uses K8s API)
+                Some(String::new()), // Empty PD address for nextgen mode
+                None,                 // No TLS needed for nextgen mode (uses K8s API)
                 proxy_config,
                 tidb_group.clone(),
                 label_k8s_instance.clone(),
@@ -79,7 +79,7 @@ impl Controller {
             }
 
             TopologyFetcher::new(
-                pd_addr,
+                Some(pd_addr),
                 pd_tls.clone(), // Use the pd_tls parameter
                 proxy_config,
                 tidb_group.clone(),
