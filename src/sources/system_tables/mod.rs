@@ -1,3 +1,4 @@
+use std::env;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,44 @@ use crate::sources::system_tables::controller::Controller;
 
 mod collector;
 mod controller;
+
+/// Environment variable names for database configuration
+pub struct DatabaseEnvVars;
+
+impl DatabaseEnvVars {
+    pub const USERNAME: &'static str = "TIDB_USERNAME";
+    pub const PASSWORD: &'static str = "TIDB_PASSWORD";
+    pub const HOST: &'static str = "TIDB_HOST";
+    pub const PORT: &'static str = "TIDB_PORT";
+    pub const DATABASE: &'static str = "TIDB_DATABASE";
+    pub const MAX_CONNECTIONS: &'static str = "TIDB_MAX_CONNECTIONS";
+    pub const CONNECT_TIMEOUT: &'static str = "TIDB_CONNECT_TIMEOUT";
+    
+    // TLS related environment variables
+    pub const TLS_CA_FILE: &'static str = "TIDB_TLS_CA_FILE";
+    pub const TLS_CERT_FILE: &'static str = "TIDB_TLS_CERT_FILE";
+    pub const TLS_KEY_FILE: &'static str = "TIDB_TLS_KEY_FILE";
+    pub const TLS_VERIFY_CERTIFICATE: &'static str = "TIDB_TLS_VERIFY_CERTIFICATE";
+    pub const TLS_VERIFY_HOSTNAME: &'static str = "TIDB_TLS_VERIFY_HOSTNAME";
+    
+    // PD/Topology related environment variables
+    pub const PD_ADDRESS: &'static str = "PD_ADDRESS";
+    pub const TIDB_GROUP: &'static str = "TIDB_GROUP";
+    pub const LABEL_K8S_INSTANCE: &'static str = "LABEL_K8S_INSTANCE";
+    
+    // PD TLS environment variables
+    pub const PD_TLS_CA_FILE: &'static str = "PD_TLS_CA_FILE";
+    pub const PD_TLS_CERT_FILE: &'static str = "PD_TLS_CERT_FILE";
+    pub const PD_TLS_KEY_FILE: &'static str = "PD_TLS_KEY_FILE";
+    pub const PD_TLS_VERIFY_CERTIFICATE: &'static str = "PD_TLS_VERIFY_CERTIFICATE";
+    pub const PD_TLS_VERIFY_HOSTNAME: &'static str = "PD_TLS_VERIFY_HOSTNAME";
+    
+    // Collection configuration environment variables
+    pub const SHORT_INTERVAL: &'static str = "SYSTEM_TABLES_SHORT_INTERVAL";
+    pub const LONG_INTERVAL: &'static str = "SYSTEM_TABLES_LONG_INTERVAL";
+    pub const RETENTION_DAYS: &'static str = "SYSTEM_TABLES_RETENTION_DAYS";
+    pub const TOPOLOGY_FETCH_INTERVAL: &'static str = "TOPOLOGY_FETCH_INTERVAL_SECONDS";
+}
 
 /// Configuration for the system_tables source
 #[configurable_component(source("system_tables"))]
@@ -125,6 +164,125 @@ pub const fn default_topology_fetch_interval() -> f64 {
     30.0
 }
 
+/// Helper functions for reading environment variables
+impl SystemTablesConfig {
+    /// Helper function to build TLS configuration from environment variables
+    fn build_tls_config_from_env(
+        ca_file_env: &str,
+        cert_file_env: &str,
+        key_file_env: &str,
+        verify_cert_env: &str,
+        verify_hostname_env: &str,
+    ) -> Option<TlsConfig> {
+        let ca_file = env::var(ca_file_env).ok().map(|p| p.into());
+        let crt_file = env::var(cert_file_env).ok().map(|p| p.into());
+        let key_file = env::var(key_file_env).ok().map(|p| p.into());
+        let verify_certificate = env::var(verify_cert_env)
+            .ok()
+            .and_then(|s| s.parse().ok());
+        let verify_hostname = env::var(verify_hostname_env)
+            .ok()
+            .and_then(|s| s.parse().ok());
+            
+        // Only create TLS config if at least one TLS-related env var is set
+        if ca_file.is_some() || crt_file.is_some() || key_file.is_some() {
+            Some(TlsConfig {
+                ca_file,
+                crt_file,
+                key_file,
+                verify_certificate,
+                verify_hostname,
+                ..Default::default()
+            })
+        } else {
+            None
+        }
+    }
+    
+    /// Merge configuration with values from environment variables
+    /// Environment variables take precedence over configuration file values
+    pub fn merge_with_env(&mut self) {
+        // Override with environment variables if they exist
+        if let Ok(val) = env::var(DatabaseEnvVars::PD_ADDRESS) {
+            self.pd_address = Some(val);
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::TIDB_GROUP) {
+            self.tidb_group = Some(val);
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::LABEL_K8S_INSTANCE) {
+            self.label_k8s_instance = Some(val);
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::USERNAME) {
+            self.database_username = val;
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::PASSWORD) {
+            self.database_password = val;
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::HOST) {
+            self.database_host = val;
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::PORT) {
+            if let Ok(port) = val.parse() {
+                self.database_port = port;
+            }
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::DATABASE) {
+            self.database_name = val;
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::MAX_CONNECTIONS) {
+            if let Ok(connections) = val.parse() {
+                self.database_max_connections = Some(connections);
+            }
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::CONNECT_TIMEOUT) {
+            if let Ok(timeout) = val.parse() {
+                self.database_connect_timeout = Some(timeout);
+            }
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::SHORT_INTERVAL) {
+            if let Ok(interval) = val.parse() {
+                self.short_interval = interval;
+            }
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::LONG_INTERVAL) {
+            if let Ok(interval) = val.parse() {
+                self.long_interval = interval;
+            }
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::RETENTION_DAYS) {
+            if let Ok(days) = val.parse() {
+                self.retention_days = days;
+            }
+        }
+        if let Ok(val) = env::var(DatabaseEnvVars::TOPOLOGY_FETCH_INTERVAL) {
+            if let Ok(interval) = val.parse() {
+                self.topology_fetch_interval_seconds = interval;
+            }
+        }
+        
+        // Merge TLS configurations
+        if let Some(env_tls) = Self::build_tls_config_from_env(
+            DatabaseEnvVars::TLS_CA_FILE,
+            DatabaseEnvVars::TLS_CERT_FILE,
+            DatabaseEnvVars::TLS_KEY_FILE,
+            DatabaseEnvVars::TLS_VERIFY_CERTIFICATE,
+            DatabaseEnvVars::TLS_VERIFY_HOSTNAME,
+        ) {
+            self.database_tls = Some(env_tls);
+        }
+        
+        if let Some(env_pd_tls) = Self::build_tls_config_from_env(
+            DatabaseEnvVars::PD_TLS_CA_FILE,
+            DatabaseEnvVars::PD_TLS_CERT_FILE,
+            DatabaseEnvVars::PD_TLS_KEY_FILE,
+            DatabaseEnvVars::PD_TLS_VERIFY_CERTIFICATE,
+            DatabaseEnvVars::PD_TLS_VERIFY_HOSTNAME,
+        ) {
+            self.pd_tls = Some(env_pd_tls);
+        }
+    }
+}
+
 impl GenerateConfig for SystemTablesConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
@@ -161,34 +319,51 @@ impl GenerateConfig for SystemTablesConfig {
 #[typetag::serde(name = "system_tables")]
 impl SourceConfig for SystemTablesConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
-        let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
-        let pd_address = self.pd_address.clone();
-        let tidb_group = self.tidb_group.clone();
-        let label_k8s_instance = self.label_k8s_instance.clone();
+        // Clone configuration and merge with environment variables
+        // Environment variables take precedence over config file values
+        let mut config = self.clone();
+        config.merge_with_env();
+        
+        info!("Building system_tables source with configuration:");
+        info!("  Database: {}:{}/{}", config.database_host, config.database_port, config.database_name);
+        info!("  Username: {}", config.database_username);
+        info!("  Max connections: {:?}", config.database_max_connections);
+        info!("  Connect timeout: {:?}", config.database_connect_timeout);
+        info!("  Database TLS enabled: {}", config.database_tls.is_some());
+        if let Some(ref pd_addr) = config.pd_address {
+            info!("  PD address: {}", pd_addr);
+        }
+        info!("  PD TLS enabled: {}", config.pd_tls.is_some());
+        info!("  Tables configured: {}", config.tables.len());
+        
+        let topology_fetch_interval = Duration::from_secs_f64(config.topology_fetch_interval_seconds);
+        let pd_address = config.pd_address.clone();
+        let tidb_group = config.tidb_group.clone();
+        let label_k8s_instance = config.label_k8s_instance.clone();
 
-        // Create DatabaseConfig from flat fields
+        // Create DatabaseConfig from merged configuration
         let database_config = DatabaseConfig {
-            username: self.database_username.clone(),
-            password: self.database_password.clone(),
-            host: self.database_host.clone(),
-            port: self.database_port,
-            database: self.database_name.clone(),
-            max_connections: self.database_max_connections,
-            connect_timeout: self.database_connect_timeout,
-            tls: self.database_tls.clone(),
+            username: config.database_username.clone(),
+            password: config.database_password.clone(),
+            host: config.database_host.clone(),
+            port: config.database_port,
+            database: config.database_name.clone(),
+            max_connections: config.database_max_connections,
+            connect_timeout: config.database_connect_timeout,
+            tls: config.database_tls.clone(),
         };
 
-        // Create CollectionConfig from flat fields
+        // Create CollectionConfig from merged configuration
         let collection_config = CollectionConfig {
-            short_interval: self.short_interval,
-            long_interval: self.long_interval,
-            retention_days: self.retention_days,
+            short_interval: config.short_interval,
+            long_interval: config.long_interval,
+            retention_days: config.retention_days,
         };
 
-        // Use tables directly from configuration
-        let tables = self.tables.clone();
+        // Use tables from merged configuration
+        let tables = config.tables.clone();
 
-        let pd_tls = self.pd_tls.clone();
+        let pd_tls = config.pd_tls.clone();
 
         Ok(Box::pin(async move {
             let controller = Controller::new(
