@@ -97,7 +97,18 @@ impl DeltaLakeSink {
         // Get or create writer for this table
         let mut writers = self.writers.lock().await;
         let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
-            let table_path = self.base_path.join(table_name);
+            let table_path = if self.base_path.to_string_lossy().starts_with("s3://") {
+                // For S3 paths, append the table name to the S3 path
+                PathBuf::from(format!(
+                    "{}/{}",
+                    self.base_path.to_string_lossy(),
+                    table_name
+                ))
+            } else {
+                // For local paths, use join as before
+                self.base_path.join(table_name)
+            };
+
             let table_config = self
                 .tables
                 .iter()

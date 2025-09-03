@@ -209,7 +209,7 @@ impl BaseTopSQLSource {
                 _ = instance_stream.next() => self.handle_instance(behavior).await,
             }
         };
-  
+
         info!(message = "TopSQL source loop ended", instance = %self.instance, instance_type = %self.instance_type, exit_state = ?exit_state);
         exit_state
     }

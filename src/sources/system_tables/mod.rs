@@ -26,26 +26,26 @@ impl DatabaseEnvVars {
     pub const DATABASE: &'static str = "TIDB_DATABASE";
     pub const MAX_CONNECTIONS: &'static str = "TIDB_MAX_CONNECTIONS";
     pub const CONNECT_TIMEOUT: &'static str = "TIDB_CONNECT_TIMEOUT";
-    
+
     // TLS related environment variables
     pub const TLS_CA_FILE: &'static str = "TIDB_TLS_CA_FILE";
     pub const TLS_CERT_FILE: &'static str = "TIDB_TLS_CERT_FILE";
     pub const TLS_KEY_FILE: &'static str = "TIDB_TLS_KEY_FILE";
     pub const TLS_VERIFY_CERTIFICATE: &'static str = "TIDB_TLS_VERIFY_CERTIFICATE";
     pub const TLS_VERIFY_HOSTNAME: &'static str = "TIDB_TLS_VERIFY_HOSTNAME";
-    
+
     // PD/Topology related environment variables
     pub const PD_ADDRESS: &'static str = "PD_ADDRESS";
     pub const TIDB_GROUP: &'static str = "TIDB_GROUP";
     pub const LABEL_K8S_INSTANCE: &'static str = "LABEL_K8S_INSTANCE";
-    
+
     // PD TLS environment variables
     pub const PD_TLS_CA_FILE: &'static str = "PD_TLS_CA_FILE";
     pub const PD_TLS_CERT_FILE: &'static str = "PD_TLS_CERT_FILE";
     pub const PD_TLS_KEY_FILE: &'static str = "PD_TLS_KEY_FILE";
     pub const PD_TLS_VERIFY_CERTIFICATE: &'static str = "PD_TLS_VERIFY_CERTIFICATE";
     pub const PD_TLS_VERIFY_HOSTNAME: &'static str = "PD_TLS_VERIFY_HOSTNAME";
-    
+
     // Collection configuration environment variables
     pub const SHORT_INTERVAL: &'static str = "SYSTEM_TABLES_SHORT_INTERVAL";
     pub const LONG_INTERVAL: &'static str = "SYSTEM_TABLES_LONG_INTERVAL";
@@ -177,13 +177,11 @@ impl SystemTablesConfig {
         let ca_file = env::var(ca_file_env).ok().map(|p| p.into());
         let crt_file = env::var(cert_file_env).ok().map(|p| p.into());
         let key_file = env::var(key_file_env).ok().map(|p| p.into());
-        let verify_certificate = env::var(verify_cert_env)
-            .ok()
-            .and_then(|s| s.parse().ok());
+        let verify_certificate = env::var(verify_cert_env).ok().and_then(|s| s.parse().ok());
         let verify_hostname = env::var(verify_hostname_env)
             .ok()
             .and_then(|s| s.parse().ok());
-            
+
         // Only create TLS config if at least one TLS-related env var is set
         if ca_file.is_some() || crt_file.is_some() || key_file.is_some() {
             Some(TlsConfig {
@@ -198,7 +196,7 @@ impl SystemTablesConfig {
             None
         }
     }
-    
+
     /// Merge configuration with values from environment variables
     /// Environment variables take precedence over configuration file values
     pub fn merge_with_env(&mut self) {
@@ -259,7 +257,7 @@ impl SystemTablesConfig {
                 self.topology_fetch_interval_seconds = interval;
             }
         }
-        
+
         // Merge TLS configurations
         if let Some(env_tls) = Self::build_tls_config_from_env(
             DatabaseEnvVars::TLS_CA_FILE,
@@ -270,7 +268,7 @@ impl SystemTablesConfig {
         ) {
             self.database_tls = Some(env_tls);
         }
-        
+
         if let Some(env_pd_tls) = Self::build_tls_config_from_env(
             DatabaseEnvVars::PD_TLS_CA_FILE,
             DatabaseEnvVars::PD_TLS_CERT_FILE,
@@ -323,9 +321,12 @@ impl SourceConfig for SystemTablesConfig {
         // Environment variables take precedence over config file values
         let mut config = self.clone();
         config.merge_with_env();
-        
+
         info!("Building system_tables source with configuration:");
-        info!("  Database: {}:{}/{}", config.database_host, config.database_port, config.database_name);
+        info!(
+            "  Database: {}:{}/{}",
+            config.database_host, config.database_port, config.database_name
+        );
         info!("  Username: {}", config.database_username);
         info!("  Max connections: {:?}", config.database_max_connections);
         info!("  Connect timeout: {:?}", config.database_connect_timeout);
@@ -335,8 +336,9 @@ impl SourceConfig for SystemTablesConfig {
         }
         info!("  PD TLS enabled: {}", config.pd_tls.is_some());
         info!("  Tables configured: {}", config.tables.len());
-        
-        let topology_fetch_interval = Duration::from_secs_f64(config.topology_fetch_interval_seconds);
+
+        let topology_fetch_interval =
+            Duration::from_secs_f64(config.topology_fetch_interval_seconds);
         let pd_address = config.pd_address.clone();
         let tidb_group = config.tidb_group.clone();
         let label_k8s_instance = config.label_k8s_instance.clone();

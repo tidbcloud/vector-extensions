@@ -8,11 +8,11 @@ use vector::shutdown::ShutdownSignal;
 use vector::SourceSender;
 use vector_lib::{config::proxy::ProxyConfig, tls::TlsConfig};
 
+use crate::common::features::is_nextgen_mode;
 use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetcher};
 use crate::sources::topsql::schema_cache::{SchemaCache, SchemaManager};
 use crate::sources::topsql::shutdown::{pair, ShutdownNotifier, ShutdownSubscriber};
 use crate::sources::topsql::upstream::TopSQLSource;
-use crate::common::features::is_nextgen_mode;
 
 pub struct Controller {
     topo_fetch_interval: Duration,

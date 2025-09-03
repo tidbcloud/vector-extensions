@@ -249,8 +249,8 @@ impl TopologyFetcher {
             })
         } else {
             // In legacy mode, pd_address is required
-            let pd_address = pd_address.ok_or_else(|| FetchError::ConfigurationError { 
-                message: "PD address is required in legacy mode".to_string()
+            let pd_address = pd_address.ok_or_else(|| FetchError::ConfigurationError {
+                message: "PD address is required in legacy mode".to_string(),
             })?;
             let fetcher = LegacyTopologyFetcher::new(pd_address, tls_config, proxy_config).await?;
             Ok(Self {
