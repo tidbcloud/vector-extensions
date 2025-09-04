@@ -14,13 +14,15 @@ path = "src/main.rs"
 async-recursion = "1.1.1"
 async-trait = { version = "0.1.88", default-features = false }
 arrow = { version = "55.2.0" }
+aws-config = { version = "1.0" }
 aws-sdk-s3 = { version = "1.82.0", default-features = false, features = ["behavior-version-latest"] }
+aws-sdk-sts = { version = "1.0" }
 aws-smithy-types = { version = "1.3.2", default-features = false }
 azure_storage_blobs = { version = "0.17.0", default-features = false, features = ["enable_reqwest"] }
 base64 = { version = "0.22.1", default-features = false }
 bytes = { version = "1.10.1", default-features = false, features = ["serde"] }
 chrono = { version = "0.4.41", default-features = false, features = ["clock", "serde"] }
-deltalake = { version = "0.27", features = ["datafusion"] }
+deltalake = { version = "0.28.1", features = ["datafusion", "s3"] }
 datafusion = { version = "48"}
 etcd-client = { version = "0.14", features = ["tls-roots"] }
 exitcode = { version = "1.1.2", default-features = false }

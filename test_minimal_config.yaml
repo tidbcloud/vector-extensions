@@ -1,0 +1,16 @@
+sources:
+  stdin:
+    type: "stdin"
+    decoding:
+      codec: "json"
+
+sinks:
+  deltalake_test:
+    type: "deltalake"
+    inputs: ["stdin"]
+    base_path: "./local-delta-tables"
+    batch_size: 1000
+    timeout_secs: 30
+    compression: "snappy"
+
+data_dir: "/tmp/vector"

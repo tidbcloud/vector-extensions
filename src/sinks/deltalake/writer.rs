@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use deltalake::kernel::{DataType as DeltaDataType, StructField};
-use deltalake::protocol::SaveMode;
 use {
     arrow::array::{
         ArrayRef, BooleanBuilder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
@@ -11,8 +10,7 @@ use {
     arrow::datatypes::{DataType, Field, Schema, TimeUnit},
     arrow::record_batch::RecordBatch,
     deltalake::operations::create::CreateBuilder,
-    deltalake::operations::write::WriteBuilder,
-    deltalake::DeltaTableBuilder,
+    deltalake::DeltaOps,
 };
 
 use vector_lib::event::Event;
@@ -43,6 +41,12 @@ impl DeltaLakeWriter {
         write_config: WriteConfig,
         storage_options: Option<HashMap<String, String>>,
     ) -> Self {
+        // Initialize S3 handlers if this is an S3 path
+        if table_path.to_string_lossy().starts_with("s3://") {
+            deltalake::aws::register_handlers(None);
+            info!("Registered Delta Lake S3 handlers for path: {}", table_path.display());
+        }
+
         Self {
             table_path,
             table_config,
@@ -852,24 +856,47 @@ impl DeltaLakeWriter {
         }
 
         // Build Delta table URI
-        let table_uri = if self.table_path.to_string_lossy().starts_with("s3://") {
-            self.table_path.to_string_lossy().to_string()
+        let table_uri = self.table_path.to_string_lossy().to_string();
+
+        info!("Writing to Delta Lake table at: {}", table_uri);
+
+        // Use DeltaOps for improved S3 support, following the successful test pattern
+        let table_ops = if let Some(storage_options) = &self.storage_options {
+            info!("Using storage options for S3 authentication: {:?}", storage_options);
+            DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
         } else {
-            self.table_path.to_string_lossy().to_string()
+            info!("No storage options provided, using default credential chain");
+            DeltaOps::try_from_uri(&table_uri).await?
         };
 
-        // Build Delta table with storage options
-        let mut table_builder = DeltaTableBuilder::from_uri(&table_uri);
-        if let Some(storage_options) = &self.storage_options {
-            table_builder = table_builder.with_storage_options(storage_options.clone());
+        // Try to write to existing table first, create if it doesn't exist
+        info!("Will attempt to write to Delta table at {}", table_uri);
+        
+        // Try to write directly to existing table first
+        let write_result = table_ops.write(vec![record_batch.clone()]).await;
+        
+        match write_result {
+            Ok(table) => {
+                info!("✅ Successfully wrote to existing Delta table at {}", table_uri);
+                info!("Table version: {:?}", table.version());
+                return Ok(());
+            }
+            Err(e) if e.to_string().contains("does not exist") || e.to_string().contains("not found") => {
+                info!("Table doesn't exist, will create new table: {}", e);
+                // Continue to table creation logic below
+            }
+            Err(e) => {
+                error!("Failed to write to Delta table: {}", e);
+                return Err(e.into());
+            }
         }
+        
+        // If we reach here, table doesn't exist and needs to be created
+        let table_exists = false;
+        
 
-        let table = if self.table_exists(&table_uri).await? {
-            // Load existing table and check partition configuration
-            info!("Loading existing Delta table at {}", table_uri);
-            table_builder.load().await?
-        } else {
-            // Create new table with proper writer features
+        if !table_exists {
+            // Create new table first
             info!(
                 "Creating new Delta table at {} for table {}",
                 table_uri, self.table_config.name
@@ -902,20 +929,20 @@ impl DeltaLakeWriter {
                 );
             }
 
-            create_builder.await?
+            create_builder.await?;
+            info!("Successfully created new Delta table");
+        }
+
+        // Now write the data using DeltaOps - reload the table_ops to get the created table
+        let table_ops = if let Some(storage_options) = &self.storage_options {
+            DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
+        } else {
+            DeltaOps::try_from_uri(&table_uri).await?
         };
 
-        // Write data
-        let write_builder = WriteBuilder::new(table.log_store(), table.state)
-            .with_input_batches(vec![record_batch.clone()])
-            .with_save_mode(SaveMode::Append);
-
-        // Note: Partition columns are set during table creation, not during write
-
-        // TODO: Add writer features for compatibility when API is available
-        // write_builder = write_builder.with_writer_features(Some(vec![WriterFeatures::TimestampWithoutTimezone]));
-
-        let write_result = write_builder.await?;
+        let write_result = table_ops
+            .write(vec![record_batch])
+            .await?;
 
         info!(
             "Successfully wrote data to Delta Lake table at {}, version: {:?}",
@@ -927,6 +954,7 @@ impl DeltaLakeWriter {
     }
 
     /// Check if Delta table exists at the given URI
+    #[allow(dead_code)]
     async fn table_exists(
         &self,
         table_uri: &str,

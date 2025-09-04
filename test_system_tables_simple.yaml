@@ -1,0 +1,37 @@
+sources:
+  system_tables:
+    type: "system_tables"
+    pd_address: "127.0.0.1:2379"
+    database_username: "root"
+    database_password: ""
+    database_host: "127.0.0.1"
+    database_port: 4000
+    database_name: "test"
+    database_max_connections: 10
+    database_connect_timeout: 30
+    short_interval: 5
+    long_interval: 60
+    retention_days: 1
+    tables:
+      - source_schema: "information_schema"
+        source_table: "PROCESSLIST"
+        dest_table: "hist_processlist"
+        collection_interval: "short"
+        where_clause: "command != 'Sleep'"
+        enabled: true
+
+sinks:
+  deltalake_s3:
+    type: "deltalake"
+    inputs: ["system_tables"]
+    base_path: "s3://csn-dev-test/deltalake-tables"
+    bucket: "csn-dev-test"
+    region: "us-west-2"
+    auth:
+      assume_role: "arn:aws:iam::385595570414:role/dbaas-dev"
+    batch_size: 1000
+    timeout_secs: 30
+    compression: "snappy"
+  
+
+data_dir: "/tmp/vector"

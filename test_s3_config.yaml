@@ -1,0 +1,20 @@
+sources:
+  stdin:
+    type: "stdin"
+    decoding:
+      codec: "json"
+
+sinks:
+  deltalake_test:
+    type: "deltalake"
+    inputs: ["stdin"]
+    base_path: "s3://csn-dev-test/deltalake-tables"
+    bucket: "csn-dev-test"
+    region: "us-west-2"
+    auth:
+      assume_role: "arn:aws:iam::385595570414:role/dbaas-dev"
+    batch_size: 1000
+    timeout_secs: 30
+    compression: "snappy"
+
+data_dir: "/tmp/vector"
