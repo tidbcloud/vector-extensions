@@ -1,52 +1,52 @@
 #!/bin/bash
 
-echo "🔍 检查网络连通性和 AWS 服务可达性："
+echo "🔍 Checking network connectivity and AWS service accessibility:"
 echo ""
 
-echo "1. 检查互联网连接："
+echo "1. Checking internet connection:"
 if ping -c 2 8.8.8.8 > /dev/null 2>&1; then
-    echo "✅ 互联网连接正常"
+    echo "✅ Internet connection is normal"
 else
-    echo "❌ 互联网连接失败"
+    echo "❌ Internet connection failed"
 fi
 
 echo ""
-echo "2. 检查 AWS STS 服务 DNS 解析："
+echo "2. Checking AWS STS service DNS resolution:"
 if nslookup sts.us-west-2.amazonaws.com > /dev/null 2>&1; then
-    echo "✅ AWS STS DNS 解析正常"
+    echo "✅ AWS STS DNS resolution is normal"
 else
-    echo "❌ AWS STS DNS 解析失败"
+    echo "❌ AWS STS DNS resolution failed"
 fi
 
 echo ""
-echo "3. 检查 AWS STS 服务连通性："
+echo "3. Checking AWS STS service connectivity:"
 if curl -s --max-time 5 https://sts.us-west-2.amazonaws.com > /dev/null 2>&1; then
-    echo "✅ AWS STS 服务可达"
+    echo "✅ AWS STS service is reachable"
 else
-    echo "❌ AWS STS 服务不可达"
+    echo "❌ AWS STS service is not reachable"
 fi
 
 echo ""
-echo "4. 检查 AWS 凭证环境："
-echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-❌ 未设置}"
-echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-❌ 未设置}"
-echo "AWS_PROFILE: ${AWS_PROFILE:-未设置}"
-echo "AWS 配置文件: $(ls ~/.aws/credentials 2>/dev/null && echo "✅ 存在" || echo "❌ 不存在")"
+echo "4. Checking AWS credentials environment:"
+echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-❌ Not set}"
+echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-❌ Not set}"
+echo "AWS_PROFILE: ${AWS_PROFILE:-Not set}"
+echo "AWS config file: $(ls ~/.aws/credentials 2>/dev/null && echo "✅ Exists" || echo "❌ Does not exist")"
 
 echo ""
-echo "5. 诊断结论："
+echo "5. Diagnostic conclusion:"
 if ping -c 1 8.8.8.8 > /dev/null 2>&1; then
     if curl -s --max-time 3 https://sts.us-west-2.amazonaws.com > /dev/null 2>&1; then
-        echo "🟢 网络连接正常，AWS STS 可达"
-        echo "   - dispatch failure 可能是由于缺少有效的 AWS 凭证"
-        echo "   - 建议设置正确的 AWS_ACCESS_KEY_ID 和 AWS_SECRET_ACCESS_KEY"
+        echo "🟢 Network connection is normal, AWS STS is reachable"
+        echo "   - dispatch failure may be due to missing valid AWS credentials"
+        echo "   - Recommend setting correct AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
     else
-        echo "🟡 网络连接正常，但 AWS STS 不可达"
-        echo "   - 可能是防火墙或代理问题"
-        echo "   - 可能是 AWS 服务区域问题"
+        echo "🟡 Network connection is normal, but AWS STS is not reachable"
+        echo "   - May be a firewall or proxy issue"
+        echo "   - May be an AWS service region issue"
     fi
 else
-    echo "🔴 网络连接问题"
-    echo "   - 检查互联网连接"
-    echo "   - 检查网络配置"
+    echo "🔴 Network connection problem"
+    echo "   - Check internet connection"
+    echo "   - Check network configuration"
 fi
