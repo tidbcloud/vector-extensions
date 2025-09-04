@@ -8,6 +8,7 @@ use vector_lib::{config::proxy::ProxyConfig, tls::TlsConfig};
 use crate::sources::conprof::shutdown::{pair, ShutdownNotifier, ShutdownSubscriber};
 use crate::sources::conprof::topology::{Component, FetchError, TopologyFetcher};
 use crate::sources::conprof::upstream::ConprofSource;
+use crate::sources::conprof::ComponentsProfileTypes;
 
 pub struct Controller {
     topo_fetch_interval: Duration,
@@ -20,18 +21,16 @@ pub struct Controller {
     shutdown_subscriber: ShutdownSubscriber,
 
     tls: Option<TlsConfig>,
-    // init_retry_delay: Duration,
     out: SourceSender,
 
-    enable_tikv_heap_profile: bool,
+    components_profile_types: ComponentsProfileTypes,
 }
 
 impl Controller {
     pub async fn new(
         pd_address: String,
         topo_fetch_interval: Duration,
-        enable_tikv_heap_profile: bool,
-        // init_retry_delay: Duration,
+        components_profile_types: ComponentsProfileTypes,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         out: SourceSender,
@@ -47,9 +46,8 @@ impl Controller {
             shutdown_notifier,
             shutdown_subscriber,
             tls: tls_config,
-            // init_retry_delay,
             out,
-            enable_tikv_heap_profile,
+            components_profile_types,
         })
     }
 
@@ -114,8 +112,7 @@ impl Controller {
             component.clone(),
             self.tls.clone(),
             self.out.clone(),
-            // self.init_retry_delay,
-            self.enable_tikv_heap_profile,
+            self.components_profile_types,
         )
         .await;
         let source = match source {
