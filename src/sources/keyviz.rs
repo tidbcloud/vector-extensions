@@ -21,8 +21,6 @@ use vector_lib::{
 use super::topsql::topology::{InstanceType, TopologyFetcher};
 use crate::utils::http::build_reqwest_client;
 
-const DEFAULT_MAX_REGIONS_PER_PD_REQUEST: usize = 51200;
-
 /// PLACEHOLDER
 #[configurable_component(source("keyviz"))]
 #[derive(Debug, Clone)]
@@ -35,6 +33,17 @@ pub struct KeyvizConfig {
 
     /// PLACEHOLDER
     pub max_regions_per_pd_request: Option<usize>,
+
+    /// PLACEHOLDER
+    pub max_requests_per_round: Option<usize>,
+}
+
+pub const fn default_max_regions_per_pd_request() -> usize {
+    10240
+}
+
+pub const fn default_max_requests_per_round() -> usize {
+    0
 }
 
 impl GenerateConfig for KeyvizConfig {
@@ -42,7 +51,8 @@ impl GenerateConfig for KeyvizConfig {
         toml::Value::try_from(Self {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
-            max_regions_per_pd_request: Some(DEFAULT_MAX_REGIONS_PER_PD_REQUEST),
+            max_regions_per_pd_request: Some(default_max_regions_per_pd_request()),
+            max_requests_per_round: Some(default_max_requests_per_round()),
         })
         .unwrap()
     }
@@ -75,6 +85,7 @@ impl SourceConfig for KeyvizConfig {
         };
 
         let max_regions_per_pd_request = self.max_regions_per_pd_request;
+        let max_requests_per_round = self.max_requests_per_round;
         Ok(Box::pin(async move {
             tokio::time::sleep(Duration::from_secs(30)).await; // protect crash loop
 
@@ -150,6 +161,7 @@ impl SourceConfig for KeyvizConfig {
                         &mut cx.out,
                         filename,
                         max_regions_per_pd_request,
+                        max_requests_per_round,
                     ) => {},
                 }
                 let now = Utc::now().timestamp();
@@ -230,8 +242,16 @@ async fn fetch_and_send_regions(
     out: &mut SourceSender,
     filename: String,
     max_regions_per_pd_request: Option<usize>,
+    max_requests_per_round: Option<usize>,
 ) {
-    match fetch_regions(client.clone(), pd_address, max_regions_per_pd_request).await {
+    match fetch_regions(
+        client.clone(),
+        pd_address,
+        max_regions_per_pd_request,
+        max_requests_per_round,
+    )
+    .await
+    {
         Ok(regions) => {
             let json = match serde_json::to_string(&regions) {
                 Ok(v) => v,
@@ -257,39 +277,21 @@ async fn fetch_regions(
     client: Client,
     pd_address: &str,
     max_regions_per_pd_request: Option<usize>,
+    max_requests_per_round: Option<usize>,
 ) -> reqwest::Result<RegionsInfo> {
     let mut all = RegionsInfo {
         count: 0,
         regions: vec![],
     };
     let mut start_key = Vec::new();
-    loop {
-        let mut regions = fetch_regions_part(
-            client.clone(),
-            pd_address,
-            &start_key,
-            &[],
-            max_regions_per_pd_request.unwrap_or(DEFAULT_MAX_REGIONS_PER_PD_REQUEST),
-        )
-        .await?;
-        // for region in &mut regions.regions {
-        //     let start_bytes = match hex::decode(&region.start_key) {
-        //         Ok(v) => v,
-        //         Err(err) => {
-        //             error!(message = "Failed to decode regions info start key", %err);
-        //             continue;
-        //         }
-        //     };
-        //     let end_bytes = match hex::decode(&region.end_key) {
-        //         Ok(v) => v,
-        //         Err(err) => {
-        //             error!(message = "Failed to decode regions info end key", %err);
-        //             continue;
-        //         }
-        //     };
-        //     region.start_key = unsafe { String::from_utf8_unchecked(start_bytes) };
-        //     region.end_key = unsafe { String::from_utf8_unchecked(end_bytes) };
-        // }
+    let mut req_count = max_requests_per_round.unwrap_or(default_max_requests_per_round());
+    if req_count == 0 {
+        req_count = usize::MAX;
+    }
+    let req_limit = max_regions_per_pd_request.unwrap_or(default_max_regions_per_pd_request());
+    while req_count > 0 {
+        let mut regions =
+            fetch_regions_part(client.clone(), pd_address, &start_key, &[], req_limit).await?;
         let last_key = regions.regions.last().map(|r| r.end_key.clone());
         all.regions.append(&mut regions.regions);
         all.count += regions.count;
@@ -305,6 +307,7 @@ async fn fetch_regions(
                 }
             }
         };
+        req_count -= 1;
     }
     Ok(all)
 }

@@ -1,6 +1,8 @@
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use vector::config::{GenerateConfig, SourceConfig, SourceContext};
+use vector_config::Configurable;
 use vector_lib::{
     config::{DataType, LogNamespace, SourceOutput},
     configurable::configurable_component,
@@ -27,28 +29,84 @@ pub struct ConprofConfig {
     pub tls: Option<TlsConfig>,
 
     /// PLACEHOLDER
-    // #[serde(default = "default_init_retry_delay")]
-    // pub init_retry_delay_seconds: f64,
-
-    /// PLACEHOLDER
     #[serde(default = "default_topology_fetch_interval")]
     pub topology_fetch_interval_seconds: f64,
 
     /// PLACEHOLDER
-    #[serde(default = "default_enable_tikv_heap_profile")]
-    pub enable_tikv_heap_profile: bool,
+    #[serde(default = "default_components_profile_types")]
+    pub components_profile_types: ComponentsProfileTypes,
 }
 
-// pub const fn default_init_retry_delay() -> f64 {
-//     1.0
-// }
+/// PLACEHOLDER
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Configurable)]
+pub struct ComponentsProfileTypes {
+    /// PLACEHOLDER
+    pub pd: ProfileTypes,
+    /// PLACEHOLDER
+    pub tidb: ProfileTypes,
+    /// PLACEHOLDER
+    pub tikv: ProfileTypes,
+    /// PLACEHOLDER
+    pub tiflash: ProfileTypes,
+    /// PLACEHOLDER
+    pub tiproxy: ProfileTypes,
+    /// PLACEHOLDER
+    pub lightning: ProfileTypes,
+}
+
+/// PLACEHOLDER
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Configurable)]
+pub struct ProfileTypes {
+    /// PLACEHOLDER
+    pub cpu: bool,
+    /// PLACEHOLDER
+    pub heap: bool,
+    /// PLACEHOLDER
+    pub mutex: bool,
+    /// PLACEHOLDER
+    pub goroutine: bool,
+}
 
 pub const fn default_topology_fetch_interval() -> f64 {
     30.0
 }
 
-pub const fn default_enable_tikv_heap_profile() -> bool {
-    false
+pub const fn default_components_profile_types() -> ComponentsProfileTypes {
+    ComponentsProfileTypes {
+        pd: default_go_profile_types(),
+        tidb: default_go_profile_types(),
+        tikv: default_tikv_profile_types(),
+        tiflash: default_tiflash_profile_types(),
+        tiproxy: default_go_profile_types(),
+        lightning: default_go_profile_types(),
+    }
+}
+
+pub const fn default_go_profile_types() -> ProfileTypes {
+    ProfileTypes {
+        cpu: true,
+        heap: true,
+        mutex: true,
+        goroutine: true,
+    }
+}
+
+pub const fn default_tikv_profile_types() -> ProfileTypes {
+    ProfileTypes {
+        cpu: false,
+        heap: true,
+        mutex: false,
+        goroutine: false,
+    }
+}
+
+pub const fn default_tiflash_profile_types() -> ProfileTypes {
+    ProfileTypes {
+        cpu: false,
+        heap: false,
+        mutex: false,
+        goroutine: false,
+    }
 }
 
 impl GenerateConfig for ConprofConfig {
@@ -56,9 +114,8 @@ impl GenerateConfig for ConprofConfig {
         toml::Value::try_from(Self {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
-            // init_retry_delay_seconds: default_init_retry_delay(),
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
-            enable_tikv_heap_profile: default_enable_tikv_heap_profile(),
+            components_profile_types: default_components_profile_types(),
         })
         .unwrap()
     }
@@ -73,14 +130,12 @@ impl SourceConfig for ConprofConfig {
         let pd_address = self.pd_address.clone();
         let tls = self.tls.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
-        let enable_tikv_heap_profile = self.enable_tikv_heap_profile;
-        // let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
+        let components_profile_types = self.components_profile_types;
         Ok(Box::pin(async move {
             Controller::new(
                 pd_address,
                 topology_fetch_interval,
-                enable_tikv_heap_profile,
-                // init_retry_delay,
+                components_profile_types,
                 tls,
                 &cx.proxy,
                 cx.out,

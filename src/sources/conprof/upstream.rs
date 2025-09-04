@@ -10,21 +10,21 @@ use crate::sources::conprof::{
     shutdown::ShutdownSubscriber,
     tools::fetch_raw,
     topology::{Component, InstanceType},
+    ComponentsProfileTypes, ProfileTypes,
 };
 use crate::utils::http::build_reqwest_client;
 
 pub struct ConprofSource {
     client: Client,
-    // instance: String,
+
     instance_b64: String,
     instance_type: InstanceType,
     uri: String,
 
     tls: Option<TlsConfig>,
     out: SourceSender,
-    // init_retry_delay: Duration,
-    // retry_delay: Duration,
-    enable_tikv_heap_profile: bool,
+
+    components_profile_types: ComponentsProfileTypes,
 }
 
 impl ConprofSource {
@@ -32,8 +32,7 @@ impl ConprofSource {
         component: Component,
         tls: Option<TlsConfig>,
         out: SourceSender,
-        // init_retry_delay: Duration,
-        enable_tikv_heap_profile: bool,
+        components_profile_types: ComponentsProfileTypes,
     ) -> Option<Self> {
         let client = match build_reqwest_client(tls.clone(), None, None).await {
             Ok(client) => client,
@@ -46,7 +45,6 @@ impl ConprofSource {
         match component.conprof_address() {
             Some(address) => Some(ConprofSource {
                 client,
-                // instance: address.clone(),
                 instance_b64: BASE64_URL_SAFE_NO_PAD.encode(&address),
                 instance_type: component.instance_type,
                 uri: if tls.is_some() {
@@ -54,12 +52,9 @@ impl ConprofSource {
                 } else {
                     format!("http://{}", address)
                 },
-
                 tls,
                 out,
-                // init_retry_delay,
-                // retry_delay: init_retry_delay,
-                enable_tikv_heap_profile,
+                components_profile_types,
             }),
             None => None,
         }
@@ -79,50 +74,59 @@ impl ConprofSource {
             ts -= ts % 60;
             let next_minute_ts = ts + 60;
             match self.instance_type {
-                InstanceType::TiDB
-                | InstanceType::PD
-                | InstanceType::TiProxy
-                | InstanceType::Lightning => {
-                    self.fetch_goroutine(
-                        format!(
-                            "{}-{}-goroutine-{}",
-                            ts, self.instance_type, self.instance_b64
-                        ),
+                InstanceType::PD => {
+                    self.fetch_profiles(
+                        ts,
+                        self.components_profile_types.pd,
                         shutdown.clone(),
+                        false,
                     )
                     .await;
-                    self.fetch_mutex(
-                        format!("{}-{}-mutex-{}", ts, self.instance_type, self.instance_b64),
+                }
+                InstanceType::TiDB => {
+                    self.fetch_profiles(
+                        ts,
+                        self.components_profile_types.tidb,
                         shutdown.clone(),
-                    )
-                    .await;
-                    self.fetch_heap(
-                        format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
-                    self.fetch_cpu(
-                        format!("{}-{}-cpu-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
+                        false,
                     )
                     .await;
                 }
                 InstanceType::TiKV => {
-                    self.fetch_cpu(
-                        format!("{}-{}-cpu-{}", ts, self.instance_type, self.instance_b64),
+                    self.fetch_profiles(
+                        ts,
+                        self.components_profile_types.tikv,
                         shutdown.clone(),
+                        true,
                     )
                     .await;
-                    if self.enable_tikv_heap_profile {
-                        self.fetch_heap_with_jeprof(
-                            format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
-                            shutdown.clone(),
-                        )
-                        .await;
-                    }
                 }
                 InstanceType::TiFlash => {
-                    // do nothing.
+                    self.fetch_profiles(
+                        ts,
+                        self.components_profile_types.tiflash,
+                        shutdown.clone(),
+                        false,
+                    )
+                    .await;
+                }
+                InstanceType::TiProxy => {
+                    self.fetch_profiles(
+                        ts,
+                        self.components_profile_types.tiproxy,
+                        shutdown.clone(),
+                        false,
+                    )
+                    .await;
+                }
+                InstanceType::Lightning => {
+                    self.fetch_profiles(
+                        ts,
+                        self.components_profile_types.lightning,
+                        shutdown.clone(),
+                        false,
+                    )
+                    .await;
                 }
             };
             let now = Utc::now().timestamp();
@@ -132,6 +136,54 @@ impl ConprofSource {
                     _ = tokio::time::sleep(Duration::from_secs((next_minute_ts - now + 1) as u64)) => {},
                 }
             }
+        }
+    }
+
+    async fn fetch_profiles(
+        &mut self,
+        ts: i64,
+        pt: ProfileTypes,
+        shutdown: ShutdownSubscriber,
+        jeprof_heap: bool,
+    ) {
+        if pt.goroutine {
+            self.fetch_goroutine(
+                format!(
+                    "{}-{}-goroutine-{}",
+                    ts, self.instance_type, self.instance_b64
+                ),
+                shutdown.clone(),
+            )
+            .await;
+        }
+        if pt.mutex {
+            self.fetch_mutex(
+                format!("{}-{}-mutex-{}", ts, self.instance_type, self.instance_b64),
+                shutdown.clone(),
+            )
+            .await;
+        }
+        if pt.heap {
+            if jeprof_heap {
+                self.fetch_heap_with_jeprof(
+                    format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
+                    shutdown.clone(),
+                )
+                .await;
+            } else {
+                self.fetch_heap(
+                    format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
+                    shutdown.clone(),
+                )
+                .await;
+            }
+        }
+        if pt.cpu {
+            self.fetch_cpu(
+                format!("{}-{}-cpu-{}", ts, self.instance_type, self.instance_b64),
+                shutdown.clone(),
+            )
+            .await;
         }
     }
 
