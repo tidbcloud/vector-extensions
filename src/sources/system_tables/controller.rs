@@ -204,13 +204,13 @@ impl Controller {
         self.topology_fetcher
             .get_up_components(&mut new_components)
             .await?;
-
+        info!("new_components: {:?}", new_components);
         // Filter only TiDB components
         let tidb_components: HashSet<Component> = new_components
             .into_iter()
             .filter(|c| c.instance_type == InstanceType::TiDB)
             .collect();
-
+        info!("tidb_components: {:?}", tidb_components);
         // Only log if there are changes in TiDB components
         if tidb_components != self.tidb_components {
             info!(
@@ -229,7 +229,7 @@ impl Controller {
                 tidb_components.len()
             );
         }
-
+        info!("update collectors: {:?}", tidb_components);
         // Update collectors based on component changes
         self.update_collectors(tidb_components).await;
 
