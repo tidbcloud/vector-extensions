@@ -110,6 +110,7 @@ impl SinkConfig for GcsUploadFileSinkConfig {
             format!("{}{}", BASE_URL, self.bucket),
             auth.clone(),
         )?;
+        auth.spawn_regenerate_token();
         let sink = self.build_sink(client, self.bucket.clone(), auth, cx)?;
 
         Ok((sink, healthcheck))
