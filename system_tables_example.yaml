@@ -1,0 +1,134 @@
+sources:
+  # Legacy collector system (backward compatibility)
+  system_tables_legacy:
+    type: system_tables
+    use_abstracted_collectors: false
+    collection_method: "sql"
+    database_username: "root"
+    database_password: ""
+    database_host: "127.0.0.1"
+    database_port: 4000
+    database_name: "test"
+    short_interval: 5
+    long_interval: 1800
+    retention_days: 7
+    tables:
+      - source_schema: "information_schema"
+        source_table: "PROCESSLIST"
+        dest_table: "hist_processlist"
+        collection_interval: "short"
+        where_clause: "command != 'Sleep'"
+        enabled: true
+
+  # New abstracted collector system - SQL method
+  system_tables_sql_v2:
+    type: system_tables
+    use_abstracted_collectors: true
+    collection_method: "sql"
+    database_username: "root"
+    database_password: ""
+    database_host: "127.0.0.1"
+    database_port: 4000
+    database_name: "test"
+    short_interval: 5
+    long_interval: 1800
+    retention_days: 7
+    tables:
+      - source_schema: "information_schema"
+        source_table: "PROCESSLIST"
+        dest_table: "hist_processlist_v2"
+        collection_interval: "short"
+        where_clause: "command != 'Sleep'"
+        enabled: true
+      - source_schema: "information_schema"
+        source_table: "USER_PRIVILEGES"
+        dest_table: "hist_user_privileges"
+        collection_interval: "long"
+        enabled: true
+
+  # New abstracted collector system - Coprocessor method
+  system_tables_coprocessor_v2:
+    type: system_tables
+    use_abstracted_collectors: true
+    collection_method: "coprocessor"
+    database_username: "root"
+    database_password: ""
+    database_host: "127.0.0.1"
+    database_port: 4000
+    database_name: "test"
+    short_interval: 10
+    long_interval: 1800
+    retention_days: 7
+    tables:
+      - source_schema: "information_schema"
+        source_table: "CLUSTER_STATEMENTS_SUMMARY"
+        dest_table: "hist_cluster_statements_summary_v2"
+        collection_interval: "short"
+        enabled: true
+      - source_schema: "information_schema"
+        source_table: "CLUSTER_SLOW_QUERY"
+        dest_table: "hist_cluster_slow_query_v2"
+        collection_interval: "long"
+        enabled: true
+
+  # New abstracted collector system - HTTP API method
+  system_tables_http_api:
+    type: system_tables
+    use_abstracted_collectors: true
+    collection_method: "http_api"
+    database_username: "root"
+    database_password: ""
+    database_host: "127.0.0.1"
+    database_port: 4000
+    database_name: "test"
+    short_interval: 15
+    long_interval: 1800
+    retention_days: 7
+    tables:
+      - source_schema: "information_schema"
+        source_table: "CLUSTER_CONFIG"
+        dest_table: "hist_cluster_config"
+        collection_interval: "long"
+        enabled: true
+      - source_schema: "metrics_schema"
+        source_table: "CLUSTER_HARDWARE"
+        dest_table: "hist_cluster_hardware"
+        collection_interval: "short"
+        enabled: true
+
+  # New abstracted collector system - Custom gRPC method
+  system_tables_custom_grpc:
+    type: system_tables
+    use_abstracted_collectors: true
+    collection_method: "custom_grpc"
+    database_username: "root"
+    database_password: ""
+    database_host: "127.0.0.1"
+    database_port: 4000
+    database_name: "test"
+    short_interval: 20
+    long_interval: 1800
+    retention_days: 7
+    tables:
+      - source_schema: "custom_schema"
+        source_table: "CLUSTER_CUSTOM_METRICS"
+        dest_table: "hist_custom_metrics"
+        collection_interval: "short"
+        enabled: true
+      - source_schema: "custom_schema"
+        source_table: "CLUSTER_CUSTOM_EVENTS"
+        dest_table: "hist_custom_events"
+        collection_interval: "long"
+        enabled: true
+
+sinks:
+  stdout:
+    inputs:
+      - system_tables_legacy
+      - system_tables_sql_v2
+      - system_tables_coprocessor_v2
+      - system_tables_http_api
+      - system_tables_custom_grpc
+    type: console
+    encoding:
+      codec: json

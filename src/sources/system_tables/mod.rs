@@ -12,7 +12,13 @@ use vector_lib::{
 
 use crate::sources::system_tables::controller::Controller;
 
-mod collector;
+
+// New abstracted collectors
+mod collectors;
+mod data_collector;
+mod collector_factory;
+
+// Main controller
 mod controller;
 
 /// Environment variable names for database configuration
@@ -51,6 +57,7 @@ impl DatabaseEnvVars {
     pub const LONG_INTERVAL: &'static str = "SYSTEM_TABLES_LONG_INTERVAL";
     pub const RETENTION_DAYS: &'static str = "SYSTEM_TABLES_RETENTION_DAYS";
     pub const TOPOLOGY_FETCH_INTERVAL: &'static str = "TOPOLOGY_FETCH_INTERVAL_SECONDS";
+    pub const COLLECTION_METHOD: &'static str = "SYSTEM_TABLES_COLLECTION_METHOD";
 }
 
 /// Configuration for the system_tables source
@@ -100,6 +107,11 @@ pub struct SystemTablesConfig {
     /// TiDB topology fetch interval in seconds
     #[serde(default = "default_topology_fetch_interval")]
     pub topology_fetch_interval_seconds: f64,
+
+    /// Collection method: "coprocessor" for gRPC coprocessor-based collection (default), "sql" for SQL-based collection
+    #[serde(default = "default_collection_method")]
+    pub collection_method: String,
+
 }
 
 /// Database connection configuration
@@ -163,6 +175,11 @@ pub enum CollectionInterval {
 pub const fn default_topology_fetch_interval() -> f64 {
     30.0
 }
+
+pub fn default_collection_method() -> String {
+    "coprocessor".to_string()
+}
+
 
 /// Helper functions for reading environment variables
 impl SystemTablesConfig {
@@ -257,6 +274,9 @@ impl SystemTablesConfig {
                 self.topology_fetch_interval_seconds = interval;
             }
         }
+        if let Ok(val) = env::var(DatabaseEnvVars::COLLECTION_METHOD) {
+            self.collection_method = val;
+        }
 
         // Merge TLS configurations
         if let Some(env_tls) = Self::build_tls_config_from_env(
@@ -308,6 +328,7 @@ impl GenerateConfig for SystemTablesConfig {
             pd_tls: None,
             database_tls: None,
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
+            collection_method: default_collection_method(),
         })
         .unwrap()
     }
@@ -366,8 +387,10 @@ impl SourceConfig for SystemTablesConfig {
         let tables = config.tables.clone();
 
         let pd_tls = config.pd_tls.clone();
+        let collection_method = config.collection_method.clone();
 
         Ok(Box::pin(async move {
+            info!("Using system tables controller with abstracted collectors");
             let controller = Controller::new(
                 pd_address,
                 tidb_group,
@@ -379,12 +402,12 @@ impl SourceConfig for SystemTablesConfig {
                 pd_tls,
                 &cx.proxy,
                 cx.out,
+                collection_method,
             )
             .await
             .map_err(|error| error!(message = "Source failed to initialize.", %error))?;
 
             controller.run(cx.shutdown).await;
-
             Ok(())
         }))
     }

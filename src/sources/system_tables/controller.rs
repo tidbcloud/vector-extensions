@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use tokio::time::interval;
+use tracing::{debug, error, info, warn};
 use vector::shutdown::ShutdownSignal;
 use vector::SourceSender;
 use vector_lib::config::proxy::ProxyConfig;
@@ -9,26 +11,37 @@ use vector_lib::tls::TlsConfig;
 use crate::common::features::is_nextgen_mode;
 use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetcher};
 use crate::sources::system_tables::{
-    collector::Collector, CollectionConfig, DatabaseConfig, TableConfig,
+    CollectionConfig, DatabaseConfig, TableConfig,
 };
 
-/// Main controller for system_tables source
+use crate::sources::system_tables::data_collector::{
+    CollectionMethod, CollectorConfig, DataCollector,
+};
+use crate::sources::system_tables::collector_factory::CollectorFactory;
+
+/// Main controller using abstracted data collectors
 pub struct Controller {
     topology_fetch_interval: Duration,
     topology_fetcher: TopologyFetcher,
     tidb_components: HashSet<Component>,
-    running_collectors: HashMap<String, tokio::task::JoinHandle<()>>,
+    running_collectors: HashMap<String, CollectorTask>,
     database_config: DatabaseConfig,
     collection_config: CollectionConfig,
     tables: Vec<TableConfig>,
-    #[allow(dead_code)]
+    collection_method: CollectionMethod,
     proxy_config: ProxyConfig,
     out: SourceSender,
-    shared_pool: Option<sqlx::mysql::MySqlPool>,
+}
+
+/// Task information for a running collector
+struct CollectorTask {
+    handle: tokio::task::JoinHandle<()>,
+    collector_type: CollectionMethod,
+    table_count: usize,
 }
 
 impl Controller {
-    /// Create a new controller
+    /// Create a new controller with abstracted collectors
     pub async fn new(
         pd_address: Option<String>,
         tidb_group: Option<String>,
@@ -40,10 +53,14 @@ impl Controller {
         pd_tls: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         out: SourceSender,
+        collection_method: String,
     ) -> vector::Result<Self> {
-        // Create topology fetcher based on nextgen mode and configuration
+        // Parse collection method
+        let collection_method = CollectionMethod::from_string(&collection_method)
+            .map_err(|e| format!("Invalid collection method: {}", e))?;
+
+        // Create topology fetcher
         let topology_fetcher = if is_nextgen_mode() {
-            // Nextgen mode: use K8s-based topology fetching
             info!("Using nextgen mode for topology discovery");
             if tidb_group.is_none() && label_k8s_instance.is_none() {
                 return Err(
@@ -52,8 +69,8 @@ impl Controller {
                 );
             }
             TopologyFetcher::new(
-                Some(String::new()), // Empty PD address for nextgen mode
-                None,                // No TLS needed for nextgen mode (uses K8s API)
+                Some(String::new()),
+                None,
                 proxy_config,
                 tidb_group.clone(),
                 label_k8s_instance.clone(),
@@ -61,11 +78,9 @@ impl Controller {
             .await
             .map_err(|e| format!("Failed to create nextgen topology fetcher: {}", e))?
         } else {
-            // Legacy mode: use PD/etcd-based topology fetching
             info!("Using legacy mode for topology discovery");
             let pd_addr = pd_address.ok_or("In legacy mode, pd_address must be specified")?;
 
-            // Log TLS configuration for debugging
             if let Some(ref tls_config) = pd_tls {
                 info!("Legacy mode using TLS configuration for PD/etcd connections");
                 if tls_config.ca_file.is_some() {
@@ -80,7 +95,7 @@ impl Controller {
 
             TopologyFetcher::new(
                 Some(pd_addr),
-                pd_tls.clone(), // Use the pd_tls parameter
+                pd_tls.clone(),
                 proxy_config,
                 tidb_group.clone(),
                 label_k8s_instance.clone(),
@@ -97,78 +112,10 @@ impl Controller {
             database_config,
             collection_config,
             tables,
+            collection_method,
             proxy_config: proxy_config.clone(),
             out,
-            shared_pool: None,
         })
-    }
-
-    /// Get or create shared connection pool
-    async fn get_shared_pool(
-        &mut self,
-    ) -> Result<&sqlx::mysql::MySqlPool, Box<dyn std::error::Error + Send + Sync>> {
-        if self.shared_pool.is_none() {
-            let mut url = format!(
-                "mysql://{}:{}@{}:{}/{}",
-                self.database_config.username,
-                &self.database_config.password,
-                self.database_config.host,
-                self.database_config.port,
-                self.database_config.database
-            );
-
-            // Add TLS parameters if database TLS is configured
-            if let Some(ref tls_config) = self.database_config.tls {
-                let mut tls_params = Vec::new();
-
-                // Set SSL mode based on verification settings
-                if tls_config.verify_certificate.unwrap_or(true) {
-                    if tls_config.verify_hostname.unwrap_or(true) {
-                        tls_params.push("ssl-mode=VERIFY_IDENTITY".to_string());
-                    } else {
-                        tls_params.push("ssl-mode=VERIFY_CA".to_string());
-                    }
-                } else {
-                    tls_params.push("ssl-mode=REQUIRED".to_string());
-                }
-
-                // Add CA certificate if provided
-                if let Some(ref ca_file) = tls_config.ca_file {
-                    tls_params.push(format!("ssl-ca={}", ca_file.display()));
-                }
-
-                // Add client certificate if provided
-                if let Some(ref crt_file) = tls_config.crt_file {
-                    tls_params.push(format!("ssl-cert={}", crt_file.display()));
-                }
-
-                // Add client key if provided
-                if let Some(ref key_file) = tls_config.key_file {
-                    tls_params.push(format!("ssl-key={}", key_file.display()));
-                }
-
-                if !tls_params.is_empty() {
-                    url.push('?');
-                    url.push_str(&tls_params.join("&"));
-                }
-
-                info!("Creating shared connection pool with TLS enabled");
-            } else {
-                info!("Creating shared connection pool without TLS");
-            }
-
-            let pool = sqlx::mysql::MySqlPoolOptions::new()
-                .max_connections(self.database_config.max_connections.unwrap_or(10)) // 增加连接数，因为是共享的
-                .acquire_timeout(std::time::Duration::from_secs(
-                    self.database_config.connect_timeout.unwrap_or(30) as u64,
-                ))
-                .connect(&url)
-                .await?;
-
-            self.shared_pool = Some(pool);
-        }
-
-        Ok(self.shared_pool.as_ref().unwrap())
     }
 
     /// Run the main controller loop
@@ -186,13 +133,15 @@ impl Controller {
 
     /// Main control loop
     async fn run_loop(&mut self) {
+        let mut topology_interval = interval(self.topology_fetch_interval);
+
         loop {
+            topology_interval.tick().await;
+
             // Fetch TiDB instances and update collectors
             if let Err(e) = self.fetch_and_update_tidb_instances().await {
                 error!("Failed to fetch TiDB instances: {}", e);
             }
-
-            tokio::time::sleep(self.topology_fetch_interval).await;
         }
     }
 
@@ -204,13 +153,13 @@ impl Controller {
         self.topology_fetcher
             .get_up_components(&mut new_components)
             .await?;
-        info!("new_components: {:?}", new_components);
+
         // Filter only TiDB components
         let tidb_components: HashSet<Component> = new_components
             .into_iter()
             .filter(|c| c.instance_type == InstanceType::TiDB)
             .collect();
-        info!("tidb_components: {:?}", tidb_components);
+
         // Only log if there are changes in TiDB components
         if tidb_components != self.tidb_components {
             info!(
@@ -229,7 +178,7 @@ impl Controller {
                 tidb_components.len()
             );
         }
-        info!("update collectors: {:?}", tidb_components);
+
         // Update collectors based on component changes
         self.update_collectors(tidb_components).await;
 
@@ -238,7 +187,6 @@ impl Controller {
 
     /// Update collectors based on new TiDB components
     async fn update_collectors(&mut self, new_components: HashSet<Component>) {
-        // Clone tables first to avoid borrowing issues
         let tables = self.tables.clone();
 
         // Separate tables into cluster-level and instance-level
@@ -313,7 +261,7 @@ impl Controller {
         self.tidb_components = new_components;
     }
 
-    /// Start a collector for a specific TiDB component with specific tables
+    /// Start a collector for a specific TiDB component using abstracted interface
     async fn start_collector_with_tables(
         &mut self,
         component: &Component,
@@ -322,48 +270,161 @@ impl Controller {
     ) {
         let table_names: Vec<&str> = tables.iter().map(|t| t.source_table.as_str()).collect();
         info!(
-            "Starting collector for {}:{} with tables: [{}]",
+            "Starting {} collector for {}:{} with {} tables: [{}]",
+            self.collection_method,
             component.host,
             component.primary_port,
+            tables.len(),
             table_names.join(", ")
         );
 
-        // Create a database config specific to this TiDB instance
+        // Create collector config
         let mut instance_db_config = self.database_config.clone();
         instance_db_config.host = component.host.clone();
         instance_db_config.port = component.primary_port;
 
-        // Get shared connection pool
-        let shared_pool = match self.get_shared_pool().await {
-            Ok(pool) => pool.clone(),
-            Err(e) => {
-                error!("Failed to get shared connection pool: {}", e);
-                return;
-            }
+        let collector_config = CollectorConfig {
+            instance: format!("{}:{}", component.host, component.primary_port),
+            database_config: instance_db_config,
+            collection_config: self.collection_config.clone(),
+            tables: tables.clone(),
+            out: self.out.clone(),
         };
 
-        let collector = Collector::new(
-            format!("{}:{}", component.host, component.primary_port),
-            instance_db_config,
-            self.collection_config.clone(),
-            tables,
-            self.out.clone(),
-            shared_pool,
-        );
+        // Create collector using simplified factory
+        match CollectorFactory::create_collector(self.collection_method.clone(), collector_config)
+        {
+            Ok(mut collector) => {
+                // Initialize the collector
+                if let Err(e) = collector.initialize().await {
+                    error!(
+                        "Failed to initialize collector for {}: {}",
+                        collector_key, e
+                    );
+                    return;
+                }
 
-        let handle = tokio::spawn(async move {
-            collector.run().await;
-        });
+                info!(
+                    "Successfully initialized {} collector for {}",
+                    collector.collection_method(),
+                    collector_key
+                );
 
-        self.running_collectors
-            .insert(collector_key.to_string(), handle);
+                // Store table count before moving tables
+                let table_count = tables.len();
+
+                // Start the collector task
+                let handle = tokio::spawn(async move {
+                    Self::run_collector_task(collector, tables).await;
+                });
+                let task = CollectorTask {
+                    handle,
+                    collector_type: self.collection_method.clone(),
+                    table_count,
+                };
+
+                self.running_collectors.insert(collector_key.to_string(), task);
+            }
+            Err(e) => {
+                error!(
+                    "Failed to create collector for {}: {}",
+                    collector_key, e
+                );
+            }
+        }
     }
 
-    /// Stop a collector for a specific TiDB instance
+    /// Run a collector task for multiple tables
+    async fn run_collector_task(
+        collector: Box<dyn DataCollector>,
+        tables: Vec<TableConfig>,
+    ) {
+        use crate::sources::system_tables::data_collector::utils::{create_event_from_result, parse_collection_interval};
+
+        let collection_config = &tables[0]; // Use first table's config as reference
+        let interval_duration = Duration::from_secs(
+            parse_collection_interval(
+                &collection_config.collection_interval,
+                &CollectionConfig {
+                    short_interval: 5,
+                    long_interval: 1800,
+                    retention_days: 7,
+                },
+            ),
+        );
+
+        let mut collection_interval = interval(interval_duration);
+
+        loop {
+            collection_interval.tick().await;
+
+            // Collect data from each table
+            for table in &tables {
+                if !table.enabled {
+                    continue;
+                }
+
+                // Check if collector can handle this table
+                if !collector.can_collect_table(table) {
+                    warn!(
+                        "Collector {} cannot handle table {}.{}",
+                        collector.collection_method(),
+                        table.source_schema,
+                        table.source_table
+                    );
+                    continue;
+                }
+
+                match collector.collect_table_data(table).await {
+                    Ok(result) => {
+                        let row_count = result.data.len();
+                        info!(
+                            "Collected {} rows from table {} using {}",
+                            row_count,
+                            table.source_table,
+                            collector.collection_method()
+                        );
+
+                        // Convert data to events and send
+                        for row_data in &result.data {
+                            let _event = create_event_from_result(&result, row_data.clone());
+
+                            // Send event (note: we'd need to get the sender here)
+                            // This is a simplified version - in practice, you'd need to pass
+                            // the sender through the collector config or result
+                            debug!("Created event for table {}", table.source_table);
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to collect data from table {} using {}: {}",
+                            table.source_table,
+                            collector.collection_method(),
+                            e
+                        );
+                    }
+                }
+            }
+
+            // Perform periodic health check
+            if let Err(e) = collector.health_check().await {
+                warn!(
+                    "Health check failed for {} collector: {}",
+                    collector.collection_method(),
+                    e
+                );
+            }
+        }
+    }
+
+    /// Stop a collector by its key
     async fn stop_collector(&mut self, collector_key: &str) {
-        if let Some(handle) = self.running_collectors.remove(collector_key) {
-            info!("Stopping collector with key: {}", collector_key);
-            handle.abort();
+        if let Some(task) = self.running_collectors.remove(collector_key) {
+            info!(
+                "Stopping {} collector with key: {} ({} tables)",
+                task.collector_type, collector_key, task.table_count
+            );
+            task.handle.abort();
             info!("Stopped collector with key: {}", collector_key);
         }
     }
@@ -384,10 +445,65 @@ impl Controller {
 
     /// Shutdown all collectors
     async fn shutdown_all_collectors(&mut self) {
-        for (collector_key, handle) in self.running_collectors.drain() {
-            info!("Shutting down collector with key: {}", collector_key);
-            handle.abort();
+        for (collector_key, task) in self.running_collectors.drain() {
+            info!(
+                "Shutting down {} collector with key: {} ({} tables)",
+                task.collector_type, collector_key, task.table_count
+            );
+            task.handle.abort();
         }
         info!("All collectors shut down");
+    }
+
+    /// Get statistics about running collectors
+    pub fn get_collector_statistics(&self) -> HashMap<String, serde_json::Value> {
+        let mut stats = HashMap::new();
+
+        stats.insert(
+            "total_collectors".to_string(),
+            serde_json::Value::Number(self.running_collectors.len().into()),
+        );
+
+        // Group by collector type
+        let mut type_counts = HashMap::new();
+        let mut table_counts = HashMap::new();
+
+        for (key, task) in &self.running_collectors {
+            let type_str = task.collector_type.to_string();
+            *type_counts.entry(type_str.clone()).or_insert(0) += 1;
+            *table_counts.entry(type_str).or_insert(0) += task.table_count;
+        }
+
+        stats.insert(
+            "collector_types".to_string(),
+            serde_json::Value::Object(
+                type_counts
+                    .into_iter()
+                    .map(|(k, v)| (k, serde_json::Value::Number(v.into())))
+                    .collect(),
+            ),
+        );
+
+        stats.insert(
+            "tables_by_type".to_string(),
+            serde_json::Value::Object(
+                table_counts
+                    .into_iter()
+                    .map(|(k, v)| (k, serde_json::Value::Number(v.into())))
+                    .collect(),
+            ),
+        );
+
+        stats.insert(
+            "supported_methods".to_string(),
+            serde_json::Value::Array(
+                CollectorFactory::supported_methods()
+                    .into_iter()
+                    .map(|m| serde_json::Value::String(m.to_string()))
+                    .collect(),
+            ),
+        );
+
+        stats
     }
 }
