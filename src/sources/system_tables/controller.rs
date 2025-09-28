@@ -10,16 +10,15 @@ use vector_lib::tls::TlsConfig;
 
 use crate::common::features::is_nextgen_mode;
 use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetcher};
-use crate::sources::system_tables::{
-    CollectionConfig, DatabaseConfig, TableConfig,
-};
+use crate::sources::system_tables::{CollectionConfig, DatabaseConfig, TableConfig};
 
+use crate::sources::system_tables::collector_factory::CollectorFactory;
 use crate::sources::system_tables::data_collector::{
     CollectionMethod, CollectorConfig, DataCollector,
 };
-use crate::sources::system_tables::collector_factory::CollectorFactory;
 
 /// Main controller using abstracted data collectors
+#[allow(dead_code)]
 pub struct Controller {
     topology_fetch_interval: Duration,
     topology_fetcher: TopologyFetcher,
@@ -278,22 +277,51 @@ impl Controller {
             table_names.join(", ")
         );
 
-        // Create collector config
-        let mut instance_db_config = self.database_config.clone();
-        instance_db_config.host = component.host.clone();
-        instance_db_config.port = component.primary_port;
+        // Create collector config based on collection method
+        let instance = format!("{}:{}", component.host, component.primary_port);
+        let collector_config = match self.collection_method {
+            CollectionMethod::Coprocessor => {
+                // For coprocessor method, use coprocessor-specific config
+                CollectorConfig::for_coprocessor(
+                    instance,
+                    component.host.clone(),
+                    component.primary_port,
+                    Some(30), // grpc_timeout_secs
+                    Some(3),  // max_retries
+                )
+            }
+            CollectionMethod::Sql => {
+                // For SQL method, use database config
+                let mut instance_db_config = self.database_config.clone();
+                instance_db_config.host = component.host.clone();
+                instance_db_config.port = component.primary_port;
 
-        let collector_config = CollectorConfig {
-            instance: format!("{}:{}", component.host, component.primary_port),
-            database_config: instance_db_config,
-            collection_config: self.collection_config.clone(),
-            tables: tables.clone(),
-            out: self.out.clone(),
+                CollectorConfig::for_sql(instance, instance_db_config)
+            }
+            CollectionMethod::HttpApi => {
+                // For HTTP API method, use HTTP-specific config
+                CollectorConfig::for_http_api(
+                    instance,
+                    component.host.clone(),
+                    component.primary_port,
+                    Some(30), // timeout_secs
+                    Some(3),  // max_retries
+                )
+            }
+            CollectionMethod::CustomGrpc => {
+                // For custom gRPC, fallback to coprocessor config for now
+                CollectorConfig::for_coprocessor(
+                    instance,
+                    component.host.clone(),
+                    component.primary_port,
+                    Some(30),
+                    Some(3),
+                )
+            }
         };
 
         // Create collector using simplified factory
-        match CollectorFactory::create_collector(self.collection_method.clone(), collector_config)
-        {
+        match CollectorFactory::create_collector(self.collection_method.clone(), collector_config) {
             Ok(mut collector) => {
                 // Initialize the collector
                 if let Err(e) = collector.initialize().await {
@@ -323,35 +351,30 @@ impl Controller {
                     table_count,
                 };
 
-                self.running_collectors.insert(collector_key.to_string(), task);
+                self.running_collectors
+                    .insert(collector_key.to_string(), task);
             }
             Err(e) => {
-                error!(
-                    "Failed to create collector for {}: {}",
-                    collector_key, e
-                );
+                error!("Failed to create collector for {}: {}", collector_key, e);
             }
         }
     }
 
     /// Run a collector task for multiple tables
-    async fn run_collector_task(
-        collector: Box<dyn DataCollector>,
-        tables: Vec<TableConfig>,
-    ) {
-        use crate::sources::system_tables::data_collector::utils::{create_event_from_result, parse_collection_interval};
+    async fn run_collector_task(collector: Box<dyn DataCollector>, tables: Vec<TableConfig>) {
+        use crate::sources::system_tables::data_collector::utils::{
+            create_event_from_result, parse_collection_interval,
+        };
 
         let collection_config = &tables[0]; // Use first table's config as reference
-        let interval_duration = Duration::from_secs(
-            parse_collection_interval(
-                &collection_config.collection_interval,
-                &CollectionConfig {
-                    short_interval: 5,
-                    long_interval: 1800,
-                    retention_days: 7,
-                },
-            ),
-        );
+        let interval_duration = Duration::from_secs(parse_collection_interval(
+            &collection_config.collection_interval,
+            &CollectionConfig {
+                short_interval: 5,
+                long_interval: 1800,
+                retention_days: 7,
+            },
+        ));
 
         let mut collection_interval = interval(interval_duration);
 
@@ -453,57 +476,5 @@ impl Controller {
             task.handle.abort();
         }
         info!("All collectors shut down");
-    }
-
-    /// Get statistics about running collectors
-    pub fn get_collector_statistics(&self) -> HashMap<String, serde_json::Value> {
-        let mut stats = HashMap::new();
-
-        stats.insert(
-            "total_collectors".to_string(),
-            serde_json::Value::Number(self.running_collectors.len().into()),
-        );
-
-        // Group by collector type
-        let mut type_counts = HashMap::new();
-        let mut table_counts = HashMap::new();
-
-        for (key, task) in &self.running_collectors {
-            let type_str = task.collector_type.to_string();
-            *type_counts.entry(type_str.clone()).or_insert(0) += 1;
-            *table_counts.entry(type_str).or_insert(0) += task.table_count;
-        }
-
-        stats.insert(
-            "collector_types".to_string(),
-            serde_json::Value::Object(
-                type_counts
-                    .into_iter()
-                    .map(|(k, v)| (k, serde_json::Value::Number(v.into())))
-                    .collect(),
-            ),
-        );
-
-        stats.insert(
-            "tables_by_type".to_string(),
-            serde_json::Value::Object(
-                table_counts
-                    .into_iter()
-                    .map(|(k, v)| (k, serde_json::Value::Number(v.into())))
-                    .collect(),
-            ),
-        );
-
-        stats.insert(
-            "supported_methods".to_string(),
-            serde_json::Value::Array(
-                CollectorFactory::supported_methods()
-                    .into_iter()
-                    .map(|m| serde_json::Value::String(m.to_string()))
-                    .collect(),
-            ),
-        );
-
-        stats
     }
 }

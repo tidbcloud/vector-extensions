@@ -8,8 +8,8 @@ use tonic::transport::{Channel, Endpoint};
 use tracing::{debug, info, warn};
 
 use crate::sources::system_tables::data_collector::{
-    CollectionError, CollectionMetadata, CollectionMethod, CollectionResult,
-    CollectorConfig, DataCollector,
+    CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
+    CollectorConfigType, DataCollector,
 };
 use crate::sources::system_tables::TableConfig;
 
@@ -177,18 +177,25 @@ pub struct CoprocessorCollector {
 
 impl CoprocessorCollector {
     /// Create a new coprocessor collector
-    pub fn new(config: CollectorConfig) -> Self {
-        // Build gRPC endpoint from database config
-        let grpc_endpoint = format!("http://{}:{}",
-            config.database_config.host,
-            config.database_config.port + 6080  // Status port is typically MySQL port + 6080
-        );
+    pub fn new(config: CollectorConfig) -> Result<Self, CollectionError> {
+        // Extract coprocessor-specific config
+        let (host, port) = match &config.config_type {
+            CollectorConfigType::Coprocessor { host, port, .. } => (host.clone(), *port),
+            _ => {
+                return Err(CollectionError::ConfigurationError(
+                    "Invalid config type for CoprocessorCollector".to_string(),
+                ))
+            }
+        };
 
-        Self {
+        // Build gRPC endpoint (use status port which is typically MySQL port + 6080)
+        let grpc_endpoint = format!("http://{}:{}", host, port + 6080);
+
+        Ok(Self {
             config,
             grpc_endpoint,
             client_channel: None,
-        }
+        })
     }
 
     /// Establish gRPC connection
@@ -200,10 +207,9 @@ impl CoprocessorCollector {
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5));
 
-        let channel = endpoint
-            .connect()
-            .await
-            .map_err(|e| CollectionError::ConnectionError(format!("gRPC connection failed: {}", e)))?;
+        let channel = endpoint.connect().await.map_err(|e| {
+            CollectionError::ConnectionError(format!("gRPC connection failed: {}", e))
+        })?;
 
         Ok(channel)
     }
@@ -213,9 +219,15 @@ impl CoprocessorCollector {
         &self,
         table: &TableConfig,
     ) -> Result<TableSchema, CollectionError> {
-        // Extract host and status port from config
-        let host = &self.config.database_config.host;
-        let port = self.config.database_config.port;
+        // Extract host and status port from coprocessor config
+        let (host, port) = match &self.config.config_type {
+            CollectorConfigType::Coprocessor { host, port, .. } => (host, *port),
+            _ => {
+                return Err(CollectionError::ConfigurationError(
+                    "Invalid config type for coprocessor table schema fetch".to_string(),
+                ))
+            }
+        };
         let status_port = port + 6080; // TiDB status port
 
         let url = format!(
@@ -247,16 +259,11 @@ impl CoprocessorCollector {
 
         // Parse schema JSON and create TableSchema
         let table_id = schema_json["id"].as_i64().unwrap_or(0);
-        let table_name = schema_json["name"]["O"]
-            .as_str()
-            .unwrap_or(&table.source_table)
-            .to_string();
 
         let columns = if let Some(cols) = schema_json["cols"].as_array() {
             cols.iter()
                 .map(|col| TableColumn {
                     id: col["id"].as_i64().unwrap_or(0),
-                    name: col["name"]["O"].as_str().unwrap_or("unknown").to_string(),
                     tp: col["type"]["tp"].as_i64().unwrap_or(15) as i32, // Default to VARCHAR
                 })
                 .collect()
@@ -266,7 +273,6 @@ impl CoprocessorCollector {
 
         Ok(TableSchema {
             id: table_id,
-            name: table_name,
             columns,
         })
     }
@@ -283,7 +289,7 @@ impl CoprocessorCollector {
             flags: 0,
             encode_type: 0, // TypeDefault
             user: Some(UserIdentity {
-                user_name: self.config.database_config.username.clone(),
+                user_name: "coprocessor_user".to_string(), // Use generic user for coprocessor
                 user_host: "%".to_string(),
             }),
             executors: vec![Executor {
@@ -306,8 +312,7 @@ impl CoprocessorCollector {
         };
 
         // Serialize DAG request
-        let data = dag_request
-            .encode_to_vec();
+        let data = dag_request.encode_to_vec();
 
         // Build coprocessor request
         let cop_request = CoprocessorRequest {
@@ -323,10 +328,7 @@ impl CoprocessorCollector {
                     conf_ver: 1,
                     version: 1,
                 }),
-                peer: Some(Peer {
-                    id: 1,
-                    store_id: 1,
-                }),
+                peer: Some(Peer { id: 1, store_id: 1 }),
                 source_stmt: Some(SourceStmt {
                     connection_id: 12345,
                     session_alias: "coprocessor_collector_v2".to_string(),
@@ -339,63 +341,6 @@ impl CoprocessorCollector {
         };
 
         Ok(cop_request)
-    }
-
-    /// Send coprocessor request via gRPC
-    async fn send_coprocessor_request(
-        &self,
-        _channel: &Channel,
-        _request: CoprocessorRequest,
-    ) -> Result<CoprocessorResponse, CollectionError> {
-        // For now, return a mock response since we'd need the actual TiKV gRPC service definition
-        // In a real implementation, this would use the TiKV coprocessor gRPC service
-        warn!("Coprocessor gRPC not fully implemented - returning mock response");
-
-        // In a real implementation, this would be something like:
-        // let mut client = TikvClient::new(channel.clone());
-        // let response = client.coprocessor(request).await?;
-        // Ok(response.into_inner())
-
-        Err(CollectionError::ConfigurationError(
-            "Coprocessor gRPC interface not fully implemented yet".to_string()
-        ))
-    }
-
-    /// Parse coprocessor response
-    fn parse_coprocessor_response(
-        &self,
-        response: CoprocessorResponse,
-        _table_schema: &TableSchema,
-    ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
-        if !response.other_error.is_empty() {
-            return Err(CollectionError::QueryError(response.other_error));
-        }
-
-        // Parse SelectResponse
-        let select_response = SelectResponse::decode(&*response.data)
-            .map_err(|e| CollectionError::ParseError(format!("Failed to decode response: {}", e)))?;
-
-        if let Some(error) = select_response.error {
-            return Err(CollectionError::QueryError(format!(
-                "Server error: [{}] {}",
-                error.code, error.msg
-            )));
-        }
-
-        let rows = Vec::new();
-
-        // Parse chunks
-        for chunk in select_response.chunks {
-            // For now, we'll return empty data since the full chunk parsing
-            // would require implementing the TiDB chunk format decoder
-            if !chunk.rows_data.is_empty() {
-                info!("Received chunk with {} bytes of data", chunk.rows_data.len());
-                // In a real implementation, this would decode the chunk data
-                // using TiDB's chunk format similar to the reference implementation
-            }
-        }
-
-        Ok(rows)
     }
 
     /// Fallback to HTTP API collection for tables that don't support coprocessor
@@ -418,14 +363,12 @@ impl CoprocessorCollector {
 #[derive(Debug, Clone)]
 pub struct TableSchema {
     pub id: i64,
-    pub name: String,
     pub columns: Vec<TableColumn>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TableColumn {
     pub id: i64,
-    pub name: String,
     pub tp: i32,
 }
 
@@ -437,9 +380,9 @@ impl DataCollector for CoprocessorCollector {
 
     fn can_collect_table(&self, table: &TableConfig) -> bool {
         // Coprocessor method works best with CLUSTER_ tables
-        table.source_table.starts_with("CLUSTER_") ||
-        table.source_table.contains("STATEMENTS_SUMMARY") ||
-        table.source_table.contains("SLOW_QUERY")
+        table.source_table.starts_with("CLUSTER_")
+            || table.source_table.contains("STATEMENTS_SUMMARY")
+            || table.source_table.contains("SLOW_QUERY")
     }
 
     async fn initialize(&mut self) -> Result<(), CollectionError> {
@@ -462,22 +405,21 @@ impl DataCollector for CoprocessorCollector {
         let start_time = Instant::now();
         let timestamp = chrono::Utc::now();
 
-        let _channel = self
-            .client_channel
-            .as_ref()
-            .ok_or_else(|| {
-                CollectionError::ConfigurationError("gRPC channel not initialized".to_string())
-            })?;
+        let _channel = self.client_channel.as_ref().ok_or_else(|| {
+            CollectionError::ConfigurationError("gRPC channel not initialized".to_string())
+        })?;
 
         // Try to get table schema
         let table_schema = match self.get_table_schema_via_http(table).await {
             Ok(schema) => schema,
             Err(e) => {
-                warn!("Failed to get schema for table {}: {}. Using fallback.", table.source_table, e);
+                warn!(
+                    "Failed to get schema for table {}: {}. Using fallback.",
+                    table.source_table, e
+                );
                 // Create a basic schema for fallback
                 TableSchema {
                     id: 0,
-                    name: table.source_table.clone(),
                     columns: Vec::new(),
                 }
             }
@@ -490,7 +432,10 @@ impl DataCollector for CoprocessorCollector {
                 self.fallback_to_http_collection(table).await?
             }
             Err(e) => {
-                warn!("Failed to build coprocessor request: {}. Using fallback.", e);
+                warn!(
+                    "Failed to build coprocessor request: {}. Using fallback.",
+                    e
+                );
                 self.fallback_to_http_collection(table).await?
             }
         };
@@ -500,8 +445,14 @@ impl DataCollector for CoprocessorCollector {
 
         // Create metadata
         let mut extra = HashMap::new();
-        extra.insert("schema_columns".to_string(), Value::Number(table_schema.columns.len().into()));
-        extra.insert("grpc_endpoint".to_string(), Value::String(self.grpc_endpoint.clone()));
+        extra.insert(
+            "schema_columns".to_string(),
+            Value::Number(table_schema.columns.len().into()),
+        );
+        extra.insert(
+            "grpc_endpoint".to_string(),
+            Value::String(self.grpc_endpoint.clone()),
+        );
         extra.insert("fallback_used".to_string(), Value::Bool(true)); // Since we're using fallback for now
 
         let metadata = CollectionMetadata {
@@ -535,13 +486,4 @@ impl DataCollector for CoprocessorCollector {
         // or check the gRPC connection status
         Ok(())
     }
-
-    async fn cleanup(&mut self) -> Result<(), CollectionError> {
-        if let Some(_channel) = self.client_channel.take() {
-            // gRPC channels cleanup automatically when dropped
-            info!("Coprocessor collector cleaned up successfully");
-        }
-        Ok(())
-    }
-
 }

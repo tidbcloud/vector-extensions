@@ -3,7 +3,6 @@ use std::fmt;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use vector::SourceSender;
 
 use crate::sources::system_tables::{CollectionConfig, DatabaseConfig, TableConfig};
 
@@ -14,8 +13,6 @@ pub enum CollectionError {
     QueryError(String),
     ParseError(String),
     ConfigurationError(String),
-    TimeoutError(String),
-    AuthenticationError(String),
     NetworkError(String),
 }
 
@@ -26,8 +23,6 @@ impl fmt::Display for CollectionError {
             CollectionError::QueryError(msg) => write!(f, "Query error: {}", msg),
             CollectionError::ParseError(msg) => write!(f, "Parse error: {}", msg),
             CollectionError::ConfigurationError(msg) => write!(f, "Configuration error: {}", msg),
-            CollectionError::TimeoutError(msg) => write!(f, "Timeout error: {}", msg),
-            CollectionError::AuthenticationError(msg) => write!(f, "Authentication error: {}", msg),
             CollectionError::NetworkError(msg) => write!(f, "Network error: {}", msg),
         }
     }
@@ -107,14 +102,77 @@ pub struct CollectionResult {
 pub struct CollectorConfig {
     /// Instance identifier
     pub instance: String,
-    /// Database configuration
-    pub database_config: DatabaseConfig,
-    /// Collection configuration
-    pub collection_config: CollectionConfig,
-    /// Tables to collect
-    pub tables: Vec<TableConfig>,
-    /// Output sender
-    pub out: SourceSender,
+    /// Collector-specific configuration
+    pub config_type: CollectorConfigType,
+}
+
+/// Collector-specific configuration variants
+#[derive(Debug, Clone)]
+pub enum CollectorConfigType {
+    /// SQL collector configuration
+    Sql { database_config: DatabaseConfig },
+    /// Coprocessor collector configuration
+    Coprocessor {
+        host: String,
+        port: u16,
+        grpc_timeout_secs: u64,
+        max_retries: u32,
+    },
+    /// HTTP API collector configuration
+    HttpApi {
+        host: String,
+        port: u16,
+        timeout_secs: u64,
+        max_retries: u32,
+    },
+}
+
+impl CollectorConfig {
+    /// Create configuration for SQL collector
+    pub fn for_sql(instance: String, database_config: DatabaseConfig) -> Self {
+        Self {
+            instance,
+            config_type: CollectorConfigType::Sql { database_config },
+        }
+    }
+
+    /// Create configuration for Coprocessor collector
+    pub fn for_coprocessor(
+        instance: String,
+        host: String,
+        port: u16,
+        grpc_timeout_secs: Option<u64>,
+        max_retries: Option<u32>,
+    ) -> Self {
+        Self {
+            instance,
+            config_type: CollectorConfigType::Coprocessor {
+                host,
+                port,
+                grpc_timeout_secs: grpc_timeout_secs.unwrap_or(30),
+                max_retries: max_retries.unwrap_or(3),
+            },
+        }
+    }
+
+    /// Create configuration for HTTP API collector
+    pub fn for_http_api(
+        instance: String,
+        host: String,
+        port: u16,
+        timeout_secs: Option<u64>,
+        max_retries: Option<u32>,
+    ) -> Self {
+        Self {
+            instance,
+            config_type: CollectorConfigType::HttpApi {
+                host,
+                port,
+                timeout_secs: timeout_secs.unwrap_or(30),
+                max_retries: max_retries.unwrap_or(3),
+            },
+        }
+    }
 }
 
 /// Abstract trait for data collectors
@@ -137,11 +195,7 @@ pub trait DataCollector: Send + Sync + 'static {
 
     /// Get collector health status
     async fn health_check(&self) -> Result<(), CollectionError>;
-
-    /// Cleanup resources
-    async fn cleanup(&mut self) -> Result<(), CollectionError>;
 }
-
 
 /// Utility functions for collection
 pub mod utils {
@@ -157,15 +211,30 @@ pub mod utils {
         let log = event.as_mut_log();
 
         // Add standard metadata
-        log.insert("_vector_table", result.metadata.table_config.dest_table.clone());
-        log.insert("_vector_source_table", result.metadata.table_config.source_table.clone());
-        log.insert("_vector_source_schema", result.metadata.table_config.source_schema.clone());
+        log.insert(
+            "_vector_table",
+            result.metadata.table_config.dest_table.clone(),
+        );
+        log.insert(
+            "_vector_source_table",
+            result.metadata.table_config.source_table.clone(),
+        );
+        log.insert(
+            "_vector_source_schema",
+            result.metadata.table_config.source_schema.clone(),
+        );
         log.insert("_vector_instance", result.metadata.instance.clone());
         log.insert("_vector_timestamp", result.metadata.timestamp.to_rfc3339());
-        log.insert("_vector_collection_method", result.metadata.collection_method.to_string());
+        log.insert(
+            "_vector_collection_method",
+            result.metadata.collection_method.to_string(),
+        );
 
         // Add performance metadata
-        log.insert("_vector_collection_duration_ms", result.metadata.duration_ms as i64);
+        log.insert(
+            "_vector_collection_duration_ms",
+            result.metadata.duration_ms as i64,
+        );
         log.insert("_vector_row_count", result.metadata.row_count as i64);
 
         // Add extra metadata
@@ -181,7 +250,6 @@ pub mod utils {
         event
     }
 
-
     /// Parse collection interval
     pub fn parse_collection_interval(
         interval_str: &str,
@@ -192,7 +260,9 @@ pub mod utils {
             "long" => collection_config.long_interval,
             custom if custom.starts_with("custom=") => {
                 if let Some(seconds) = custom.strip_prefix("custom=") {
-                    seconds.parse::<u64>().unwrap_or(collection_config.short_interval)
+                    seconds
+                        .parse::<u64>()
+                        .unwrap_or(collection_config.short_interval)
                 } else {
                     collection_config.short_interval
                 }
@@ -200,6 +270,4 @@ pub mod utils {
             _ => collection_config.short_interval,
         }
     }
-
 }
-

@@ -7,8 +7,8 @@ use sqlx::{Column, Row};
 use tracing::{debug, info, warn};
 
 use crate::sources::system_tables::data_collector::{
-    CollectionError, CollectionMetadata, CollectionMethod, CollectionResult,
-    CollectorConfig, DataCollector,
+    CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
+    CollectorConfigType, DataCollector,
 };
 use crate::sources::system_tables::TableConfig;
 
@@ -20,26 +20,42 @@ pub struct SqlCollector {
 
 impl SqlCollector {
     /// Create a new SQL collector
-    pub fn new(config: CollectorConfig) -> Self {
-        Self {
-            config,
-            pool: None,
+    pub fn new(config: CollectorConfig) -> Result<Self, CollectionError> {
+        // Validate that we have SQL config
+        match &config.config_type {
+            CollectorConfigType::Sql { .. } => (),
+            _ => {
+                return Err(CollectionError::ConfigurationError(
+                    "Invalid config type for SqlCollector".to_string(),
+                ))
+            }
         }
+
+        Ok(Self { config, pool: None })
     }
 
     /// Build MySQL connection pool
     async fn create_connection_pool(&self) -> Result<sqlx::mysql::MySqlPool, CollectionError> {
+        let database_config = match &self.config.config_type {
+            CollectorConfigType::Sql { database_config } => database_config,
+            _ => {
+                return Err(CollectionError::ConfigurationError(
+                    "SQL collector requires SQL configuration".to_string(),
+                ))
+            }
+        };
+
         let mut url = format!(
             "mysql://{}:{}@{}:{}/{}",
-            self.config.database_config.username,
-            self.config.database_config.password,
-            self.config.database_config.host,
-            self.config.database_config.port,
-            self.config.database_config.database
+            database_config.username,
+            database_config.password,
+            database_config.host,
+            database_config.port,
+            database_config.database
         );
 
         // Add TLS parameters if database TLS is configured
-        if let Some(ref tls_config) = self.config.database_config.tls {
+        if let Some(ref tls_config) = database_config.tls {
             let mut tls_params = Vec::new();
 
             // Set SSL mode based on verification settings
@@ -79,13 +95,15 @@ impl SqlCollector {
         }
 
         let pool = sqlx::mysql::MySqlPoolOptions::new()
-            .max_connections(self.config.database_config.max_connections.unwrap_or(10))
+            .max_connections(database_config.max_connections.unwrap_or(10))
             .acquire_timeout(Duration::from_secs(
-                self.config.database_config.connect_timeout.unwrap_or(30),
+                database_config.connect_timeout.unwrap_or(30),
             ))
             .connect(&url)
             .await
-            .map_err(|e| CollectionError::ConnectionError(format!("Failed to create pool: {}", e)))?;
+            .map_err(|e| {
+                CollectionError::ConnectionError(format!("Failed to create pool: {}", e))
+            })?;
 
         Ok(pool)
     }
@@ -111,15 +129,15 @@ impl SqlCollector {
         let mut column_types = HashMap::new();
 
         for row in schema_rows {
-            let field_name: String = row
-                .try_get("Field")
-                .map_err(|e| CollectionError::ParseError(format!("Failed to get field name: {}", e)))?;
-            let field_type: String = row
-                .try_get("Type")
-                .map_err(|e| CollectionError::ParseError(format!("Failed to get field type: {}", e)))?;
-            let is_nullable: String = row
-                .try_get("Null")
-                .map_err(|e| CollectionError::ParseError(format!("Failed to get nullable info: {}", e)))?;
+            let field_name: String = row.try_get("Field").map_err(|e| {
+                CollectionError::ParseError(format!("Failed to get field name: {}", e))
+            })?;
+            let field_type: String = row.try_get("Type").map_err(|e| {
+                CollectionError::ParseError(format!("Failed to get field type: {}", e))
+            })?;
+            let is_nullable: String = row.try_get("Null").map_err(|e| {
+                CollectionError::ParseError(format!("Failed to get nullable info: {}", e))
+            })?;
 
             debug!(
                 "Column schema: {} -> {} (nullable: {})",
@@ -245,7 +263,8 @@ impl SqlCollector {
                             Ok(None) => Ok(Value::Null),
                             Err(_) => {
                                 // Try DateTime<Utc> for UTC timestamps
-                                match row.try_get::<chrono::DateTime<chrono::Utc>, _>(column_index) {
+                                match row.try_get::<chrono::DateTime<chrono::Utc>, _>(column_index)
+                                {
                                     Ok(dt) => {
                                         let timestamp_str =
                                             dt.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -366,10 +385,9 @@ impl DataCollector for SqlCollector {
         let start_time = Instant::now();
         let timestamp = chrono::Utc::now();
 
-        let pool = self
-            .pool
-            .as_ref()
-            .ok_or_else(|| CollectionError::ConfigurationError("Pool not initialized".to_string()))?;
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            CollectionError::ConfigurationError("Pool not initialized".to_string())
+        })?;
 
         // Get table schema
         let column_types = self.get_table_schema(table, pool).await?;
@@ -382,7 +400,10 @@ impl DataCollector for SqlCollector {
 
         // Create metadata
         let mut extra = HashMap::new();
-        extra.insert("schema_columns".to_string(), Value::Number(column_types.len().into()));
+        extra.insert(
+            "schema_columns".to_string(),
+            Value::Number(column_types.len().into()),
+        );
 
         let metadata = CollectionMetadata {
             instance: self.config.instance.clone(),
@@ -406,22 +427,14 @@ impl DataCollector for SqlCollector {
 
     async fn health_check(&self) -> Result<(), CollectionError> {
         if let Some(pool) = &self.pool {
-            sqlx::query("SELECT 1")
-                .fetch_one(pool)
-                .await
-                .map_err(|e| CollectionError::ConnectionError(format!("Health check failed: {}", e)))?;
+            sqlx::query("SELECT 1").fetch_one(pool).await.map_err(|e| {
+                CollectionError::ConnectionError(format!("Health check failed: {}", e))
+            })?;
             Ok(())
         } else {
-            Err(CollectionError::ConfigurationError("Pool not initialized".to_string()))
+            Err(CollectionError::ConfigurationError(
+                "Pool not initialized".to_string(),
+            ))
         }
     }
-
-    async fn cleanup(&mut self) -> Result<(), CollectionError> {
-        if let Some(pool) = self.pool.take() {
-            pool.close().await;
-            info!("SQL collector cleaned up successfully");
-        }
-        Ok(())
-    }
-
 }

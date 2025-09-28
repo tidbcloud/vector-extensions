@@ -12,11 +12,10 @@ use vector_lib::{
 
 use crate::sources::system_tables::controller::Controller;
 
-
 // New abstracted collectors
+mod collector_factory;
 mod collectors;
 mod data_collector;
-mod collector_factory;
 
 // Main controller
 mod controller;
@@ -111,7 +110,6 @@ pub struct SystemTablesConfig {
     /// Collection method: "coprocessor" for gRPC coprocessor-based collection (default), "sql" for SQL-based collection
     #[serde(default = "default_collection_method")]
     pub collection_method: String,
-
 }
 
 /// Database connection configuration
@@ -179,7 +177,6 @@ pub const fn default_topology_fetch_interval() -> f64 {
 pub fn default_collection_method() -> String {
     "coprocessor".to_string()
 }
-
 
 /// Helper functions for reading environment variables
 impl SystemTablesConfig {
@@ -364,16 +361,31 @@ impl SourceConfig for SystemTablesConfig {
         let tidb_group = config.tidb_group.clone();
         let label_k8s_instance = config.label_k8s_instance.clone();
 
-        // Create DatabaseConfig from merged configuration
-        let database_config = DatabaseConfig {
-            username: config.database_username.clone(),
-            password: config.database_password.clone(),
-            host: config.database_host.clone(),
-            port: config.database_port,
-            database: config.database_name.clone(),
-            max_connections: config.database_max_connections,
-            connect_timeout: config.database_connect_timeout,
-            tls: config.database_tls.clone(),
+        // Create DatabaseConfig from merged configuration only if using SQL collection method
+        let database_config = if config.collection_method.to_lowercase() == "sql" {
+            DatabaseConfig {
+                username: config.database_username.clone(),
+                password: config.database_password.clone(),
+                host: config.database_host.clone(),
+                port: config.database_port,
+                database: config.database_name.clone(),
+                max_connections: config.database_max_connections,
+                connect_timeout: config.database_connect_timeout,
+                tls: config.database_tls.clone(),
+            }
+        } else {
+            // For non-SQL collection methods (coprocessor, etc.), use dummy database config
+            // This config won't be used but is required by the Controller constructor
+            DatabaseConfig {
+                username: "unused".to_string(),
+                password: "unused".to_string(),
+                host: "unused".to_string(),
+                port: 0,
+                database: "unused".to_string(),
+                max_connections: None,
+                connect_timeout: None,
+                tls: None,
+            }
         };
 
         // Create CollectionConfig from merged configuration
