@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+package tipb;
+
+// DAGRequest and related definitions from tipb
+enum EncodeType {
+    ENCODE_TYPE_UNSPECIFIED = 0;
+    TypeDefault = 1;
+    TypeChunk = 2;
+    TypeCHBlock = 3;
+}
+
+enum Endian {
+    ENDIAN_UNSPECIFIED = 0;
+    LittleEndian = 1;
+    BigEndian = 2;
+}
+
+enum ExecType {
+    EXEC_TYPE_UNSPECIFIED = 0;
+    TypeTableScan = 1;
+    TypeIndexScan = 2;
+    TypeSelection = 3;
+    TypeAggregation = 4;
+    TypeTopN = 5;
+    TypeLimit = 6;
+    TypeStreamAgg = 7;
+    TypeJoin = 8;
+    TypeKill = 9;
+    TypeExchangeSender = 10;
+    TypeExchangeReceiver = 11;
+    TypeProjection = 12;
+    TypePartitionTableScan = 13;
+    TypeSort = 14;
+    TypeWindow = 15;
+    TypeExpand = 16;
+    TypeExpand2 = 17;
+    TypeBroadcastQuery = 18;
+    TypeCTESink = 19;
+    TypeCTESource = 20;
+    TypeIndexLookUp = 21;
+}
+
+message ChunkMemoryLayout {
+    Endian endian = 1;
+}
+
+message UserIdentity {
+    string user_name = 1;
+    string user_host = 2;
+}
+
+message IntermediateOutputChannel {
+    uint32 executor_idx = 1;
+    repeated uint32 output_offsets = 2;
+}
+
+// Simplified Executor message - can be extended with specific executor types as needed
+message Executor {
+    ExecType tp = 1;
+    string executor_id = 2;
+    uint32 parent_idx = 3;
+    uint64 fine_grained_shuffle_stream_count = 4;
+    uint64 fine_grained_shuffle_batch_size = 5;
+    // Add specific executor types as needed (TableScan, IndexScan, etc.)
+    TableScan tbl_scan = 6;
+}
+
+message TableScan {
+    int64 table_id = 1;
+    repeated ColumnInfo columns = 2;
+    bool desc = 3;
+}
+
+message ColumnInfo {
+    int64 column_id = 1;
+    int32 tp = 2;
+}
+
+message DagRequest {
+    uint64 start_ts_fallback = 1;
+    repeated Executor executors = 2;
+    int64 time_zone_offset = 3;
+    uint64 flags = 4;
+    repeated uint32 output_offsets = 5;
+    bool collect_range_counts = 6;
+    uint64 max_warning_count = 7;
+    EncodeType encode_type = 8;
+    uint64 sql_mode = 9;
+    string time_zone_name = 11;
+    bool collect_execution_summaries = 12;
+    uint64 max_allowed_packet = 13;
+    ChunkMemoryLayout chunk_memory_layout = 14;
+    bool is_rpn_expr = 15;
+    UserIdentity user = 16;
+    Executor root_executor = 17;
+    bool force_encode_type = 18;
+    uint32 div_precision_increment = 19;
+    repeated IntermediateOutputChannel intermediate_output_channels = 20;
+}
+
+// kvrpcpb related messages
+message Context {
+    uint64 region_id = 1;
+    RegionEpoch region_epoch = 2;
+    Peer peer = 3;
+    SourceStmt source_stmt = 4;
+}
+
+message RegionEpoch {
+    uint64 conf_ver = 1;
+    uint64 version = 2;
+}
+
+message Peer {
+    uint64 id = 1;
+    uint64 store_id = 2;
+}
+
+message SourceStmt {
+    uint64 connection_id = 1;
+    string session_alias = 2;
+}
+
+// Coprocessor request and response messages (matching official kvproto)
+message CoprocessorRequest {
+    Context context = 1;
+    int64 tp = 2;
+    bytes data = 3;
+    repeated KeyRange ranges = 4;
+    bool is_cache_enabled = 5;
+    uint64 cache_if_match_version = 6;
+    uint64 start_ts = 7;
+    int64 schema_ver = 8;
+    bool is_trace_enabled = 9;
+    uint64 paging_size = 10;
+    uint64 connection_id = 12;
+    string connection_alias = 13;
+}
+
+message KeyRange {
+    bytes start = 1;
+    bytes end = 2;
+}
+
+message CoprocessorResponse {
+    bytes data = 1;
+    string other_error = 2;
+}
