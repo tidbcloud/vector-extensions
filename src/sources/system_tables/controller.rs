@@ -362,7 +362,11 @@ impl Controller {
     }
 
     /// Run a collector task for multiple tables
-    async fn run_collector_task(collector: Box<dyn DataCollector>, tables: Vec<TableConfig>, mut out: SourceSender) {
+    async fn run_collector_task(
+        collector: Box<dyn DataCollector>,
+        tables: Vec<TableConfig>,
+        mut out: SourceSender,
+    ) {
         use crate::sources::system_tables::data_collector::utils::{
             create_event_from_result, parse_collection_interval,
         };
@@ -415,7 +419,10 @@ impl Controller {
 
                             // Send event to sinks
                             if let Err(e) = out.send_event(event).await {
-                                error!("Failed to send event for table {}: {}", table.source_table, e);
+                                error!(
+                                    "Failed to send event for table {}: {}",
+                                    table.source_table, e
+                                );
                             } else {
                                 debug!("Successfully sent event for table {}", table.source_table);
                             }

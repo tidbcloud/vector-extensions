@@ -381,11 +381,11 @@ type Row struct {
 	MaxCompileLatency int64 // MAX_COMPILE_LATENCY - maximum compile latency
 
 	// Resource usage
-	AvgMem          int64 // AVG_MEM - average memory usage
-	MaxMem          int64 // MAX_MEM - maximum memory usage
-	AvgDisk         int64 // AVG_DISK - average disk usage
-	MaxDisk         int64 // MAX_DISK - maximum disk usage
-	AvgAffectedRows int64 // AVG_AFFECTED_ROWS - average affected rows
+	AvgMem          int64   // AVG_MEM - average memory usage
+	MaxMem          int64   // MAX_MEM - maximum memory usage
+	AvgDisk         int64   // AVG_DISK - average disk usage
+	MaxDisk         int64   // MAX_DISK - maximum disk usage
+	AvgAffectedRows float64 // AVG_AFFECTED_ROWS - average affected rows (double type)
 
 	// Time information
 	FirstSeen string // FIRST_SEEN - first seen time
@@ -1200,7 +1200,7 @@ func (c *ClusterStatementsSummaryClient) extractRowFromChunk(chunk *Chunk, rowId
 		case "MAX_DISK":
 			row.MaxDisk = c.safeInt64Value(value)
 		case "AVG_AFFECTED_ROWS":
-			row.AvgAffectedRows = c.safeInt64Value(value)
+			row.AvgAffectedRows = c.safeFloat64Value(value)
 		case "FIRST_SEEN":
 			row.FirstSeen = c.safeStringValue(value)
 		case "LAST_SEEN":
@@ -1381,6 +1381,37 @@ func (c *ClusterStatementsSummaryClient) safeInt64Value(value interface{}) int64
 		return int64(val)
 	}
 	return 0
+}
+
+// safeFloat64Value safely converts interface{} to float64
+func (c *ClusterStatementsSummaryClient) safeFloat64Value(value interface{}) float64 {
+	if value == nil {
+		return 0.0
+	}
+	if val, ok := value.(float64); ok {
+		return val
+	}
+	// Handle float32 type
+	if val, ok := value.(float32); ok {
+		return float64(val)
+	}
+	// Handle int64 type
+	if val, ok := value.(int64); ok {
+		return float64(val)
+	}
+	// Handle uint64 type
+	if val, ok := value.(uint64); ok {
+		return float64(val)
+	}
+	// Handle int type
+	if val, ok := value.(int); ok {
+		return float64(val)
+	}
+	// Handle uint type
+	if val, ok := value.(uint); ok {
+		return float64(val)
+	}
+	return 0.0
 }
 
 // parseRowData 解析单行数据

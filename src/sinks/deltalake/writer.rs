@@ -44,7 +44,10 @@ impl DeltaLakeWriter {
         // Initialize S3 handlers if this is an S3 path
         if table_path.to_string_lossy().starts_with("s3://") {
             deltalake::aws::register_handlers(None);
-            info!("Registered Delta Lake S3 handlers for path: {}", table_path.display());
+            info!(
+                "Registered Delta Lake S3 handlers for path: {}",
+                table_path.display()
+            );
         }
 
         Self {
@@ -862,7 +865,10 @@ impl DeltaLakeWriter {
 
         // Use DeltaOps for improved S3 support, following the successful test pattern
         let table_ops = if let Some(storage_options) = &self.storage_options {
-            info!("Using storage options for S3 authentication: {:?}", storage_options);
+            info!(
+                "Using storage options for S3 authentication: {:?}",
+                storage_options
+            );
             DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
         } else {
             info!("No storage options provided, using default credential chain");
@@ -871,17 +877,23 @@ impl DeltaLakeWriter {
 
         // Try to write to existing table first, create if it doesn't exist
         info!("Will attempt to write to Delta table at {}", table_uri);
-        
+
         // Try to write directly to existing table first
         let write_result = table_ops.write(vec![record_batch.clone()]).await;
-        
+
         match write_result {
             Ok(table) => {
-                info!("✅ Successfully wrote to existing Delta table at {}", table_uri);
+                info!(
+                    "✅ Successfully wrote to existing Delta table at {}",
+                    table_uri
+                );
                 info!("Table version: {:?}", table.version());
                 return Ok(());
             }
-            Err(e) if e.to_string().contains("does not exist") || e.to_string().contains("not found") => {
+            Err(e)
+                if e.to_string().contains("does not exist")
+                    || e.to_string().contains("not found") =>
+            {
                 info!("Table doesn't exist, will create new table: {}", e);
                 // Continue to table creation logic below
             }
@@ -890,10 +902,9 @@ impl DeltaLakeWriter {
                 return Err(e.into());
             }
         }
-        
+
         // If we reach here, table doesn't exist and needs to be created
         let table_exists = false;
-        
 
         if !table_exists {
             // Create new table first
@@ -940,9 +951,7 @@ impl DeltaLakeWriter {
             DeltaOps::try_from_uri(&table_uri).await?
         };
 
-        let write_result = table_ops
-            .write(vec![record_batch])
-            .await?;
+        let write_result = table_ops.write(vec![record_batch]).await?;
 
         info!(
             "Successfully wrote data to Delta Lake table at {}, version: {:?}",
