@@ -741,23 +741,6 @@ impl CoprocessorCollector {
 
                 let column_name = self.get_column_name(table_col, col_idx);
 
-                // Special inspection for FIRST_SEEN/LAST_SEEN to check raw flag/bytes
-                if column_name == "FIRST_SEEN" || column_name == "LAST_SEEN" {
-                    if offset < data.len() {
-                        let flag = data[offset];
-                        let end = (offset + 12).min(data.len());
-                        let hex_preview = data[offset+1..end]
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .join(" ");
-                        info!(
-                            "TIME RAW: row={} col={} name={} offset={} flag=0x{:02x} next=[{}]",
-                            row_index, col_idx, column_name, offset, flag, hex_preview
-                        );
-                    }
-                }
-
                 match self.decode_value_from_bytes_with_type(data, offset, table_col.tp) {
                     Ok((value, new_offset)) => {
                         // Only log first few columns and rows to avoid spam
@@ -973,14 +956,14 @@ impl CoprocessorCollector {
         // If TIMESTAMP/DATETIME and encoded as uvarint, decode as TiDB packed time here
         if (mysql_tp == TYPE_TIMESTAMP || mysql_tp == TYPE_DATETIME) {
             // uvarintFlag
-            if flag == 0x09 {
+            if flag == FLAG_UVARINT {
                 let (u, consumed_offset) = self.decode_uvarint(data, new_offset)?;
                 new_offset = consumed_offset;
                 let s = self.decode_packed_time_to_string(u);
                 return Ok((Value::String(s), new_offset));
             }
             // uintFlag (0x04): next 8 bytes unsigned, big-endian
-            if flag == 0x04 {
+            if flag == FLAG_UINT {
                 if new_offset + 8 > data.len() { return Err(CollectionError::ParseError("Insufficient bytes for uintFlag time".to_string())); }
                 let mut buf = [0u8; 8];
                 buf.copy_from_slice(&data[new_offset..new_offset+8]);
@@ -990,17 +973,17 @@ impl CoprocessorCollector {
                 return Ok((Value::String(s), new_offset));
             }
             // compactBytesFlag: inner buffer holds encoded time (usually uvarint/uint packed time)
-            if flag == 0x02 { // compact bytes
+            if flag == FLAG_COMPACT_BYTES { // compact bytes
                 let (inner, consumed_offset) = self.decode_compact_bytes(data, new_offset)?;
                 // decode inner by reading its flag
                 if !inner.is_empty() {
                     let inner_flag = inner[0];
                     let inner_off = 1usize;
-                    if inner_flag == 0x09 { // uvarint
+                    if inner_flag == FLAG_UVARINT { // uvarint
                         let (u, _) = self.decode_uvarint(&inner, inner_off)?;
                         let s = self.decode_packed_time_to_string(u);
                         return Ok((Value::String(s), consumed_offset));
-                    } else if inner_flag == 0x04 { // uintFlag 8-byte
+                    } else if inner_flag == FLAG_UINT { // uintFlag 8-byte
                         // ensure enough bytes
                         if inner.len() >= inner_off + 8 {
                             let mut buf = [0u8; 8];
@@ -1401,26 +1384,6 @@ impl CoprocessorCollector {
         }
     }
 
-    
-    /// Ensure value is properly formatted as a string
-    fn ensure_string_value(&self, value: &Value) -> Value {
-        match value {
-            Value::String(_) => value.clone(),
-            Value::Number(n) => {
-                if let Some(int_val) = n.as_i64() {
-                    Value::String(int_val.to_string())
-                } else if let Some(float_val) = n.as_f64() {
-                    Value::String(float_val.to_string())
-            } else {
-                    Value::String(n.to_string())
-                }
-            }
-            Value::Bool(b) => Value::String(b.to_string()),
-            Value::Null => Value::Null,
-            _ => Value::String(value.to_string()),
-        }
-    }
-
     /// Decode TiDB packed time (per TiDB types.Time.FromPackedUint) and return formatted string
     fn decode_packed_time_to_string(&self, packed: u64) -> String {
         fn parse_fields(p: u64) -> (i32,i32,i32,i32,i32,i32) {
@@ -1563,6 +1526,18 @@ const TYPE_LONG_BLOB: i32 = 251;
 const TYPE_BLOB: i32 = 252;
 const TYPE_VAR_STRING: i32 = 253;
 const TYPE_STRING: i32 = 254;
+
+// TiDB row/codec flag constants (aligned with pkg/util/codec/codec.go)
+const FLAG_NIL: u8 = 0x00;            // NilFlag
+const FLAG_BYTES: u8 = 0x01;          // bytesFlag
+const FLAG_COMPACT_BYTES: u8 = 0x02;  // compactBytesFlag
+const FLAG_INT: u8 = 0x03;            // intFlag
+const FLAG_UINT: u8 = 0x04;           // uintFlag
+const FLAG_FLOAT: u8 = 0x05;          // floatFlag
+const FLAG_DECIMAL: u8 = 0x06;        // decimalFlag
+const FLAG_DURATION: u8 = 0x07;       // durationFlag
+const FLAG_VARINT: u8 = 0x08;         // varintFlag
+const FLAG_UVARINT: u8 = 0x09;        // uvarintFlag
 
 
 #[async_trait]
