@@ -267,6 +267,19 @@ impl Controller {
         tables: Vec<TableConfig>,
         collector_key: &str,
     ) {
+        // Validate table compatibility with collection method
+        if self.collection_method == CollectionMethod::Coprocessor {
+            for table in &tables {
+                if !table.source_table.starts_with("CLUSTER_") {
+                    error!(
+                        "Table {} is not a cluster table and cannot be collected using coprocessor method. Only CLUSTER_* tables are supported for coprocessor collection.",
+                        table.source_table
+                    );
+                    return;
+                }
+            }
+        }
+
         let table_names: Vec<&str> = tables.iter().map(|t| t.source_table.as_str()).collect();
         info!(
             "Starting {} collector for {}:{} with {} tables: [{}]",

@@ -512,22 +512,29 @@ impl DeltaLakeWriter {
                 let mut builder = Int64Builder::with_capacity(events.len());
                 for event in events.iter() {
                     if let Event::Log(log_event) = event {
-                        match log_event.get(field.name().as_str()) {
-                            Some(LogValue::Integer(i)) => builder.append_value(*i),
-                            Some(LogValue::Bytes(bytes)) => {
-                                // Try to parse string as integer
-                                if let Ok(s) = std::str::from_utf8(bytes.as_ref()) {
-                                    if let Ok(i) = s.parse::<i64>() {
-                                        builder.append_value(i);
+                        let value_opt = match field.name().as_str() {
+                            "_vector_id" => log_event
+                                .get("_vector_id")
+                                .and_then(|v| v.as_integer()),
+                            _ => match log_event.get(field.name().as_str()) {
+                                Some(LogValue::Integer(i)) => Some(*i),
+                                Some(LogValue::Bytes(bytes)) => {
+                                    // Try to parse string as integer
+                                    if let Ok(s) = std::str::from_utf8(bytes.as_ref()) {
+                                        s.parse::<i64>().ok()
                                     } else {
-                                        builder.append_null();
+                                        None
                                     }
-                                } else {
-                                    builder.append_null();
                                 }
-                            }
-                            // Accept null values gracefully
-                            _ => builder.append_null(),
+                                // Accept null values gracefully
+                                _ => None,
+                            },
+                        };
+                        
+                        if let Some(value) = value_opt {
+                            builder.append_value(value);
+                        } else {
+                            builder.append_null();
                         }
                     } else {
                         builder.append_null();

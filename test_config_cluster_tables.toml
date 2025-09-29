@@ -1,6 +1,3 @@
-# Vector Configuration File - System Tables Source Test
-# Collection method: coprocessor, Output: deltalake
-
 [sources.tidb_system_tables]
 type = "system_tables"
 
@@ -9,7 +6,7 @@ database_username = "root"
 database_password = ""
 database_host = "127.0.0.1"
 database_port = 4000
-database_name = "test_db"
+database_name = "information_schema"
 database_max_connections = 5
 database_connect_timeout = 30
 
@@ -23,13 +20,21 @@ retention_days = 1
 topology_fetch_interval_seconds = 10.0
 
 # Collection method configuration
-collection_method = "coprocessor"
+collection_method = "coprocessor"  # Use coprocessor for cluster tables
 
-# Tables to collect configuration - only CLUSTER_STATEMENTS_SUMMARY for testing
+# Test CLUSTER_STATEMENTS_SUMMARY table
 [[sources.tidb_system_tables.tables]]
 source_schema = "information_schema"
-source_table = "STATEMENTS_SUMMARY"
-dest_table = "statements_summary"
+source_table = "CLUSTER_STATEMENTS_SUMMARY"
+dest_table = "cluster_statements_summary"
+collection_interval = "short"
+enabled = true
+
+# Test CLUSTER_TIDB_STATEMENTS_STATS table  
+[[sources.tidb_system_tables.tables]]
+source_schema = "information_schema"
+source_table = "CLUSTER_TIDB_STATEMENTS_STATS"
+dest_table = "cluster_tidb_statements_stats"
 collection_interval = "short"
 enabled = true
 

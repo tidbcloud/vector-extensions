@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::sources::system_tables::{CollectionConfig, DatabaseConfig, TableConfig};
+
+/// Global counter for generating unique incremental IDs
+static GLOBAL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Error types for data collection
 #[derive(Debug)]
@@ -210,6 +214,10 @@ pub mod utils {
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
 
+        // Generate unique incremental ID
+        let unique_id = GLOBAL_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        log.insert("_vector_id", Value::Number(serde_json::Number::from(unique_id)));
+
         // Add standard metadata
         log.insert(
             "_vector_table",
@@ -249,6 +257,11 @@ pub mod utils {
         // Add the actual row data
         for (key, value) in row_data {
             log.insert(key.as_str(), value);
+        }
+
+        // For non-cluster tables, add instance column to the actual data
+        if !result.metadata.table_config.source_table.starts_with("CLUSTER_") {
+            log.insert("instance", result.metadata.instance.clone());
         }
 
         event

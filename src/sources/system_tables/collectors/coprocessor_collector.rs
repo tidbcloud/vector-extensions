@@ -313,15 +313,34 @@ impl CoprocessorCollector {
             tp: 103, // ReqTypeDAG
             data,
             ranges: {
-                // Use the EXACT same KeyRange as the working Go version
-                let key_range = KeyRange {
-                    start: vec![0x74, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
-                    end: vec![0x74, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02],
-                };
+                // Generate KeyRange dynamically based on table_id
+                // Following TiDB's key encoding: "t[tableID]_r"
+                // 1. 't' prefix (1 byte)
+                // 2. table_id encoded with XOR signMask and big-endian (8 bytes)
+                // 3. '_r' separator (2 bytes)
+                
+                // Encode table ID using TiDB's codec.EncodeInt:
+                // EncodeIntToCmpUint(v) = v XOR 0x8000000000000000
+                const SIGN_MASK: u64 = 0x8000000000000000;
+                let encoded_table_id = (table_schema.id as u64) ^ SIGN_MASK;
+                let table_id_bytes = encoded_table_id.to_be_bytes(); // Big-endian
+
+                // Build start key: 't' + encoded_table_id (table prefix only)
+                let mut start = vec![b't']; // 't' prefix
+                start.extend_from_slice(&table_id_bytes); // Encoded table ID (8 bytes)
+                
+                // Build end key: 't' + (encoded_table_id + 1) (next table prefix)
+                // This represents the next table's prefix boundary
+                let end_table_id = encoded_table_id + 1;
+                let end_table_id_bytes = end_table_id.to_be_bytes();
+                let mut end = vec![b't']; // 't' prefix
+                end.extend_from_slice(&end_table_id_bytes); // Next table ID (8 bytes)
+
+                let key_range = KeyRange { start: start.clone(), end: end.clone() };
 
                 info!(
-                    "Using EXACT Go KeyRange for CLUSTER_STATEMENTS_SUMMARY: start={:?}, end={:?}",
-                    key_range.start, key_range.end
+                    "Using TiDB-encoded KeyRange for table_id {}: start={:?}, end={:?}",
+                    table_schema.id, key_range.start, key_range.end
                 );
 
                 vec![key_range]
@@ -1265,9 +1284,20 @@ impl CoprocessorCollector {
         }
 
         let bytes = &data[offset..offset + 8];
-        let bits = u64::from_le_bytes([
+        // TiDB uses big-endian encoding for floats (matching DecodeUint -> binary.BigEndian.Uint64)
+        let u = u64::from_be_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]);
+
+        // TiDB's decodeCmpUintToFloat logic:
+        // 1. DecodeUint returns the encoded uint64
+        // 2. decodeCmpUintToFloat converts it back to float64
+        const SIGN_MASK: u64 = 0x8000000000000000;
+        let bits = if u & SIGN_MASK > 0 {
+            u & !SIGN_MASK
+        } else {
+            !u
+        };
 
         let value = f64::from_bits(bits);
         Ok((value, offset + 8))
@@ -1377,20 +1407,22 @@ impl CoprocessorCollector {
             }
             // Float/Double types
              TYPE_FLOAT | TYPE_DOUBLE => {
-                 // Handle suspicious float values that are likely incorrectly decoded
+                 // Handle float values following TiDB codec standards
                  if let Value::Number(n) = value {
                      if let Some(f) = n.as_f64() {
-                         // Check for various patterns of incorrectly decoded float values
-                         if (f.abs() > 6e-322 && f.abs() < 7e-322) ||  // Original 6.3e-322 pattern
-                            (f.abs() > 1e100) ||                      // Extremely large values like 1.9e185
-                            (f.is_nan() || f.is_infinite()) {         // Invalid floating point values
-                             info!("Converting suspicious/invalid float {} to 0.0 for column {}", f, column_name);
+                         // Only convert truly invalid floating point values
+                         // TiDB codec supports all finite values including subnormal numbers
+                         // Reference: TiDB TestFloatCodec includes math.SmallestNonzeroFloat64
+                         if f.is_nan() || f.is_infinite() {
+                             info!("Converting invalid float (NaN/Inf) {} to 0.0 for column {}", f, column_name);
                              return if let Some(zero_float) = serde_json::Number::from_f64(0.0) {
                                  Value::Number(zero_float)
-        } else {
+                             } else {
                                  Value::Number(serde_json::Number::from(0))
                              };
                          }
+                         // Note: All finite values including subnormal numbers (like 6.3e-322) are valid
+                         // and should be preserved as-is according to TiDB codec implementation
                      }
                  }
                  self.ensure_float_value(value)
@@ -1573,25 +1605,44 @@ impl CoprocessorCollector {
         }
     }
 
-    /// Ensure value is properly formatted as a float for floating-point columns
+    /// Ensure value is properly formatted as a float following TiDB codec standards
     fn ensure_float_value(&self, value: &Value) -> Value {
-        // Suspicious float value detection moved to process_column_value for better control
-        
         match value {
-            Value::Number(_) => value.clone(),
-            Value::String(s) => {
-                if let Ok(float_val) = s.parse::<f64>() {
-                    // Convert to JSON number (from_f64 returns Option, not Result)
-                    if let Some(json_num) = serde_json::Number::from_f64(float_val) {
+            Value::Number(n) => {
+                if n.is_f64() {
+                    // Already a float, preserve as-is (including subnormal numbers like 6.3e-322)
+                    // TiDB codec supports all finite values including subnormal numbers
+                    value.clone()
+                } else if let Some(i) = n.as_i64() {
+                    // Convert integer to float
+                    if let Some(json_num) = serde_json::Number::from_f64(i as f64) {
                         Value::Number(json_num)
                     } else {
-                        value.clone()
+                        Value::Number(serde_json::Number::from(0))
                     }
-                    } else {
-                    value.clone()
+                } else {
+                    Value::Number(serde_json::Number::from(0))
                 }
             }
-            _ => value.clone(),
+            Value::String(s) => {
+                if let Ok(float_val) = s.parse::<f64>() {
+                    // Only convert if parsing succeeded and result is finite
+                    // TiDB codec supports all finite values including subnormal numbers
+                    if float_val.is_finite() {
+                        if let Some(json_num) = serde_json::Number::from_f64(float_val) {
+                            Value::Number(json_num)
+                        } else {
+                            Value::Number(serde_json::Number::from(0))
+                        }
+                    } else {
+                        // Invalid float string (NaN/Inf), convert to 0
+                        Value::Number(serde_json::Number::from(0))
+                    }
+                } else {
+                    Value::Number(serde_json::Number::from(0))
+                }
+            }
+            _ => Value::Number(serde_json::Number::from(0)),
         }
     }
 }

@@ -207,7 +207,7 @@ collection_method = "$collection_method"
 # Tables to collect configuration - only CLUSTER_STATEMENTS_SUMMARY for testing
 [[sources.tidb_system_tables.tables]]
 source_schema = "information_schema"
-source_table = "CLUSTER_STATEMENTS_SUMMARY"
+source_table = "STATEMENTS_SUMMARY"
 dest_table = "statements_summary"
 collection_interval = "short"
 enabled = true
