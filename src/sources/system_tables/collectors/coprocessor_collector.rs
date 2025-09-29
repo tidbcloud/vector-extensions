@@ -505,7 +505,7 @@ impl CoprocessorCollector {
         {
             let mut schemas = self.cached_schemas.lock().unwrap();
             schemas.insert(cache_key.clone(), schema.clone());
-            info!(
+        info!(
                 "Cached schema for table {} ({} columns)",
                 cache_key,
                 schema.columns.len()
@@ -564,7 +564,7 @@ impl CoprocessorCollector {
         let chunk_count = select_response.chunks.len();
 
         if chunk_count == 0 {
-            info!(
+        info!(
                 "No chunks in SelectResponse for table {}.{}",
                 table.source_schema, table.source_table
             );
@@ -713,7 +713,7 @@ impl CoprocessorCollector {
 
         // Parse all available rows
         while offset < data.len() {
-            info!(
+        info!(
                 "RUST: Starting row {} at offset {} (remaining bytes: {})",
                 row_index,
                 offset,
@@ -741,11 +741,28 @@ impl CoprocessorCollector {
 
                 let column_name = self.get_column_name(table_col, col_idx);
 
-                match self.decode_value_from_bytes(data, offset) {
+                // Special inspection for FIRST_SEEN/LAST_SEEN to check raw flag/bytes
+                if column_name == "FIRST_SEEN" || column_name == "LAST_SEEN" {
+                    if offset < data.len() {
+                        let flag = data[offset];
+                        let end = (offset + 12).min(data.len());
+                        let hex_preview = data[offset+1..end]
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join(" ");
+                        info!(
+                            "TIME RAW: row={} col={} name={} offset={} flag=0x{:02x} next=[{}]",
+                            row_index, col_idx, column_name, offset, flag, hex_preview
+                        );
+                    }
+                }
+
+                match self.decode_value_from_bytes_with_type(data, offset, table_col.tp) {
                     Ok((value, new_offset)) => {
                         // Only log first few columns and rows to avoid spam
                         if row_index < 3 && col_idx < 30 {
-                            info!(
+                info!(
                                 "Row {} Column {} ({}): value={:?}, offset {}->{}",
                                 row_index, col_idx, column_name, value, offset, new_offset
                             );
@@ -772,7 +789,7 @@ impl CoprocessorCollector {
                         // Like Go: if we can't decode this column, break the column loop for this row
                         // But continue processing this row with the columns we did decode
                         if row_index < 3 || col_idx < 30 {
-                            info!(
+            info!(
                                 "Failed to decode column {} (index {}) at offset {} for row {}: {}",
                                 column_name, col_idx, offset, row_index, decode_err
                             );
@@ -783,7 +800,7 @@ impl CoprocessorCollector {
             }
 
             if !row_decoded {
-                info!(
+        info!(
                     "No columns decoded for row {}, stopping row processing",
                     row_index
                 );
@@ -799,7 +816,7 @@ impl CoprocessorCollector {
                     .and_then(|v| {
                         if let Value::String(s) = v {
                             Some(s.len())
-                        } else {
+        } else {
                             None
                         }
                     })
@@ -812,7 +829,7 @@ impl CoprocessorCollector {
             row_index += 1;
         }
 
-        info!(
+            info!(
             "RUST: parse_row_format completed: decoded {} rows, final offset {}/{}",
             rows.len(),
             offset,
@@ -828,7 +845,7 @@ impl CoprocessorCollector {
         data: &[u8],
         offset: usize,
     ) -> Result<(Value, usize), CollectionError> {
-        if offset >= data.len() {
+            if offset >= data.len() {
             return Err(CollectionError::ParseError("Insufficient data".to_string()));
         }
 
@@ -938,6 +955,71 @@ impl CoprocessorCollector {
         };
 
         Ok((value, new_offset))
+    }
+
+    /// Decode value from bytes with awareness of MySQL column type, enabling packed time decode at byte stage
+    fn decode_value_from_bytes_with_type(
+        &self,
+        data: &[u8],
+        offset: usize,
+        mysql_tp: i32,
+    ) -> Result<(Value, usize), CollectionError> {
+        if offset >= data.len() {
+            return Err(CollectionError::ParseError("Insufficient data".to_string()));
+        }
+        let flag = data[offset];
+        let mut new_offset = offset + 1;
+
+        // If TIMESTAMP/DATETIME and encoded as uvarint, decode as TiDB packed time here
+        if (mysql_tp == TYPE_TIMESTAMP || mysql_tp == TYPE_DATETIME) {
+            // uvarintFlag
+            if flag == 0x09 {
+                let (u, consumed_offset) = self.decode_uvarint(data, new_offset)?;
+                new_offset = consumed_offset;
+                let s = self.decode_packed_time_to_string(u);
+                return Ok((Value::String(s), new_offset));
+            }
+            // uintFlag (0x04): next 8 bytes unsigned, big-endian
+            if flag == 0x04 {
+                if new_offset + 8 > data.len() { return Err(CollectionError::ParseError("Insufficient bytes for uintFlag time".to_string())); }
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&data[new_offset..new_offset+8]);
+                let u = u64::from_be_bytes(buf);
+                new_offset += 8;
+                let s = self.decode_packed_time_to_string(u);
+                return Ok((Value::String(s), new_offset));
+            }
+            // compactBytesFlag: inner buffer holds encoded time (usually uvarint/uint packed time)
+            if flag == 0x02 { // compact bytes
+                let (inner, consumed_offset) = self.decode_compact_bytes(data, new_offset)?;
+                // decode inner by reading its flag
+                if !inner.is_empty() {
+                    let inner_flag = inner[0];
+                    let inner_off = 1usize;
+                    if inner_flag == 0x09 { // uvarint
+                        let (u, _) = self.decode_uvarint(&inner, inner_off)?;
+                        let s = self.decode_packed_time_to_string(u);
+                        return Ok((Value::String(s), consumed_offset));
+                    } else if inner_flag == 0x04 { // uintFlag 8-byte
+                        // ensure enough bytes
+                        if inner.len() >= inner_off + 8 {
+                            let mut buf = [0u8; 8];
+                            buf.copy_from_slice(&inner[inner_off..inner_off+8]);
+                            // TiDB DecodeUint uses big-endian
+                            let u = u64::from_be_bytes(buf);
+                            let s = self.decode_packed_time_to_string(u);
+                            return Ok((Value::String(s), consumed_offset));
+                        }
+                    }
+                    // Fallback: return hex for debugging
+                    let hex = inner.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+                    info!("TIME COMPACT inner unhandled flag=0x{:02x} bytes=[{}]", inner_flag, hex);
+                }
+                return Ok((Value::Null, consumed_offset));
+            }
+        }
+        // Fallback to generic decoder
+        self.decode_value_from_bytes(data, offset)
     }
 
     /// Decode decimal value (matching Go decodeDecimal)
@@ -1201,7 +1283,7 @@ impl CoprocessorCollector {
                 // Last byte
                 result |= (byte as u64) << shift;
                 break;
-            } else {
+                } else {
                 // More bytes to come
                 result |= ((byte & 0x7F) as u64) << shift;
                 shift += 7;
@@ -1294,7 +1376,7 @@ impl CoprocessorCollector {
                              info!("Converting suspicious/invalid float {} to 0.0 for column {}", f, column_name);
                              return if let Some(zero_float) = serde_json::Number::from_f64(0.0) {
                                  Value::Number(zero_float)
-                             } else {
+        } else {
                                  Value::Number(serde_json::Number::from(0))
                              };
                          }
@@ -1304,8 +1386,8 @@ impl CoprocessorCollector {
              },
             // Decimal types - treat as numeric values
             TYPE_NEWDECIMAL => self.ensure_numeric_value(value),
-            // Date/Time types - keep as string (TiDB internal timestamp format)
-            TYPE_TIMESTAMP | TYPE_DATETIME => self.ensure_string_value(value),
+            // Date/Time types - decode TiDB packed time to formatted string
+            TYPE_TIMESTAMP | TYPE_DATETIME => self.convert_packed_time_value(value),
             TYPE_DATE | TYPE_DURATION => value.clone(),
             // String types (VARCHAR, TEXT, BLOB, etc.) - keep as-is
             TYPE_VARCHAR | TYPE_STRING | TYPE_VAR_STRING | TYPE_BLOB | TYPE_TINY_BLOB
@@ -1329,13 +1411,87 @@ impl CoprocessorCollector {
                     Value::String(int_val.to_string())
                 } else if let Some(float_val) = n.as_f64() {
                     Value::String(float_val.to_string())
-                } else {
+            } else {
                     Value::String(n.to_string())
                 }
             }
             Value::Bool(b) => Value::String(b.to_string()),
             Value::Null => Value::Null,
             _ => Value::String(value.to_string()),
+        }
+    }
+
+    /// Decode TiDB packed time (per TiDB types.Time.FromPackedUint) and return formatted string
+    fn decode_packed_time_to_string(&self, packed: u64) -> String {
+        fn parse_fields(p: u64) -> (i32,i32,i32,i32,i32,i32) {
+            let ymdhms = p >> 24;
+            let ymd = ymdhms >> 17;
+            let day = (ymd & ((1u64 << 5) - 1)) as i32;
+            let ym = ymd >> 5;
+            let rem = (ym % 13) as i32;
+            let mut year = (ym / 13) as i32;
+            let mut month = rem;
+            if rem == 0 {
+                // TiDB packed uses base-13; remainder 0 means previous year December
+                month = 12;
+                year -= 1;
+            }
+            let hms = ymdhms & ((1u64 << 17) - 1);
+            let second = (hms & ((1u64 << 6) - 1)) as i32;
+            let minute = ((hms >> 6) & ((1u64 << 6) - 1)) as i32;
+            let hour = (hms >> 12) as i32;
+            (year, month, day, hour, minute, second)
+        }
+
+        fn valid(y:i32,m:i32,d:i32,h:i32,mi:i32,s:i32) -> bool {
+            (0..=9999).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) && (0..=23).contains(&h) && (0..=59).contains(&mi) && (0..=59).contains(&s)
+        }
+
+        if packed == 0 {
+            return "0000-00-00 00:00:00".to_string();
+        }
+
+        // try native (little-endian constructed u64)
+        let (y,m,d,h,mi,s) = parse_fields(packed);
+        if valid(y,m,d,h,mi,s) {
+            // TODO: TIMESTAMP should convert UTC->session tz like TiDB; currently output as-is
+            return format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}");
+        }
+        // invalid packed yields zero-time string to match TiDB zero behavior
+        "0000-00-00 00:00:00".to_string()
+    }
+
+    /// Convert JSON value that contains TiDB packed time into formatted string
+    fn convert_packed_time_value(&self, value: &Value) -> Value {
+        match value {
+            Value::Number(n) => {
+                if let Some(u) = n.as_u64() {
+                    let s = self.decode_packed_time_to_string(u);
+                    Value::String(s)
+                } else if let Some(i) = n.as_i64() {
+                    if i >= 0 {
+                        let s = self.decode_packed_time_to_string(i as u64);
+                        Value::String(s)
+                    } else {
+                        // negative not expected; keep as string for visibility
+                        Value::String(i.to_string())
+                    }
+                    } else {
+                    // fallback to string
+                    Value::String(n.to_string())
+                }
+            }
+            Value::String(s) => {
+                // try parse as integer packed time
+                if let Ok(u) = s.parse::<u64>() {
+                    Value::String(self.decode_packed_time_to_string(u))
+                } else if let Ok(i) = s.parse::<i64>() {
+                    if i >= 0 { Value::String(self.decode_packed_time_to_string(i as u64)) } else { Value::String(s.clone()) }
+        } else {
+                    Value::String(s.clone())
+                }
+            }
+            _ => value.clone(),
         }
     }
 
