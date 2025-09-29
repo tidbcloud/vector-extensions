@@ -353,8 +353,11 @@ impl DeltaLakeWriter {
         } else if mysql_type_lower.contains("decimal") || mysql_type_lower.contains("numeric") {
             // For decimal, we'll use Float64 as a reasonable approximation
             DataType::Float64
-        } else if mysql_type_lower.contains("timestamp") || mysql_type_lower.contains("datetime") {
-            // Use Utf8 instead of Timestamp to avoid writer feature requirements
+        } else if mysql_type_lower.contains("timestamp") {
+            // Use Timestamp for TIMESTAMP columns to enable native TIMESTAMP support
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        } else if mysql_type_lower.contains("datetime") {
+            // Use Utf8 for DATETIME columns (they don't have timezone info)
             DataType::Utf8
         } else if mysql_type_lower.contains("date") {
             DataType::Date32
@@ -393,38 +396,16 @@ impl DeltaLakeWriter {
     }
 
     /// Infer Arrow data type from field name and value
-    fn infer_arrow_type(&self, field_name: &str, value: &LogValue) -> DataType {
+    /// This function now relies primarily on _schema_metadata for type inference
+    fn infer_arrow_type(&self, _field_name: &str, value: &LogValue) -> DataType {
         // If we have a concrete value, use its type
         if !matches!(value, LogValue::Null) {
             return self.value_to_arrow_type(value);
         }
 
-        // For null values, try to infer type from field name
-        let field_upper = field_name.to_uppercase();
-
-        // Numeric fields that should be integers
-        if field_upper.contains("COUNT")
-            || field_upper.contains("ID")
-            || field_upper.contains("SIZE")
-        {
-            // Inferring Int64 for COUNT field
-            return DataType::Int64;
-        }
-
-        // Numeric fields that should be floats
-        if field_upper.contains("LATENCY")
-            || field_upper.contains("MEM")
-            || field_upper.contains("TIME")
-            || field_upper.contains("BYTES")
-            || field_upper.contains("ROWS")
-            || field_upper.contains("BACKOFF")
-        {
-            // Inferring Float64 for LATENCY field
-            return DataType::Float64;
-        }
-
-        // Default to string for unknown fields
-        // Default to Utf8 for unknown fields
+        // For null values, we should rely on _schema_metadata
+        // If no schema metadata is available, default to Utf8
+        // This is a fallback that should rarely be used with proper schema metadata
         DataType::Utf8
     }
 
@@ -774,6 +755,10 @@ impl DeltaLakeWriter {
                 for event in events.iter() {
                     if let Event::Log(log_event) = event {
                         match log_event.get(field.name().as_str()) {
+                            Some(LogValue::Integer(microseconds)) => {
+                                // Direct microseconds value from TiDB packed time
+                                builder.append_value(*microseconds);
+                            }
                             Some(LogValue::Bytes(bytes)) => {
                                 // Try to parse timestamp string
                                 if let Ok(s) = std::str::from_utf8(bytes.as_ref()) {

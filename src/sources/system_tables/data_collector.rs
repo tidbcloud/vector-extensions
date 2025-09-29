@@ -239,7 +239,11 @@ pub mod utils {
 
         // Add extra metadata
         for (key, value) in &result.metadata.extra {
-            log.insert(format!("_vector_meta_{}", key).as_str(), value.clone());
+            if key == "schema_metadata" {
+                // Add schema metadata directly as _schema_metadata for DeltaLake writer
+                log.insert("_schema_metadata", value.clone());
+            }
+            // Intentionally skip writing generic _vector_meta_* fields
         }
 
         // Add the actual row data

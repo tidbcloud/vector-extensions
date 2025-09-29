@@ -954,11 +954,18 @@ impl CoprocessorCollector {
         let mut new_offset = offset + 1;
 
         // If TIMESTAMP/DATETIME and encoded as uvarint, decode as TiDB packed time here
-        if (mysql_tp == TYPE_TIMESTAMP || mysql_tp == TYPE_DATETIME) {
+        if mysql_tp == TYPE_TIMESTAMP || mysql_tp == TYPE_DATETIME {
             // uvarintFlag
             if flag == FLAG_UVARINT {
                 let (u, consumed_offset) = self.decode_uvarint(data, new_offset)?;
                 new_offset = consumed_offset;
+                // For TIMESTAMP, try to decode as microseconds for direct TIMESTAMP support
+                if mysql_tp == TYPE_TIMESTAMP {
+                    if let Some(microseconds) = self.decode_packed_time_to_microseconds(u) {
+                        return Ok((Value::Number(microseconds.into()), new_offset));
+                    }
+                }
+                // Fallback to string format for DATETIME or invalid TIMESTAMP
                 let s = self.decode_packed_time_to_string(u);
                 return Ok((Value::String(s), new_offset));
             }
@@ -969,6 +976,13 @@ impl CoprocessorCollector {
                 buf.copy_from_slice(&data[new_offset..new_offset+8]);
                 let u = u64::from_be_bytes(buf);
                 new_offset += 8;
+                // For TIMESTAMP, try to decode as microseconds for direct TIMESTAMP support
+                if mysql_tp == TYPE_TIMESTAMP {
+                    if let Some(microseconds) = self.decode_packed_time_to_microseconds(u) {
+                        return Ok((Value::Number(microseconds.into()), new_offset));
+                    }
+                }
+                // Fallback to string format for DATETIME or invalid TIMESTAMP
                 let s = self.decode_packed_time_to_string(u);
                 return Ok((Value::String(s), new_offset));
             }
@@ -981,6 +995,13 @@ impl CoprocessorCollector {
                     let inner_off = 1usize;
                     if inner_flag == FLAG_UVARINT { // uvarint
                         let (u, _) = self.decode_uvarint(&inner, inner_off)?;
+                        // For TIMESTAMP, try to decode as microseconds for direct TIMESTAMP support
+                        if mysql_tp == TYPE_TIMESTAMP {
+                            if let Some(microseconds) = self.decode_packed_time_to_microseconds(u) {
+                                return Ok((Value::Number(microseconds.into()), consumed_offset));
+                            }
+                        }
+                        // Fallback to string format for DATETIME or invalid TIMESTAMP
                         let s = self.decode_packed_time_to_string(u);
                         return Ok((Value::String(s), consumed_offset));
                     } else if inner_flag == FLAG_UINT { // uintFlag 8-byte
@@ -990,6 +1011,13 @@ impl CoprocessorCollector {
                             buf.copy_from_slice(&inner[inner_off..inner_off+8]);
                             // TiDB DecodeUint uses big-endian
                             let u = u64::from_be_bytes(buf);
+                            // For TIMESTAMP, try to decode as microseconds for direct TIMESTAMP support
+                            if mysql_tp == TYPE_TIMESTAMP {
+                                if let Some(microseconds) = self.decode_packed_time_to_microseconds(u) {
+                                    return Ok((Value::Number(microseconds.into()), consumed_offset));
+                                }
+                            }
+                            // Fallback to string format for DATETIME or invalid TIMESTAMP
                             let s = self.decode_packed_time_to_string(u);
                             return Ok((Value::String(s), consumed_offset));
                         }
@@ -1369,8 +1397,14 @@ impl CoprocessorCollector {
              },
             // Decimal types - treat as numeric values
             TYPE_NEWDECIMAL => self.ensure_numeric_value(value),
-            // Date/Time types - decode TiDB packed time to formatted string
-            TYPE_TIMESTAMP | TYPE_DATETIME => self.convert_packed_time_value(value),
+            // Date/Time types
+            // For TIMESTAMP: keep numeric microseconds if already decoded as number; otherwise fall back to string
+            TYPE_TIMESTAMP => match value {
+                Value::Number(_) => value.clone(),
+                _ => self.convert_packed_time_value(value),
+            },
+            // For DATETIME: keep as string (no timezone semantics)
+            TYPE_DATETIME => self.convert_packed_time_value(value),
             TYPE_DATE | TYPE_DURATION => value.clone(),
             // String types (VARCHAR, TEXT, BLOB, etc.) - keep as-is
             TYPE_VARCHAR | TYPE_STRING | TYPE_VAR_STRING | TYPE_BLOB | TYPE_TINY_BLOB
@@ -1424,6 +1458,50 @@ impl CoprocessorCollector {
         "0000-00-00 00:00:00".to_string()
     }
 
+    /// Decode TiDB packed time to microseconds since Unix epoch (for direct TIMESTAMP support)
+    fn decode_packed_time_to_microseconds(&self, packed: u64) -> Option<i64> {
+        fn parse_fields(p: u64) -> (i32,i32,i32,i32,i32,i32) {
+            let ymdhms = p >> 24;
+            let ymd = ymdhms >> 17;
+            let day = (ymd & ((1u64 << 5) - 1)) as i32;
+            let ym = ymd >> 5;
+            let rem = (ym % 13) as i32;
+            let mut year = (ym / 13) as i32;
+            let mut month = rem;
+            if rem == 0 {
+                // TiDB packed uses base-13; remainder 0 means previous year December
+                month = 12;
+                year -= 1;
+            }
+            let hms = ymdhms & ((1u64 << 17) - 1);
+            let second = (hms & ((1u64 << 6) - 1)) as i32;
+            let minute = ((hms >> 6) & ((1u64 << 6) - 1)) as i32;
+            let hour = (hms >> 12) as i32;
+            (year, month, day, hour, minute, second)
+        }
+
+        fn valid(y:i32,m:i32,d:i32,h:i32,mi:i32,s:i32) -> bool {
+            (0..=9999).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) && (0..=23).contains(&h) && (0..=59).contains(&mi) && (0..=59).contains(&s)
+        }
+
+        if packed == 0 {
+            return None; // Zero time is not a valid timestamp
+        }
+
+        let (y,m,d,h,mi,s) = parse_fields(packed);
+        if valid(y,m,d,h,mi,s) {
+            // Convert to chrono::NaiveDateTime and then to microseconds since Unix epoch
+            if let Some(date) = chrono::NaiveDate::from_ymd_opt(y, m as u32, d as u32) {
+                if let Some(naive_dt) = date.and_hms_opt(h as u32, mi as u32, s as u32) {
+                    // Convert to UTC timestamp in microseconds
+                    let timestamp_micros = naive_dt.and_utc().timestamp_micros();
+                    return Some(timestamp_micros);
+                }
+            }
+        }
+        None
+    }
+
     /// Convert JSON value that contains TiDB packed time into formatted string
     fn convert_packed_time_value(&self, value: &Value) -> Value {
         match value {
@@ -1463,6 +1541,35 @@ impl CoprocessorCollector {
         match self.safe_int64_value(value) {
             Some(int_val) => Value::Number(int_val.into()),
             None => value.clone(), // Keep original if conversion fails
+        }
+    }
+
+    /// Convert MySQL type number to string representation
+    fn mysql_type_to_string(&self, mysql_type: i32) -> String {
+        match mysql_type {
+            TYPE_TINY => "tinyint".to_string(),
+            TYPE_SHORT => "smallint".to_string(),
+            TYPE_LONG => "int".to_string(),
+            TYPE_FLOAT => "float".to_string(),
+            TYPE_DOUBLE => "double".to_string(),
+            TYPE_TIMESTAMP => "timestamp".to_string(),
+            TYPE_LONGLONG => "bigint".to_string(),
+            TYPE_INT24 => "mediumint".to_string(),
+            TYPE_DATE => "date".to_string(),
+            TYPE_DURATION => "time".to_string(),
+            TYPE_DATETIME => "datetime".to_string(),
+            TYPE_VARCHAR => "varchar".to_string(),
+            TYPE_BIT => "bit".to_string(),
+            TYPE_NEWDECIMAL => "decimal".to_string(),
+            TYPE_ENUM => "enum".to_string(),
+            TYPE_SET => "set".to_string(),
+            TYPE_TINY_BLOB => "tinyblob".to_string(),
+            TYPE_MEDIUM_BLOB => "mediumblob".to_string(),
+            TYPE_LONG_BLOB => "longblob".to_string(),
+            TYPE_BLOB => "blob".to_string(),
+            TYPE_VAR_STRING => "varchar".to_string(),
+            TYPE_STRING => "char".to_string(),
+            _ => format!("unknown_type_{}", mysql_type),
         }
     }
 
@@ -1622,6 +1729,18 @@ impl DataCollector for CoprocessorCollector {
             Value::String(self.grpc_endpoint.clone()),
         );
         extra.insert("fallback_used".to_string(), Value::Bool(false)); // Now using actual gRPC
+        
+        // Add schema metadata for DeltaLake writer
+        let mut schema_metadata = serde_json::Map::new();
+        for col in &table_schema.columns {
+            if let Some(name) = &col.name {
+                let mysql_type_str = self.mysql_type_to_string(col.tp);
+                let mut obj = serde_json::Map::new();
+                obj.insert("mysql_type".to_string(), Value::String(mysql_type_str));
+                schema_metadata.insert(name.clone(), Value::Object(obj));
+            }
+        }
+        extra.insert("schema_metadata".to_string(), Value::Object(schema_metadata));
 
         let metadata = CollectionMetadata {
             instance: self.config.instance.clone(),
