@@ -15,43 +15,10 @@ use crate::sources::system_tables::data_collector::{
 };
 use crate::sources::system_tables::TableConfig;
 
-// Use generated protobuf types from proto/tipb.proto
+// Use generated protobuf types from proto/tipb_simple.proto
 include!(concat!(env!("OUT_DIR"), "/tipb.rs"));
 
-// Note: ColumnInfo and TableScan are now defined in proto/tipb.proto
-
-
-#[derive(Clone, PartialEq, Message)]
-pub struct SelectResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub chunks: Vec<Chunk>,
-    #[prost(message, repeated, tag = "2")]
-    pub warnings: Vec<Warning>,
-    #[prost(message, optional, tag = "3")]
-    pub error: Option<Error>,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct Chunk {
-    #[prost(bytes = "vec", tag = "1")]
-    pub rows_data: Vec<u8>,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct Warning {
-    #[prost(int32, tag = "1")]
-    pub code: i32,
-    #[prost(string, tag = "2")]
-    pub msg: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct Error {
-    #[prost(int32, tag = "1")]
-    pub code: i32,
-    #[prost(string, tag = "2")]
-    pub msg: String,
-}
+// Note: All proto types are now defined in the generated code
 
 // gRPC service definition for TiKV coprocessor
 #[tonic::async_trait]
@@ -253,15 +220,35 @@ impl CoprocessorCollector {
             start_ts_fallback: 0,
             executors: vec![Executor {
                 tp: ExecType::TypeTableScan as i32,
-                executor_id: format!("table_scan_{}", table_schema.id),
-                parent_idx: 0,
-                fine_grained_shuffle_stream_count: 0,
-                fine_grained_shuffle_batch_size: 0,
                 tbl_scan: Some(TableScan {
                     table_id: table_schema.id,
                     columns,
                     desc: false,
                 }),
+                executor_id: format!("table_scan_{}", table_schema.id),
+                // Set all other fields to None/default to match Go version
+                idx_scan: None,
+                selection: None,
+                aggregation: None,
+                top_n: None,
+                limit: None,
+                exchange_receiver: None,
+                join: None,
+                kill: None,
+                exchange_sender: None,
+                projection: None,
+                partition_table_scan: None,
+                sort: None,
+                window: None,
+                fine_grained_shuffle_stream_count: 0,
+                fine_grained_shuffle_batch_size: 0,
+                expand: None,
+                expand2: None,
+                broadcast_query: None,
+                cte_sink: None,
+                cte_source: None,
+                index_lookup: None,
+                parent_idx: 0,
             }],
             time_zone_offset: 28800, // Use Asia/Shanghai timezone like Go version
             flags: 0,
@@ -630,51 +617,464 @@ impl CoprocessorCollector {
     ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
         warn!("Using fallback row-based parsing for table {}", table.source_table);
 
-        // Attempt to create meaningful fallback data indicating we received response data
+        // Use the real row format parsing instead of creating a summary row
+        self.parse_row_format(chunk_data, table)
+    }
+
+    /// Parse row format data (TiDB codec row encoding) - matching Go decodeRowData
+    fn parse_row_format(
+        &self,
+        data: &[u8],
+        table: &TableConfig,
+    ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
+        info!("Using row format parsing for table {}", table.source_table);
+
+        let table_schema = self.get_cached_schema_or_default(table);
         let mut rows = Vec::new();
+        let mut offset = 0;
+        let mut row_index = 0;
 
-        // Analyze the chunk data to extract some basic information
-        let chunk_info = self.analyze_chunk_data(chunk_data);
+        info!("RUST: Starting parse_row_format with {} bytes of data, {} columns in schema", data.len(), table_schema.columns.len());
+        
+        // Debug: Show first 32 bytes of raw data for comparison with Go
+        let preview_len = std::cmp::min(32, data.len());
+        let hex_preview: String = data[..preview_len].iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+        info!("RUST: First {} bytes of raw data: {}", preview_len, hex_preview);
 
-        // Create a row that shows we successfully received data but couldn't fully parse it
-        let mut row = HashMap::new();
-        row.insert(
-            "INSTANCE".to_string(),
-            Value::String(self.config.instance.clone()),
-        );
-        row.insert(
-            "SOURCE_TABLE".to_string(),
-            Value::String(table.source_table.clone()),
-        );
-        row.insert(
-            "COLLECTION_TIME".to_string(),
-            Value::String(chrono::Utc::now().to_rfc3339()),
-        );
-        row.insert(
-            "COLLECTION_STATUS".to_string(),
-            Value::String("DATA_RECEIVED_PARSING_INCOMPLETE".to_string()),
-        );
-        row.insert(
-            "CHUNK_SIZE_BYTES".to_string(),
-            Value::Number(chunk_data.len().into()),
-        );
-        row.insert(
-            "ESTIMATED_ROWS".to_string(),
-            Value::Number(chunk_info.estimated_rows.into()),
-        );
-        row.insert(
-            "DATA_PREVIEW".to_string(),
-            Value::String(chunk_info.data_preview),
-        );
+        // Parse up to 2 rows to match Go
+        while offset < data.len() && row_index < 2 {
+            info!("RUST: Starting row {} at offset {} (remaining bytes: {})", row_index, offset, data.len() - offset);
+            
+            let mut row = HashMap::new();
+            let mut row_decoded = false;
 
-        rows.push(row);
+            // Add default INSTANCE value
+            row.insert("INSTANCE".to_string(), Value::String(self.config.instance.clone()));
+
+            // For each row, decode ALL columns in schema order (matching Go exactly)
+            for (col_idx, table_col) in table_schema.columns.iter().enumerate() {
+                if offset >= data.len() {
+                    info!("Reached end of data at column {} for row {}", col_idx, row_index);
+                    break;
+                }
+
+                let column_name = self.get_column_name(table_col, col_idx);
+                
+                match self.decode_value_from_bytes(data, offset) {
+                    Ok((value, new_offset)) => {
+                        // Only log first few columns and rows to avoid spam
+                        if row_index < 3 && col_idx < 30 {
+                            info!("Row {} Column {} ({}): value={:?}, offset {}->{}",
+                                   row_index, col_idx, column_name, value, offset, new_offset);
+                        }
+                        offset = new_offset;
+                        row_decoded = true;
+
+                        // Apply special handling for key columns
+                        let final_value = match column_name.as_str() {
+                            "INSTANCE" => {
+                                // Keep our instance, but also store the decoded value as backup
+                                row.insert(format!("{}_DECODED", column_name), value.clone());
+                                Value::String(self.config.instance.clone())
+                            },
+                            "EXEC_COUNT" | "SUM_LATENCY" | "MAX_LATENCY" | "AVG_LATENCY" 
+                            | "PLAN_CACHE_HITS" | "MAX_MEM" | "AVG_MEM" => {
+                                // For numeric columns, ensure proper type conversion
+                                match self.safe_int64_value(&value) {
+                                    Some(int_val) => Value::Number(int_val.into()),
+                                    None => value, // Keep original if conversion fails
+                                }
+                            },
+                            _ => value, // Store all other columns as-is
+                        };
+
+                        // Store the column value
+                        row.insert(column_name, final_value);
+                    },
+                    Err(decode_err) => {
+                        // Like Go: if we can't decode this column, break the column loop for this row
+                        // But continue processing this row with the columns we did decode
+                        if row_index < 3 || col_idx < 30 {
+                            info!("Failed to decode column {} (index {}) at offset {} for row {}: {}", 
+                                   column_name, col_idx, offset, row_index, decode_err);
+                        }
+                        break; // Break column loop, but continue with this row
+                    }
+                }
+            }
+
+            // If we didn't decode any values, stop processing rows
+            if !row_decoded {
+                info!("No columns decoded for row {}, stopping row processing", row_index);
+                break;
+            }
+
+            // Set TotalTime = SumLatency (matching Go implementation)
+            if let Some(sum_latency) = row.get("SUM_LATENCY").cloned() {
+                row.insert("TOTAL_TIME".to_string(), sum_latency);
+            }
+
+            // Debug: Log key fields for first few rows to check for duplicates
+            if row_index < 5 {
+                let digest = row.get("DIGEST").unwrap_or(&Value::Null);
+                let exec_count = row.get("EXEC_COUNT").unwrap_or(&Value::Null);
+                let digest_text = row.get("DIGEST_TEXT").unwrap_or(&Value::Null);
+                let digest_text_len = match digest_text { 
+                    serde_json::Value::String(s) => Some(s.len()), 
+                    _ => None 
+                };
+                info!("Row {} summary: DIGEST={:?}, EXEC_COUNT={:?}, DIGEST_TEXT_len={:?}, final_offset={}", 
+                      row_index, digest, exec_count, digest_text_len, offset);
+            }
+
+            rows.push(row);
+            row_index += 1;
+        }
 
         info!(
-            "Fallback parsing created 1 summary row for table {} with {} bytes of data",
-            table.source_table, chunk_data.len()
+            "RUST: parse_row_format completed: decoded {} rows, final offset {}/{}",
+            rows.len(), offset, data.len()
         );
 
         Ok(rows)
+    }
+
+    /// Decode value from bytes using TiDB codec (EXACTLY matching Go decodeValueFromBytes)
+    fn decode_value_from_bytes(&self, data: &[u8], offset: usize) -> Result<(Value, usize), CollectionError> {
+        if offset >= data.len() {
+            return Err(CollectionError::ParseError("Insufficient data".to_string()));
+        }
+
+        let flag = data[offset];
+        let mut new_offset = offset + 1;
+        
+        // Debug: Show flag and next bytes for first few calls
+        if offset < 100 {
+            let preview_len = std::cmp::min(16, data.len() - offset);
+            let hex_preview: String = data[offset..offset + preview_len].iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+            info!("RUST decode_value_from_bytes: offset={}, flag=0x{:02x}, next_bytes=[{}]", offset, flag, hex_preview);
+        }
+
+        let value = match flag {
+            0x00 => Value::Null, // NilFlag
+            0x01 => { // bytesFlag
+                let (bytes, consumed_offset) = self.decode_bytes(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::String(String::from_utf8_lossy(&bytes).to_string())
+            },
+            0x02 => { // compactBytesFlag  
+                let (bytes, consumed_offset) = self.decode_compact_bytes(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::String(String::from_utf8_lossy(&bytes).to_string())
+            },
+            0x03 => { // intFlag
+                let (int_val, consumed_offset) = self.decode_int(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::Number(int_val.into())
+            },
+            0x04 => { // uintFlag
+                let (uint_val, consumed_offset) = self.decode_uint(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::Number(uint_val.into())
+            },
+            0x05 => { // floatFlag
+                let (float_val, consumed_offset) = self.decode_float(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::Number(serde_json::Number::from_f64(float_val).unwrap_or(serde_json::Number::from(0)))
+            },
+            0x06 => { // decimalFlag
+                let (decimal_str, consumed_offset) = self.decode_decimal(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::String(decimal_str)
+            },
+            0x07 => { // durationFlag
+                let (duration_str, consumed_offset) = self.decode_duration(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::String(duration_str)
+            },
+            0x08 => { // varintFlag
+                let (varint_val, consumed_offset) = self.decode_varint(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::Number(varint_val.into())
+            },
+            0x09 => { // uvarintFlag
+                let (uvarint_val, consumed_offset) = self.decode_uvarint(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::Number(uvarint_val.into())
+            },
+            0x0A => { // jsonFlag
+                let (json_str, consumed_offset) = self.decode_json(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::String(json_str)
+            },
+            0x14 => { // vectorFloat32Flag
+                let (vector_str, consumed_offset) = self.decode_vector_float32(data, new_offset)?;
+                new_offset = consumed_offset;
+                Value::String(vector_str)
+            },
+            0xFA => { // maxFlag
+                Value::String("MAX_VALUE".to_string())
+            },
+            0x20..=0x30 => { // Time types
+                let (time_val, consumed_offset) = self.decode_time_value(data, new_offset, flag)?;
+                new_offset = consumed_offset;
+                Value::String(time_val)
+            },
+            _ => {
+                // For unknown flags, try to skip 1 byte and return NULL
+                // This allows decoding to continue despite unknown flags
+                info!("Encountered unknown encoding flag: 0x{:02x} at offset {}, treating as NULL and skipping 1 byte", flag, offset);
+                Value::Null
+            }
+        };
+
+        Ok((value, new_offset))
+    }
+
+    /// Decode decimal value (matching Go decodeDecimal)
+    fn decode_decimal(&self, data: &[u8], offset: usize) -> Result<(String, usize), CollectionError> {
+        // For now, decode as bytes and convert to string
+        let (bytes, new_offset) = self.decode_bytes(data, offset)?;
+        Ok((String::from_utf8_lossy(&bytes).to_string(), new_offset))
+    }
+
+    /// Decode duration value (matching Go decodeDuration)
+    fn decode_duration(&self, data: &[u8], offset: usize) -> Result<(String, usize), CollectionError> {
+        // For now, decode as bytes and convert to string
+        let (bytes, new_offset) = self.decode_bytes(data, offset)?;
+        Ok((String::from_utf8_lossy(&bytes).to_string(), new_offset))
+    }
+
+    /// Decode JSON value (matching Go decodeJSON)
+    fn decode_json(&self, data: &[u8], offset: usize) -> Result<(String, usize), CollectionError> {
+        // For now, decode as bytes and convert to string
+        let (bytes, new_offset) = self.decode_bytes(data, offset)?;
+        Ok((String::from_utf8_lossy(&bytes).to_string(), new_offset))
+    }
+
+    /// Decode vector float32 value (matching Go decodeVectorFloat32)
+    fn decode_vector_float32(&self, data: &[u8], offset: usize) -> Result<(String, usize), CollectionError> {
+        // For now, decode as bytes and convert to string
+        let (bytes, new_offset) = self.decode_bytes(data, offset)?;
+        Ok((String::from_utf8_lossy(&bytes).to_string(), new_offset))
+    }
+
+    /// Helper function to safely convert Value to i64
+    fn safe_int64_value(&self, value: &Value) -> Option<i64> {
+        match value {
+            Value::Number(n) => n.as_i64(),
+            Value::String(s) => s.parse::<i64>().ok(),
+            _ => None,
+        }
+    }
+
+    /// Decode bytes with length prefix
+    fn decode_bytes(&self, data: &[u8], offset: usize) -> Result<(Vec<u8>, usize), CollectionError> {
+        if offset >= data.len() {
+            return Err(CollectionError::ParseError("Cannot decode bytes: insufficient data".to_string()));
+        }
+
+        // Read length as varint
+        let (length, length_consumed) = self.decode_varint_length(data, offset)?;
+        let new_offset = offset + length_consumed;
+
+        if new_offset + length > data.len() {
+            return Err(CollectionError::ParseError(format!(
+                "Cannot decode bytes: need {} bytes, have {}", length, data.len() - new_offset
+            )));
+        }
+
+        let bytes = data[new_offset..new_offset + length].to_vec();
+        Ok((bytes, new_offset + length))
+    }
+
+    /// Decode compact bytes (EXACTLY matching Go's decodeCompactBytes using binary.Varint)
+    fn decode_compact_bytes(&self, data: &[u8], offset: usize) -> Result<(Vec<u8>, usize), CollectionError> {
+        if offset >= data.len() {
+            return Err(CollectionError::ParseError("insufficient data, cannot decode compact byte array".to_string()));
+        }
+
+        // Read unsigned varint first (like Go's Uvarint)
+        let mut ux = 0u64;
+        let mut bytes_consumed = 0;
+        let mut shift = 0;
+        
+        for i in 0..10 { // Max 10 bytes for varint
+            if offset + i >= data.len() {
+                return Err(CollectionError::ParseError("cannot decode compact byte array length".to_string()));
+            }
+            
+            let b = data[offset + i];
+            bytes_consumed += 1;
+            
+            if b < 0x80 {
+                // Last byte
+                if i == 9 && b > 1 {
+                    return Err(CollectionError::ParseError("varint overflows a 64-bit integer".to_string()));
+                }
+                ux |= (b as u64) << shift;
+                break;
+            }
+            ux |= ((b & 0x7F) as u64) << shift;
+            shift += 7;
+        }
+        
+        // Apply zigzag decoding exactly like Go's binary.Varint
+        let mut length = (ux >> 1) as i64;
+        if (ux & 1) != 0 {
+            length = !length; // ^x in Go
+        }
+        
+        if length < 0 {
+            return Err(CollectionError::ParseError("negative length in compact bytes".to_string()));
+        }
+        
+        let length = length as usize;
+        let new_offset = offset + bytes_consumed;
+        
+        // Debug: Log the length and actual data for analysis
+        if offset < 50 {
+            let preview_len = std::cmp::min(length, 32);
+            if new_offset + preview_len <= data.len() {
+                let data_preview: String = data[new_offset..new_offset + preview_len].iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+                info!("RUST decode_compact_bytes: offset={}, length={}, bytes_consumed={}, data_preview=[{}]", 
+                       offset, length, bytes_consumed, data_preview);
+            }
+        }
+        
+        if new_offset + length > data.len() {
+            return Err(CollectionError::ParseError("insufficient data, cannot decode compact byte array data".to_string()));
+        }
+        
+        let bytes = data[new_offset..new_offset + length].to_vec();
+        let final_offset = new_offset + length;
+        
+        Ok((bytes, final_offset))
+    }
+
+    /// Decode varint length
+    fn decode_varint_length(&self, data: &[u8], offset: usize) -> Result<(usize, usize), CollectionError> {
+        let mut result = 0;
+        let mut shift = 0;
+        let mut consumed = 0;
+
+        for i in offset..data.len() {
+            let byte = data[i];
+            consumed += 1;
+            
+            if (byte & 0x80) == 0 {
+                // Last byte
+                result |= (byte as usize) << shift;
+                break;
+            } else {
+                // More bytes to come
+                result |= ((byte & 0x7F) as usize) << shift;
+                shift += 7;
+                if shift >= 64 {
+                    return Err(CollectionError::ParseError("Varint too long".to_string()));
+                }
+            }
+        }
+
+        Ok((result, offset + consumed))
+    }
+
+    /// Decode int64
+    fn decode_int(&self, data: &[u8], offset: usize) -> Result<(i64, usize), CollectionError> {
+        if offset + 8 > data.len() {
+            return Err(CollectionError::ParseError("Cannot decode int: insufficient data".to_string()));
+        }
+        
+        let bytes = &data[offset..offset + 8];
+        let value = i64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+        ]);
+        
+        Ok((value, offset + 8))
+    }
+
+    /// Decode uint64
+    fn decode_uint(&self, data: &[u8], offset: usize) -> Result<(u64, usize), CollectionError> {
+        if offset + 8 > data.len() {
+            return Err(CollectionError::ParseError("Cannot decode uint: insufficient data".to_string()));
+        }
+        
+        let bytes = &data[offset..offset + 8];
+        let value = u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+        ]);
+        
+        Ok((value, offset + 8))
+    }
+
+    /// Decode float64
+    fn decode_float(&self, data: &[u8], offset: usize) -> Result<(f64, usize), CollectionError> {
+        if offset + 8 > data.len() {
+            return Err(CollectionError::ParseError("Cannot decode float: insufficient data".to_string()));
+        }
+        
+        let bytes = &data[offset..offset + 8];
+        let bits = u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+        ]);
+        
+        let value = f64::from_bits(bits);
+        Ok((value, offset + 8))
+    }
+
+    /// Decode varint
+    fn decode_varint(&self, data: &[u8], offset: usize) -> Result<(i64, usize), CollectionError> {
+        let (unsigned, consumed) = self.decode_uvarint(data, offset)?;
+        let signed = (unsigned >> 1) as i64 ^ -((unsigned & 1) as i64);
+        Ok((signed, consumed))
+    }
+
+    /// Decode uvarint
+    fn decode_uvarint(&self, data: &[u8], offset: usize) -> Result<(u64, usize), CollectionError> {
+        let mut result = 0u64;
+        let mut shift = 0;
+        let mut consumed = 0;
+
+        for i in offset..data.len() {
+            let byte = data[i];
+            consumed += 1;
+            
+            if (byte & 0x80) == 0 {
+                // Last byte
+                result |= (byte as u64) << shift;
+                break;
+            } else {
+                // More bytes to come
+                result |= ((byte & 0x7F) as u64) << shift;
+                shift += 7;
+                if shift >= 64 {
+                    return Err(CollectionError::ParseError("Uvarint too long".to_string()));
+                }
+            }
+        }
+
+        Ok((result, offset + consumed))
+    }
+
+    /// Decode time value
+    fn decode_time_value(&self, data: &[u8], offset: usize, _flag: u8) -> Result<(String, usize), CollectionError> {
+        // For now, just read 8 bytes and convert to timestamp string
+        if offset + 8 > data.len() {
+            return Err(CollectionError::ParseError("Cannot decode time: insufficient data".to_string()));
+        }
+        
+        let bytes = &data[offset..offset + 8];
+        let timestamp = u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+        ]);
+        
+        // Convert to readable timestamp (this is a simplified conversion)
+        let time_str = format!("timestamp_{}", timestamp);
+        Ok((time_str, offset + 8))
     }
 
     /// Analyze chunk data to extract basic information
@@ -721,12 +1121,38 @@ impl CoprocessorCollector {
 
         if let Ok(cache) = self.cached_schemas.lock() {
             if let Some(schema) = cache.get(&cache_key) {
+                info!("Using cached schema with {} columns for table {}", schema.columns.len(), table.source_table);
                 return schema.clone();
             }
         }
 
-        // Return a default schema for CLUSTER_STATEMENTS_SUMMARY with common columns
-        self.create_default_schema_for_statements_summary()
+        info!("No cached schema found, attempting to fetch schema for table {}", table.source_table);
+        
+        // Try to fetch the real schema synchronously
+        match self.get_table_schema_via_http_sync(table) {
+            Ok(schema) => {
+                info!("Successfully fetched schema with {} columns for table {}", schema.columns.len(), table.source_table);
+                // Cache it for future use
+                if let Ok(mut cache) = self.cached_schemas.lock() {
+                    cache.insert(cache_key, schema.clone());
+                }
+                schema
+            },
+            Err(e) => {
+                warn!("Failed to fetch schema for table {}: {}, using default 17-column schema", table.source_table, e);
+                // Return a default schema for CLUSTER_STATEMENTS_SUMMARY with common columns
+                self.create_default_schema_for_statements_summary()
+            }
+        }
+    }
+
+    /// Get table schema via HTTP synchronously
+    fn get_table_schema_via_http_sync(&self, table: &TableConfig) -> Result<TableSchema, CollectionError> {
+        // Use async runtime to call the async function
+        tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(self.get_table_schema_via_http(table))
+        })
     }
 
     /// Cache a schema for future use
@@ -826,9 +1252,48 @@ impl CoprocessorCollector {
             data[offset + 7],
         ]) as usize;
 
+        // Debug: Log the parsed values and raw bytes
+        let raw_bytes = if offset + 32 <= data.len() {
+            format!("{:02x?}", &data[offset..offset + 32])
+        } else if offset < data.len() {
+            format!("{:02x?}", &data[offset..])
+        } else {
+            "insufficient data".to_string()
+        };
+        info!(
+            "Column {} ({}): length={}, null_count={}, data_len={}, offset={}, raw_bytes={}",
+            col_info.id, col_info.name.as_ref().unwrap_or(&"unknown".to_string()), 
+            length, null_count, data.len(), offset, raw_bytes
+        );
+
+        // CRITICAL DEBUG: Let's analyze the binary pattern for first few columns
+        if col_info.id <= 5 {
+            // Show more detailed binary analysis
+            let analysis_bytes = if offset + 64 <= data.len() { &data[offset..offset + 64] } else { &data[offset..] };
+            info!("=== BINARY ANALYSIS for column {} ===", col_info.id);
+            info!("Next 64 bytes from offset {}: {:02x?}", offset, analysis_bytes);
+            
+            // Try alternative interpretations
+            if offset + 8 <= data.len() {
+                let alt_length = u64::from_le_bytes([
+                    data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+                    data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7],
+                ]);
+                info!("Alternative 8-byte interpretation: {}", alt_length);
+            }
+        }
+
+        // Sanity check: length should be reasonable (not > 1 million)
+        if length > 1_000_000 {
+            return Err(CollectionError::ParseError(format!(
+                "Column {} has unreasonable length: {} at offset {}. This indicates incorrect binary format parsing.",
+                col_info.id, length, offset
+            )));
+        }
+
         let mut offset = offset + 8;
 
-        // Read null bitmap if there are nulls
+        // Read null bitmap following Go implementation EXACTLY
         let null_bitmap = if null_count > 0 {
             let bitmap_bytes = (length + 7) / 8;
             if offset + bitmap_bytes > data.len() {
@@ -842,9 +1307,11 @@ impl CoprocessorCollector {
             offset += bitmap_bytes;
             bitmap
         } else {
-            // All values are non-null
+            // CRITICAL: When nullCount is 0, DO NOT READ null bitmap from data
+            // Just create an "all non-null" bitmap like Go's setAllNotNull
             let bitmap_bytes = (length + 7) / 8;
             vec![0xFF; bitmap_bytes]
+            // Note: offset is NOT incremented here because no data was read!
         };
 
         // Read column data based on type
@@ -892,6 +1359,12 @@ impl CoprocessorCollector {
                 ]) as i64;
                 offsets.push(offset_val);
             }
+            
+            // Debug: Log offsets for critical analysis
+            if col_info.id <= 5 {
+                info!("Column {} offsets: {:?}", col_info.id, offsets);
+            }
+            
             offset += offset_bytes;
 
             // Read variable data
@@ -923,7 +1396,7 @@ impl CoprocessorCollector {
     fn is_fixed_length_type(&self, tp: i32) -> bool {
         matches!(
             tp,
-            TYPE_TINY | TYPE_SHORT | TYPE_INT24 | TYPE_LONG | TYPE_LONGLONG | TYPE_FLOAT | TYPE_DOUBLE
+            TYPE_TINY | TYPE_SHORT | TYPE_INT24 | TYPE_LONG | TYPE_LONGLONG | TYPE_FLOAT | TYPE_DOUBLE | TYPE_TIMESTAMP
         )
     }
 
@@ -937,6 +1410,7 @@ impl CoprocessorCollector {
             TYPE_LONGLONG => 8,
             TYPE_FLOAT => 4,
             TYPE_DOUBLE => 8,
+            TYPE_TIMESTAMP => 8,  // TIMESTAMP is 8 bytes (64-bit)
             _ => 0,
         }
     }

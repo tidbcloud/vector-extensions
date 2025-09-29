@@ -204,21 +204,7 @@ topology_fetch_interval_seconds = 10.0
 # Collection method configuration
 collection_method = "$collection_method"
 
-# Tables to collect configuration
-[[sources.tidb_system_tables.tables]]
-source_schema = "information_schema"
-source_table = "PROCESSLIST"
-dest_table = "processlist"
-collection_interval = "short"
-enabled = true
-
-[[sources.tidb_system_tables.tables]]
-source_schema = "information_schema"
-source_table = "CLUSTER_INFO"
-dest_table = "cluster_info"
-collection_interval = "long"
-enabled = true
-
+# Tables to collect configuration - only CLUSTER_STATEMENTS_SUMMARY for testing
 [[sources.tidb_system_tables.tables]]
 source_schema = "information_schema"
 source_table = "CLUSTER_STATEMENTS_SUMMARY"
@@ -463,6 +449,7 @@ Commands:
 
 Options:
     -d, --duration SECONDS    Test duration (default: 30s)
+    --no-cleanup              Do not clean up test files on exit
     -h, --help               Show help information
 
 Examples:
@@ -471,6 +458,7 @@ Examples:
     $0 full-test             # Run full test (console output)
     $0 test-sql -d 60        # Test SQL method for 60 seconds (console output)
     $0 test-sql-delta -d 60  # Test SQL method for 60 seconds (Delta Lake output)
+    $0 test-copr-delta --no-cleanup -d 60  # Test coprocessor method without cleanup
     $0 test-all-delta -d 120 # Test all methods for 120 seconds (Delta Lake output)
     $0 cleanup               # Clean up test files
 
@@ -491,11 +479,16 @@ main() {
     local command=""
 
     # Parse arguments
+    local no_cleanup=false
     while [[ $# -gt 0 ]]; do
         case $1 in
             -d|--duration)
                 duration="$2"
                 shift 2
+                ;;
+            --no-cleanup)
+                no_cleanup=true
+                shift
                 ;;
             -h|--help)
                 show_help
@@ -517,6 +510,14 @@ main() {
         log_error "Please specify a command"
         show_help
         exit 1
+    fi
+
+    # Set up cleanup trap unless --no-cleanup is specified
+    if [ "$no_cleanup" = false ]; then
+        trap cleanup_test_files EXIT
+        log_info "Cleanup enabled (will cleanup on exit)"
+    else
+        log_info "Cleanup disabled (--no-cleanup specified)"
     fi
 
     case $command in
@@ -617,8 +618,8 @@ main() {
     esac
 }
 
-# Signal handling - ensure cleanup
-trap cleanup_test_files EXIT
+# Signal handling - conditionally cleanup (will be set in main function)
+# trap cleanup_test_files EXIT
 
 # Run main function
 main "$@"

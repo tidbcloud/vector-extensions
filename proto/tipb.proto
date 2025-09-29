@@ -2,12 +2,16 @@ syntax = "proto3";
 
 package tipb;
 
+// Import official proto files
+import "executor.proto";
+import "expression.proto";
+import "kvrpcpb.proto";
+
 // DAGRequest and related definitions from tipb
 enum EncodeType {
-    ENCODE_TYPE_UNSPECIFIED = 0;
-    TypeDefault = 1;
-    TypeChunk = 2;
-    TypeCHBlock = 3;
+    TypeDefault = 0;
+    TypeChunk = 1;
+    TypeCHBlock = 2;
 }
 
 enum Endian {
@@ -143,7 +147,221 @@ message KeyRange {
     bytes end = 2;
 }
 
+// Official CoprocessorResponse from kvproto
 message CoprocessorResponse {
     bytes data = 1;
-    string other_error = 2;
+    RegionError region_error = 2;
+    LockInfo locked = 3;
+    string other_error = 4;
+    KeyRange range = 5;
+    ExecDetails exec_details = 6;
+    bool is_cache_hit = 7;
+    uint64 cache_last_version = 8;
+    bool can_be_cached = 9;
+    ExecDetailsV2 exec_details_v2 = 11;
+    uint64 latest_buckets_version = 12;
+}
+
+// Error handling messages
+message RegionError {
+    string message = 1;
+    NotLeader not_leader = 2;
+    RegionNotFound region_not_found = 3;
+    KeyNotInRegion key_not_in_region = 4;
+    EpochNotMatch epoch_not_match = 5;
+    ServerIsBusy server_is_busy = 6;
+    StaleCommand stale_command = 7;
+    StoreNotMatch store_not_match = 8;
+    RaftEntryTooLarge raft_entry_too_large = 9;
+    MaxTimestampNotSynced max_timestamp_not_synced = 10;
+    ReadIndexNotReady read_index_not_ready = 11;
+    ProposalInMergingMode proposal_in_merging_mode = 12;
+    DataIsNotReady data_is_not_ready = 13;
+    RegionNotInitialized region_not_initialized = 14;
+    DiskFull disk_full = 15;
+}
+
+message NotLeader {
+    uint64 region_id = 1;
+    Peer leader = 2;
+}
+
+message RegionNotFound {
+    uint64 region_id = 1;
+}
+
+message KeyNotInRegion {
+    bytes key = 1;
+    uint64 region_id = 2;
+    bytes start_key = 3;
+    bytes end_key = 4;
+}
+
+message EpochNotMatch {
+    repeated Region current_regions = 1;
+}
+
+message Region {
+    uint64 id = 1;
+    bytes start_key = 2;
+    bytes end_key = 3;
+    RegionEpoch region_epoch = 4;
+    repeated Peer peers = 5;
+}
+
+message ServerIsBusy {
+    string reason = 1;
+    uint64 backoff_ms = 2;
+}
+
+message StaleCommand {}
+
+message StoreNotMatch {
+    uint64 request_store_id = 1;
+    uint64 actual_store_id = 2;
+}
+
+message RaftEntryTooLarge {
+    uint64 region_id = 1;
+    uint64 entry_size = 2;
+}
+
+message MaxTimestampNotSynced {}
+
+message ReadIndexNotReady {
+    string reason = 1;
+    uint64 region_id = 2;
+}
+
+message ProposalInMergingMode {
+    uint64 region_id = 1;
+}
+
+message DataIsNotReady {
+    uint64 region_id = 1;
+    uint64 peer_id = 2;
+    uint64 safe_ts = 3;
+}
+
+message RegionNotInitialized {
+    uint64 region_id = 1;
+}
+
+message DiskFull {}
+
+message LockInfo {
+    bytes primary_lock = 1;
+    uint64 lock_version = 2;
+    bytes key = 3;
+    uint64 lock_ttl = 4;
+    uint64 txn_size = 5;
+    Op lock_type = 6;
+    uint64 lock_for_update_ts = 7;
+    bool use_async_commit = 8;
+    repeated bytes secondaries = 9;
+    uint64 min_commit_ts = 10;
+}
+
+enum Op {
+    Put = 0;
+    Del = 1;
+    Lock = 2;
+    Rollback = 3;
+    Insert = 4;
+    CheckNotExists = 5;
+}
+
+message ExecDetails {
+    TimeDetail time_detail = 1;
+    ScanDetail scan_detail = 2;
+    WriteDetail write_detail = 3;
+}
+
+message ExecDetailsV2 {
+    TimeDetailV2 time_detail_v2 = 1;
+    ScanDetailV2 scan_detail_v2 = 2;
+    WriteDetail write_detail = 3;
+}
+
+message TimeDetail {
+    uint64 process_wall_time_ms = 1;
+    uint64 process_cpu_time_ms = 2;
+    uint64 total_keys = 3;
+    uint64 processed_keys = 4;
+}
+
+message TimeDetailV2 {
+    uint64 process_wall_time_ns = 1;
+    uint64 process_cpu_time_ns = 2;
+    uint64 total_keys = 3;
+    uint64 processed_keys = 4;
+}
+
+message ScanDetail {
+    uint64 total = 1;
+    uint64 processed = 2;
+}
+
+message ScanDetailV2 {
+    uint64 processed_versions = 1;
+    uint64 total_versions = 2;
+    uint64 rocksdb_delete_skipped_count = 3;
+    uint64 rocksdb_key_skipped_count = 4;
+    uint64 rocksdb_block_cache_hit_count = 5;
+    uint64 rocksdb_block_read_count = 6;
+    uint64 rocksdb_block_read_byte = 7;
+}
+
+message WriteDetail {
+    uint64 store_batch_wait_duration = 1;
+    uint64 propose_send_wait_duration = 2;
+    uint64 persist_log_duration = 3;
+    uint64 raft_db_write_leader_wait_duration = 4;
+    uint64 raft_db_sync_log_duration = 5;
+    uint64 raft_db_write_memtable_duration = 6;
+    uint64 commit_log_duration = 7;
+    uint64 apply_batch_wait_duration = 8;
+    uint64 apply_log_duration = 9;
+    uint64 apply_mutate_duration = 10;
+    uint64 apply_wait_duration = 11;
+}
+
+// SelectResponse and related messages from tipb
+message SelectResponse {
+    Error error = 1;
+    repeated Row rows = 2;
+    repeated Chunk chunks = 3;
+    repeated Error warnings = 4;
+    repeated int64 output_counts = 5;
+    int64 warning_count = 6;
+    repeated ExecutorExecutionSummary execution_summaries = 8;
+    EncodeType encode_type = 9;
+    repeated int64 ndvs = 10;
+}
+
+message Row {
+    bytes handle = 1;
+    bytes data = 2;
+}
+
+message Error {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message Chunk {
+    bytes rows_data = 3;
+    repeated RowMeta rows_meta = 4;
+}
+
+message RowMeta {
+    int64 handle = 1;
+    int64 length = 2;
+}
+
+message ExecutorExecutionSummary {
+    uint64 time_processed_ns = 1;
+    uint64 num_produced_rows = 2;
+    uint64 num_iterations = 3;
+    uint64 concurrency = 4;
 }

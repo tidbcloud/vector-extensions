@@ -1,0 +1,44 @@
+# Test configuration for Delta Lake writing
+[sources.tidb_system_tables]
+type = "system_tables"
+collection_method = "coprocessor"
+collection_interval = "short"
+short_interval = 5
+medium_interval = 30
+long_interval = 300
+retention_days = 30
+
+database_host = "127.0.0.1"
+database_port = 4000
+database_username = "root"
+database_password = ""
+database_name = "information_schema"
+pd_address = "127.0.0.1:2379"
+
+[[sources.tidb_system_tables.tables]]
+source_schema = "information_schema"
+source_table = "CLUSTER_STATEMENTS_SUMMARY"
+dest_table = "statements_summary"
+collection_interval = "short"
+enabled = true
+
+# Output to Delta Lake with small batch size for testing
+[sinks.deltalake]
+type = "deltalake"
+inputs = ["tidb_system_tables"]
+base_path = "./test_data/deltalake"
+batch_size = 1  # Very small batch size to trigger writes quickly
+timeout_secs = 5  # Short timeout to force writes
+compression = "snappy"
+
+# Local storage options
+[sinks.deltalake.storage_options]
+"file.enable_move" = "true"
+
+# Add console sink for debugging data flow
+[sinks.console_debug]
+type = "console"
+inputs = ["tidb_system_tables"]
+
+[sinks.console_debug.encoding]
+codec = "json"

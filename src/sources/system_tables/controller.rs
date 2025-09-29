@@ -342,8 +342,9 @@ impl Controller {
                 let table_count = tables.len();
 
                 // Start the collector task
+                let out_clone = self.out.clone();
                 let handle = tokio::spawn(async move {
-                    Self::run_collector_task(collector, tables).await;
+                    Self::run_collector_task(collector, tables, out_clone).await;
                 });
                 let task = CollectorTask {
                     handle,
@@ -361,7 +362,7 @@ impl Controller {
     }
 
     /// Run a collector task for multiple tables
-    async fn run_collector_task(collector: Box<dyn DataCollector>, tables: Vec<TableConfig>) {
+    async fn run_collector_task(collector: Box<dyn DataCollector>, tables: Vec<TableConfig>, mut out: SourceSender) {
         use crate::sources::system_tables::data_collector::utils::{
             create_event_from_result, parse_collection_interval,
         };
@@ -410,12 +411,14 @@ impl Controller {
 
                         // Convert data to events and send
                         for row_data in &result.data {
-                            let _event = create_event_from_result(&result, row_data.clone());
+                            let event = create_event_from_result(&result, row_data.clone());
 
-                            // Send event (note: we'd need to get the sender here)
-                            // This is a simplified version - in practice, you'd need to pass
-                            // the sender through the collector config or result
-                            debug!("Created event for table {}", table.source_table);
+                            // Send event to sinks
+                            if let Err(e) = out.send_event(event).await {
+                                error!("Failed to send event for table {}: {}", table.source_table, e);
+                            } else {
+                                debug!("Successfully sent event for table {}", table.source_table);
+                            }
                         }
                     }
                     Err(e) => {

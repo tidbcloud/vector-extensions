@@ -524,8 +524,8 @@ func (c *ClusterStatementsSummaryClient) buildCoprocessorRequest(tableSchema *Ta
 	log.Printf("=== GO VERSION DEBUG ===")
 	log.Printf("DAG request details:")
 	log.Printf("  - Executors: %d", len(dagReq.Executors))
-	log.Printf("  - OutputOffsets: %v", dagReq.OutputOffsets[:10]) // First 10 offsets
-	log.Printf("  - EncodeType: %v", dagReq.EncodeType)
+	log.Printf("  - OutputOffsets length: %d, first 10: %v", len(dagReq.OutputOffsets), dagReq.OutputOffsets[:10]) // First 10 offsets
+	log.Printf("  - EncodeType: %v (numeric value: %d)", dagReq.EncodeType, int32(dagReq.EncodeType))
 	log.Printf("  - TimeZoneName: %s", dagReq.TimeZoneName)
 	log.Printf("  - TimeZoneOffset: %d", dagReq.TimeZoneOffset)
 	log.Printf("  - CollectExecutionSummaries: %v", dagReq.CollectExecutionSummaries)
@@ -607,6 +607,9 @@ func (c *ClusterStatementsSummaryClient) parseCoprocessorResponse(resp *coproces
 		return nil, fmt.Errorf("failed to deserialize response: %v", err)
 	}
 
+	// Log EncodeType for debugging
+	log.Printf("GO: SelectResponse EncodeType: %v", selectResp.EncodeType)
+
 	// Check warnings
 	if len(selectResp.Warnings) > 0 {
 		log.Printf("Server %s received warnings:", serverAddr)
@@ -624,7 +627,7 @@ func (c *ClusterStatementsSummaryClient) parseCoprocessorResponse(resp *coproces
 
 	// Parse data chunks
 	for i, chunk := range selectResp.Chunks {
-		blockRows, err := c.parseChunkData(&chunk, serverAddr, tableSchema)
+		blockRows, err := c.parseChunkDataWithEncodeType(&chunk, serverAddr, tableSchema, selectResp.EncodeType)
 		if err != nil {
 			log.Printf("Failed to parse data chunk %d: %v", i+1, err)
 			continue
@@ -635,8 +638,8 @@ func (c *ClusterStatementsSummaryClient) parseCoprocessorResponse(resp *coproces
 	return allRows, nil
 }
 
-// parseChunkData parses data chunk
-func (c *ClusterStatementsSummaryClient) parseChunkData(chunk *tipb.Chunk, serverAddr string, tableSchema *TableSchema) ([]Row, error) {
+// parseChunkDataWithEncodeType parses data chunk with EncodeType awareness
+func (c *ClusterStatementsSummaryClient) parseChunkDataWithEncodeType(chunk *tipb.Chunk, serverAddr string, tableSchema *TableSchema, encodeType tipb.EncodeType) ([]Row, error) {
 	var rows []Row
 
 	// Check if there is data
@@ -648,6 +651,12 @@ func (c *ClusterStatementsSummaryClient) parseChunkData(chunk *tipb.Chunk, serve
 	rows = c.parseDataWithSchema(chunk.RowsData, serverAddr, tableSchema)
 
 	return rows, nil
+}
+
+// parseChunkData parses data chunk (legacy function)
+func (c *ClusterStatementsSummaryClient) parseChunkData(chunk *tipb.Chunk, serverAddr string, tableSchema *TableSchema) ([]Row, error) {
+	// Default to TypeChunk for backward compatibility
+	return c.parseChunkDataWithEncodeType(chunk, serverAddr, tableSchema, tipb.EncodeType_TypeChunk)
 }
 
 // parseDataWithSchema parses real binary data based on schema information
@@ -686,21 +695,33 @@ func (c *ClusterStatementsSummaryClient) decodeRowData(data []byte, serverAddr s
 	offset := 0
 	rowIndex := 0
 
+	log.Printf("GO: Starting decodeRowData with %d bytes of data, %d columns in schema", len(data), len(tableSchema.Columns))
+
 	for offset < len(data) && rowIndex < 100 {
+		log.Printf("GO: Starting row %d at offset %d (remaining bytes: %d)", rowIndex, offset, len(data)-offset)
+
 		row := Row{
 			Instance:    serverAddr,
 			ExtraFields: make(map[string]interface{}),
 		}
 
 		rowDecoded := false
+		colIndex := 0
 		for _, col := range tableSchema.Columns {
 			if offset >= len(data) {
+				log.Printf("GO: Row %d reached end of data at column %d (%s)", rowIndex, colIndex, col.Name.O)
 				break
 			}
 
 			value, newOffset, err := c.decodeValueFromBytes(data, offset, col)
 			if err != nil {
+				log.Printf("GO: Row %d column %d (%s) decode failed at offset %d: %v", rowIndex, colIndex, col.Name.O, offset, err)
 				break
+			}
+
+			// Log only first few rows and important columns to avoid spam
+			if rowIndex < 3 && (colIndex < 20 || col.Name.O == "EXEC_COUNT" || col.Name.O == "DIGEST" || col.Name.O == "DIGEST_TEXT") {
+				log.Printf("GO: Row %d Column %d (%s): value=%v, offset %d->%d", rowIndex, colIndex, col.Name.O, value, offset, newOffset)
 			}
 
 			offset = newOffset
@@ -727,10 +748,18 @@ func (c *ClusterStatementsSummaryClient) decodeRowData(data []byte, serverAddr s
 			default:
 				row.ExtraFields[columnName] = value
 			}
+			colIndex++
 		}
 
 		if !rowDecoded {
+			log.Printf("GO: Row %d had no columns decoded, stopping at offset %d", rowIndex, offset)
 			break
+		}
+
+		// Log summary for first few rows
+		if rowIndex < 5 {
+			log.Printf("GO: Row %d summary - DIGEST: %v, EXEC_COUNT: %d, DIGEST_TEXT_len: %d, final_offset: %d",
+				rowIndex, row.ExtraFields["DIGEST"], row.ExecCount, len(row.DigestText), offset)
 		}
 
 		row.TotalTime = row.SumLatency
@@ -738,6 +767,7 @@ func (c *ClusterStatementsSummaryClient) decodeRowData(data []byte, serverAddr s
 		rowIndex++
 	}
 
+	log.Printf("GO: decodeRowData completed: decoded %d rows, final offset %d/%d", len(rows), offset, len(data))
 	return rows
 }
 
@@ -870,6 +900,16 @@ func (c *ClusterStatementsSummaryClient) decodeCompactBytes(data []byte, offset 
 		return nil, fmt.Errorf("insufficient data, cannot decode compact byte array")
 	}
 
+	// Debug: Show the raw bytes before varint decode
+	initialOffset := *offset
+	if *offset < 100 {
+		previewLen := 10
+		if *offset+previewLen > len(data) {
+			previewLen = len(data) - *offset
+		}
+		log.Printf("GO decodeCompactBytes before varint: offset=%d, raw_bytes=%x", *offset, data[*offset:*offset+previewLen])
+	}
+
 	// Read length
 	length, n := binary.Varint(data[*offset:])
 	if n <= 0 {
@@ -882,6 +922,17 @@ func (c *ClusterStatementsSummaryClient) decodeCompactBytes(data []byte, offset 
 	}
 	val := data[*offset : *offset+int(length)]
 	*offset += int(length)
+
+	// Debug: Log the compact bytes decoding details
+	if initialOffset < 100 {
+		previewLen := len(val)
+		if previewLen > 16 {
+			previewLen = 16
+		}
+		log.Printf("GO decodeCompactBytes: initial_offset=%d, varint_bytes=%d, length=%d, final_offset=%d, val_len=%d, val_preview=%x",
+			initialOffset, n, length, *offset, len(val), val[:previewLen])
+	}
+
 	return val, nil
 }
 
@@ -961,6 +1012,17 @@ func (c *ClusterStatementsSummaryClient) decodeColumn(data []byte, offset int, c
 		return offset, fmt.Errorf("数据不足，无法读取列长度")
 	}
 
+	initialOffset := offset
+
+	// Debug: Log raw bytes for critical columns
+	rawBytesLen := 32
+	if offset+rawBytesLen > len(data) {
+		rawBytesLen = len(data) - offset
+	}
+	if rawBytesLen > 0 {
+		log.Printf("GO: Column %d decode start at offset=%d, raw_bytes=%x", colInfo.ID, offset, data[offset:offset+rawBytesLen])
+	}
+
 	// 解码长度
 	col.length = int(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4
@@ -968,6 +1030,9 @@ func (c *ClusterStatementsSummaryClient) decodeColumn(data []byte, offset int, c
 	// 解码 nullCount
 	nullCount := int(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4
+
+	// Debug: Log parsed header values
+	log.Printf("GO: Column %d parsed header: length=%d, nullCount=%d, type=%d", colInfo.ID, col.length, nullCount, colInfo.Type.Tp)
 
 	// 解码 nullBitmap - 参考 TiDB 的逻辑
 	if nullCount > 0 {
@@ -983,14 +1048,19 @@ func (c *ClusterStatementsSummaryClient) decodeColumn(data []byte, offset int, c
 	}
 
 	// 解码 offsets 和数据
-	if c.isFixedLengthType(MySQLType(colInfo.Type.Tp)) {
+	isFixed := c.isFixedLengthType(MySQLType(colInfo.Type.Tp))
+	log.Printf("GO: Column %d type decision: isFixed=%v, type=%d", colInfo.ID, isFixed, colInfo.Type.Tp)
+
+	if isFixed {
 		// 固定长度类型
 		fixedLen := c.getFixedLength(MySQLType(colInfo.Type.Tp))
+		log.Printf("GO: Column %d fixed-length processing: fixedLen=%d", colInfo.ID, fixedLen)
 		if fixedLen > 0 {
 			dataLen := fixedLen * col.length
 			if offset+dataLen > len(data) {
 				return offset, fmt.Errorf("数据不足，无法读取固定长度数据，需要 %d 字节，剩余 %d 字节", dataLen, len(data)-offset)
 			}
+			log.Printf("GO: Column %d reading fixed data: offset=%d, dataLen=%d", colInfo.ID, offset, dataLen)
 			col.data = data[offset : offset+dataLen]
 			offset += dataLen
 		}
@@ -1001,6 +1071,8 @@ func (c *ClusterStatementsSummaryClient) decodeColumn(data []byte, offset int, c
 			return offset, fmt.Errorf("数据不足，无法读取偏移量，需要 %d 字节，剩余 %d 字节", numOffsetBytes, len(data)-offset)
 		}
 
+		log.Printf("GO: Column %d reading variable-length offsets: offset=%d, numOffsetBytes=%d", colInfo.ID, offset, numOffsetBytes)
+
 		// 解码偏移量
 		col.offsets = make([]int64, col.length+1)
 		for i := 0; i <= col.length; i++ {
@@ -1008,14 +1080,20 @@ func (c *ClusterStatementsSummaryClient) decodeColumn(data []byte, offset int, c
 			offset += 8
 		}
 
+		log.Printf("GO: Column %d offsets: %v", colInfo.ID, col.offsets)
+
 		// 解码数据
 		dataLen := int(col.offsets[col.length])
 		if offset+dataLen > len(data) {
 			return offset, fmt.Errorf("数据不足，无法读取变长数据，需要 %d 字节，剩余 %d 字节", dataLen, len(data)-offset)
 		}
+		log.Printf("GO: Column %d reading variable data: offset=%d, dataLen=%d", colInfo.ID, offset, dataLen)
 		col.data = data[offset : offset+dataLen]
 		offset += dataLen
 	}
+
+	// Debug: Log final offset
+	log.Printf("GO: Column %d decode complete: final_offset=%d (consumed %d bytes)", colInfo.ID, offset, offset-initialOffset)
 
 	return offset, nil
 }
