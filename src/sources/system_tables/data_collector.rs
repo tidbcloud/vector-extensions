@@ -119,14 +119,20 @@ pub enum CollectorConfigType {
     Coprocessor {
         host: String,
         port: u16,
+        #[allow(dead_code)]
         grpc_timeout_secs: u64,
+        #[allow(dead_code)]
         max_retries: u32,
     },
     /// HTTP API collector configuration
     HttpApi {
+        #[allow(dead_code)]
         host: String,
+        #[allow(dead_code)]
         port: u16,
+        #[allow(dead_code)]
         timeout_secs: u64,
+        #[allow(dead_code)]
         max_retries: u32,
     },
 }
@@ -216,7 +222,10 @@ pub mod utils {
 
         // Generate unique incremental ID
         let unique_id = GLOBAL_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        log.insert("_vector_id", Value::Number(serde_json::Number::from(unique_id)));
+        log.insert(
+            "_vector_id",
+            Value::Number(serde_json::Number::from(unique_id)),
+        );
 
         // Add standard metadata
         log.insert(
@@ -260,7 +269,12 @@ pub mod utils {
         }
 
         // For non-cluster tables, add instance column to the actual data
-        if !result.metadata.table_config.source_table.starts_with("CLUSTER_") {
+        if !result
+            .metadata
+            .table_config
+            .source_table
+            .starts_with("CLUSTER_")
+        {
             log.insert("instance", result.metadata.instance.clone());
         }
 

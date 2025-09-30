@@ -513,9 +513,9 @@ impl DeltaLakeWriter {
                 for event in events.iter() {
                     if let Event::Log(log_event) = event {
                         let value_opt = match field.name().as_str() {
-                            "_vector_id" => log_event
-                                .get("_vector_id")
-                                .and_then(|v| v.as_integer()),
+                            "_vector_id" => {
+                                log_event.get("_vector_id").and_then(|v| v.as_integer())
+                            }
                             _ => match log_event.get(field.name().as_str()) {
                                 Some(LogValue::Integer(i)) => Some(*i),
                                 Some(LogValue::Bytes(bytes)) => {
@@ -530,7 +530,7 @@ impl DeltaLakeWriter {
                                 _ => None,
                             },
                         };
-                        
+
                         if let Some(value) = value_opt {
                             builder.append_value(value);
                         } else {

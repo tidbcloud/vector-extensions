@@ -6,7 +6,6 @@ use http;
 use prost::Message;
 use serde_json::Value;
 use tonic::transport::{Channel, Endpoint};
-use tonic::{Request, Status};
 use tracing::{debug, info, warn};
 
 use crate::sources::system_tables::data_collector::{
@@ -19,15 +18,6 @@ use crate::sources::system_tables::TableConfig;
 include!(concat!(env!("OUT_DIR"), "/tipb.rs"));
 
 // Note: All proto types are now defined in the generated code
-
-// gRPC service definition for TiKV coprocessor
-#[tonic::async_trait]
-pub trait Tikv {
-    async fn coprocessor(
-        &self,
-        request: Request<CoprocessorRequest>,
-    ) -> Result<tonic::Response<CoprocessorResponse>, Status>;
-}
 
 pub struct TikvClient<T> {
     inner: tonic::client::Grpc<T>,
@@ -318,7 +308,7 @@ impl CoprocessorCollector {
                 // 1. 't' prefix (1 byte)
                 // 2. table_id encoded with XOR signMask and big-endian (8 bytes)
                 // 3. '_r' separator (2 bytes)
-                
+
                 // Encode table ID using TiDB's codec.EncodeInt:
                 // EncodeIntToCmpUint(v) = v XOR 0x8000000000000000
                 const SIGN_MASK: u64 = 0x8000000000000000;
@@ -328,7 +318,7 @@ impl CoprocessorCollector {
                 // Build start key: 't' + encoded_table_id (table prefix only)
                 let mut start = vec![b't']; // 't' prefix
                 start.extend_from_slice(&table_id_bytes); // Encoded table ID (8 bytes)
-                
+
                 // Build end key: 't' + (encoded_table_id + 1) (next table prefix)
                 // This represents the next table's prefix boundary
                 let end_table_id = encoded_table_id + 1;
@@ -336,7 +326,10 @@ impl CoprocessorCollector {
                 let mut end = vec![b't']; // 't' prefix
                 end.extend_from_slice(&end_table_id_bytes); // Next table ID (8 bytes)
 
-                let key_range = KeyRange { start: start.clone(), end: end.clone() };
+                let key_range = KeyRange {
+                    start: start.clone(),
+                    end: end.clone(),
+                };
 
                 info!(
                     "Using TiDB-encoded KeyRange for table_id {}: start={:?}, end={:?}",
@@ -524,7 +517,7 @@ impl CoprocessorCollector {
         {
             let mut schemas = self.cached_schemas.lock().unwrap();
             schemas.insert(cache_key.clone(), schema.clone());
-        info!(
+            info!(
                 "Cached schema for table {} ({} columns)",
                 cache_key,
                 schema.columns.len()
@@ -583,7 +576,7 @@ impl CoprocessorCollector {
         let chunk_count = select_response.chunks.len();
 
         if chunk_count == 0 {
-        info!(
+            info!(
                 "No chunks in SelectResponse for table {}.{}",
                 table.source_schema, table.source_table
             );
@@ -591,7 +584,7 @@ impl CoprocessorCollector {
         }
 
         for (chunk_idx, chunk) in select_response.chunks.iter().enumerate() {
-        info!(
+            info!(
                 "Processing chunk {}/{} for table {}.{}: rows_data_size={} bytes",
                 chunk_idx + 1,
                 chunk_count,
@@ -622,8 +615,8 @@ impl CoprocessorCollector {
                 chunk_idx + 1,
                 chunk_count,
                 table.source_schema,
-            table.source_table
-        );
+                table.source_table
+            );
 
             all_rows.extend(chunk_rows);
         }
@@ -652,7 +645,7 @@ impl CoprocessorCollector {
         match encode_type {
             0 => {
                 // TypeDefault - use row format parsing (most common case)
-        info!(
+                info!(
                     "Using row format parsing (encode_type=TypeDefault) for table {}.{}",
                     table.source_schema, table.source_table
                 );
@@ -660,7 +653,7 @@ impl CoprocessorCollector {
             }
             1 => {
                 // TypeChunk - chunk format parsing (currently not fully implemented)
-        info!(
+                info!(
                     "TypeChunk detected for table {}.{}, falling back to row format parsing",
                     table.source_schema, table.source_table
                 );
@@ -675,31 +668,6 @@ impl CoprocessorCollector {
                 self.parse_row_format_with_schema(data, table_schema)
             }
         }
-    }
-
-    /// Parse TiDB chunk format with explicit schema (placeholder implementation)
-    /// TODO: Implement proper chunk format parsing when TypeChunk is needed
-    fn parse_tidb_chunk_format_with_schema(
-        &self,
-        chunk_data: &[u8],
-        table_schema: &TableSchema,
-    ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
-        debug!(
-            "TiDB chunk format parsing requested: {} bytes, {} columns (not fully implemented)",
-            chunk_data.len(),
-            table_schema.columns.len()
-        );
-
-        // Placeholder implementation - chunk format parsing is not the current priority
-        // since TiDB is returning TypeDefault (row format) by default
-
-        warn!("Chunk format parsing is not fully implemented - this is a placeholder");
-        warn!("Current implementation focuses on row format (TypeDefault) which is the default from TiDB");
-
-        // Return error to force fallback to row format parsing
-        Err(CollectionError::ParseError(
-            "Chunk format parsing is not fully implemented yet".to_string(),
-        ))
     }
 
     /// Parse row format data with explicit schema (optimized version)
@@ -732,7 +700,7 @@ impl CoprocessorCollector {
 
         // Parse all available rows
         while offset < data.len() {
-        info!(
+            info!(
                 "RUST: Starting row {} at offset {} (remaining bytes: {})",
                 row_index,
                 offset,
@@ -764,12 +732,12 @@ impl CoprocessorCollector {
                     Ok((value, new_offset)) => {
                         // Only log first few columns and rows to avoid spam
                         if row_index < 3 && col_idx < 30 {
-                info!(
+                            info!(
                                 "Row {} Column {} ({}): value={:?}, offset {}->{}",
                                 row_index, col_idx, column_name, value, offset, new_offset
                             );
                         }
-                        
+
                         // Special debug for request unit columns to verify float decoding
                         if column_name.contains("REQUEST_UNIT") && row_index < 3 {
                             info!(
@@ -791,7 +759,7 @@ impl CoprocessorCollector {
                         // Like Go: if we can't decode this column, break the column loop for this row
                         // But continue processing this row with the columns we did decode
                         if row_index < 3 || col_idx < 30 {
-            info!(
+                            info!(
                                 "Failed to decode column {} (index {}) at offset {} for row {}: {}",
                                 column_name, col_idx, offset, row_index, decode_err
                             );
@@ -802,7 +770,7 @@ impl CoprocessorCollector {
             }
 
             if !row_decoded {
-        info!(
+                info!(
                     "No columns decoded for row {}, stopping row processing",
                     row_index
                 );
@@ -818,20 +786,20 @@ impl CoprocessorCollector {
                     .and_then(|v| {
                         if let Value::String(s) = v {
                             Some(s.len())
-        } else {
+                        } else {
                             None
                         }
                     })
                     .unwrap_or(0);
                 info!("Row {} summary: DIGEST={:?}, EXEC_COUNT={:?}, DIGEST_TEXT_len={:?}, final_offset={}", 
                       row_index, digest, exec_count, digest_text_len, offset);
-        }
+            }
 
-        rows.push(row);
+            rows.push(row);
             row_index += 1;
         }
 
-            info!(
+        info!(
             "RUST: parse_row_format completed: decoded {} rows, final offset {}/{}",
             rows.len(),
             offset,
@@ -847,7 +815,7 @@ impl CoprocessorCollector {
         data: &[u8],
         offset: usize,
     ) -> Result<(Value, usize), CollectionError> {
-            if offset >= data.len() {
+        if offset >= data.len() {
             return Err(CollectionError::ParseError("Insufficient data".to_string()));
         }
 
@@ -855,18 +823,18 @@ impl CoprocessorCollector {
         let mut new_offset = offset + 1;
 
         // Debug: Show flag and next bytes for first few calls
-        if offset < 100 {
-            let preview_len = std::cmp::min(16, data.len() - offset);
-            let hex_preview: String = data[offset..offset + preview_len]
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .join(" ");
-            info!(
-                "RUST decode_value_from_bytes: offset={}, flag=0x{:02x}, next_bytes=[{}]",
-                offset, flag, hex_preview
-            );
-        }
+        // if offset < 100 {
+        //     let preview_len = std::cmp::min(16, data.len() - offset);
+        //     let hex_preview: String = data[offset..offset + preview_len]
+        //     .iter()
+        //     .map(|b| format!("{:02x}", b))
+        //     .collect::<Vec<_>>()
+        //     .join(" ");
+        //     info!(
+        //         "RUST decode_value_from_bytes: offset={}, flag=0x{:02x}, next_bytes=[{}]",
+        //         offset, flag, hex_preview
+        //     );
+        // }
 
         let value = match flag {
             0x00 => Value::Null, // NilFlag
@@ -990,9 +958,13 @@ impl CoprocessorCollector {
             }
             // uintFlag (0x04): next 8 bytes unsigned, big-endian
             if flag == FLAG_UINT {
-                if new_offset + 8 > data.len() { return Err(CollectionError::ParseError("Insufficient bytes for uintFlag time".to_string())); }
+                if new_offset + 8 > data.len() {
+                    return Err(CollectionError::ParseError(
+                        "Insufficient bytes for uintFlag time".to_string(),
+                    ));
+                }
                 let mut buf = [0u8; 8];
-                buf.copy_from_slice(&data[new_offset..new_offset+8]);
+                buf.copy_from_slice(&data[new_offset..new_offset + 8]);
                 let u = u64::from_be_bytes(buf);
                 new_offset += 8;
                 // For TIMESTAMP, try to decode as microseconds for direct TIMESTAMP support
@@ -1006,13 +978,15 @@ impl CoprocessorCollector {
                 return Ok((Value::String(s), new_offset));
             }
             // compactBytesFlag: inner buffer holds encoded time (usually uvarint/uint packed time)
-            if flag == FLAG_COMPACT_BYTES { // compact bytes
+            if flag == FLAG_COMPACT_BYTES {
+                // compact bytes
                 let (inner, consumed_offset) = self.decode_compact_bytes(data, new_offset)?;
                 // decode inner by reading its flag
                 if !inner.is_empty() {
                     let inner_flag = inner[0];
                     let inner_off = 1usize;
-                    if inner_flag == FLAG_UVARINT { // uvarint
+                    if inner_flag == FLAG_UVARINT {
+                        // uvarint
                         let (u, _) = self.decode_uvarint(&inner, inner_off)?;
                         // For TIMESTAMP, try to decode as microseconds for direct TIMESTAMP support
                         if mysql_tp == TYPE_TIMESTAMP {
@@ -1023,17 +997,23 @@ impl CoprocessorCollector {
                         // Fallback to string format for DATETIME or invalid TIMESTAMP
                         let s = self.decode_packed_time_to_string(u);
                         return Ok((Value::String(s), consumed_offset));
-                    } else if inner_flag == FLAG_UINT { // uintFlag 8-byte
+                    } else if inner_flag == FLAG_UINT {
+                        // uintFlag 8-byte
                         // ensure enough bytes
                         if inner.len() >= inner_off + 8 {
                             let mut buf = [0u8; 8];
-                            buf.copy_from_slice(&inner[inner_off..inner_off+8]);
+                            buf.copy_from_slice(&inner[inner_off..inner_off + 8]);
                             // TiDB DecodeUint uses big-endian
                             let u = u64::from_be_bytes(buf);
                             // For TIMESTAMP, try to decode as microseconds for direct TIMESTAMP support
                             if mysql_tp == TYPE_TIMESTAMP {
-                                if let Some(microseconds) = self.decode_packed_time_to_microseconds(u) {
-                                    return Ok((Value::Number(microseconds.into()), consumed_offset));
+                                if let Some(microseconds) =
+                                    self.decode_packed_time_to_microseconds(u)
+                                {
+                                    return Ok((
+                                        Value::Number(microseconds.into()),
+                                        consumed_offset,
+                                    ));
                                 }
                             }
                             // Fallback to string format for DATETIME or invalid TIMESTAMP
@@ -1042,8 +1022,15 @@ impl CoprocessorCollector {
                         }
                     }
                     // Fallback: return hex for debugging
-                    let hex = inner.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
-                    info!("TIME COMPACT inner unhandled flag=0x{:02x} bytes=[{}]", inner_flag, hex);
+                    let hex = inner
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    info!(
+                        "TIME COMPACT inner unhandled flag=0x{:02x} bytes=[{}]",
+                        inner_flag, hex
+                    );
                 }
                 return Ok((Value::Null, consumed_offset));
             }
@@ -1107,7 +1094,7 @@ impl CoprocessorCollector {
         data: &[u8],
         offset: usize,
     ) -> Result<(Vec<u8>, usize), CollectionError> {
-            if offset >= data.len() {
+        if offset >= data.len() {
             return Err(CollectionError::ParseError(
                 "Cannot decode bytes: insufficient data".to_string(),
             ));
@@ -1230,7 +1217,7 @@ impl CoprocessorCollector {
                 // Last byte
                 result |= (byte as usize) << shift;
                 break;
-                } else {
+            } else {
                 // More bytes to come
                 result |= ((byte & 0x7F) as usize) << shift;
                 shift += 7;
@@ -1324,7 +1311,7 @@ impl CoprocessorCollector {
                 // Last byte
                 result |= (byte as u64) << shift;
                 break;
-                } else {
+            } else {
                 // More bytes to come
                 result |= ((byte & 0x7F) as u64) << shift;
                 shift += 7;
@@ -1391,7 +1378,7 @@ impl CoprocessorCollector {
         column_name: &str,
         value: &Value,
         table_col: &TableColumn,
-    ) ->  Value {
+    ) -> Value {
         // Handle special INSTANCE column for all system tables
         if column_name == "INSTANCE" {
             // Always use our configured instance name for consistency
@@ -1406,27 +1393,30 @@ impl CoprocessorCollector {
                 self.ensure_numeric_value(value)
             }
             // Float/Double types
-             TYPE_FLOAT | TYPE_DOUBLE => {
-                 // Handle float values following TiDB codec standards
-                 if let Value::Number(n) = value {
-                     if let Some(f) = n.as_f64() {
-                         // Only convert truly invalid floating point values
-                         // TiDB codec supports all finite values including subnormal numbers
-                         // Reference: TiDB TestFloatCodec includes math.SmallestNonzeroFloat64
-                         if f.is_nan() || f.is_infinite() {
-                             info!("Converting invalid float (NaN/Inf) {} to 0.0 for column {}", f, column_name);
-                             return if let Some(zero_float) = serde_json::Number::from_f64(0.0) {
-                                 Value::Number(zero_float)
-                             } else {
-                                 Value::Number(serde_json::Number::from(0))
-                             };
-                         }
-                         // Note: All finite values including subnormal numbers (like 6.3e-322) are valid
-                         // and should be preserved as-is according to TiDB codec implementation
-                     }
-                 }
-                 self.ensure_float_value(value)
-             },
+            TYPE_FLOAT | TYPE_DOUBLE => {
+                // Handle float values following TiDB codec standards
+                if let Value::Number(n) = value {
+                    if let Some(f) = n.as_f64() {
+                        // Only convert truly invalid floating point values
+                        // TiDB codec supports all finite values including subnormal numbers
+                        // Reference: TiDB TestFloatCodec includes math.SmallestNonzeroFloat64
+                        if f.is_nan() || f.is_infinite() {
+                            info!(
+                                "Converting invalid float (NaN/Inf) {} to 0.0 for column {}",
+                                f, column_name
+                            );
+                            return if let Some(zero_float) = serde_json::Number::from_f64(0.0) {
+                                Value::Number(zero_float)
+                            } else {
+                                Value::Number(serde_json::Number::from(0))
+                            };
+                        }
+                        // Note: All finite values including subnormal numbers (like 6.3e-322) are valid
+                        // and should be preserved as-is according to TiDB codec implementation
+                    }
+                }
+                self.ensure_float_value(value)
+            }
             // Decimal types - treat as numeric values
             TYPE_NEWDECIMAL => self.ensure_numeric_value(value),
             // Date/Time types
@@ -1452,7 +1442,7 @@ impl CoprocessorCollector {
 
     /// Decode TiDB packed time (per TiDB types.Time.FromPackedUint) and return formatted string
     fn decode_packed_time_to_string(&self, packed: u64) -> String {
-        fn parse_fields(p: u64) -> (i32,i32,i32,i32,i32,i32) {
+        fn parse_fields(p: u64) -> (i32, i32, i32, i32, i32, i32) {
             let ymdhms = p >> 24;
             let ymd = ymdhms >> 17;
             let day = (ymd & ((1u64 << 5) - 1)) as i32;
@@ -1472,8 +1462,13 @@ impl CoprocessorCollector {
             (year, month, day, hour, minute, second)
         }
 
-        fn valid(y:i32,m:i32,d:i32,h:i32,mi:i32,s:i32) -> bool {
-            (0..=9999).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) && (0..=23).contains(&h) && (0..=59).contains(&mi) && (0..=59).contains(&s)
+        fn valid(y: i32, m: i32, d: i32, h: i32, mi: i32, s: i32) -> bool {
+            (0..=9999).contains(&y)
+                && (1..=12).contains(&m)
+                && (1..=31).contains(&d)
+                && (0..=23).contains(&h)
+                && (0..=59).contains(&mi)
+                && (0..=59).contains(&s)
         }
 
         if packed == 0 {
@@ -1481,8 +1476,8 @@ impl CoprocessorCollector {
         }
 
         // try native (little-endian constructed u64)
-        let (y,m,d,h,mi,s) = parse_fields(packed);
-        if valid(y,m,d,h,mi,s) {
+        let (y, m, d, h, mi, s) = parse_fields(packed);
+        if valid(y, m, d, h, mi, s) {
             // TODO: TIMESTAMP should convert UTC->session tz like TiDB; currently output as-is
             return format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}");
         }
@@ -1492,7 +1487,7 @@ impl CoprocessorCollector {
 
     /// Decode TiDB packed time to microseconds since Unix epoch (for direct TIMESTAMP support)
     fn decode_packed_time_to_microseconds(&self, packed: u64) -> Option<i64> {
-        fn parse_fields(p: u64) -> (i32,i32,i32,i32,i32,i32) {
+        fn parse_fields(p: u64) -> (i32, i32, i32, i32, i32, i32) {
             let ymdhms = p >> 24;
             let ymd = ymdhms >> 17;
             let day = (ymd & ((1u64 << 5) - 1)) as i32;
@@ -1512,16 +1507,21 @@ impl CoprocessorCollector {
             (year, month, day, hour, minute, second)
         }
 
-        fn valid(y:i32,m:i32,d:i32,h:i32,mi:i32,s:i32) -> bool {
-            (0..=9999).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) && (0..=23).contains(&h) && (0..=59).contains(&mi) && (0..=59).contains(&s)
+        fn valid(y: i32, m: i32, d: i32, h: i32, mi: i32, s: i32) -> bool {
+            (0..=9999).contains(&y)
+                && (1..=12).contains(&m)
+                && (1..=31).contains(&d)
+                && (0..=23).contains(&h)
+                && (0..=59).contains(&mi)
+                && (0..=59).contains(&s)
         }
 
         if packed == 0 {
             return None; // Zero time is not a valid timestamp
         }
 
-        let (y,m,d,h,mi,s) = parse_fields(packed);
-        if valid(y,m,d,h,mi,s) {
+        let (y, m, d, h, mi, s) = parse_fields(packed);
+        if valid(y, m, d, h, mi, s) {
             // Convert to chrono::NaiveDateTime and then to microseconds since Unix epoch
             if let Some(date) = chrono::NaiveDate::from_ymd_opt(y, m as u32, d as u32) {
                 if let Some(naive_dt) = date.and_hms_opt(h as u32, mi as u32, s as u32) {
@@ -1549,7 +1549,7 @@ impl CoprocessorCollector {
                         // negative not expected; keep as string for visibility
                         Value::String(i.to_string())
                     }
-                    } else {
+                } else {
                     // fallback to string
                     Value::String(n.to_string())
                 }
@@ -1559,8 +1559,12 @@ impl CoprocessorCollector {
                 if let Ok(u) = s.parse::<u64>() {
                     Value::String(self.decode_packed_time_to_string(u))
                 } else if let Ok(i) = s.parse::<i64>() {
-                    if i >= 0 { Value::String(self.decode_packed_time_to_string(i as u64)) } else { Value::String(s.clone()) }
-        } else {
+                    if i >= 0 {
+                        Value::String(self.decode_packed_time_to_string(i as u64))
+                    } else {
+                        Value::String(s.clone())
+                    }
+                } else {
                     Value::String(s.clone())
                 }
             }
@@ -1686,17 +1690,23 @@ const TYPE_VAR_STRING: i32 = 253;
 const TYPE_STRING: i32 = 254;
 
 // TiDB row/codec flag constants (aligned with pkg/util/codec/codec.go)
-const FLAG_NIL: u8 = 0x00;            // NilFlag
-const FLAG_BYTES: u8 = 0x01;          // bytesFlag
-const FLAG_COMPACT_BYTES: u8 = 0x02;  // compactBytesFlag
-const FLAG_INT: u8 = 0x03;            // intFlag
-const FLAG_UINT: u8 = 0x04;           // uintFlag
-const FLAG_FLOAT: u8 = 0x05;          // floatFlag
-const FLAG_DECIMAL: u8 = 0x06;        // decimalFlag
-const FLAG_DURATION: u8 = 0x07;       // durationFlag
-const FLAG_VARINT: u8 = 0x08;         // varintFlag
-const FLAG_UVARINT: u8 = 0x09;        // uvarintFlag
-
+#[allow(dead_code)]
+const FLAG_NIL: u8 = 0x00; // NilFlag
+#[allow(dead_code)]
+const FLAG_BYTES: u8 = 0x01; // bytesFlag
+const FLAG_COMPACT_BYTES: u8 = 0x02; // compactBytesFlag
+#[allow(dead_code)]
+const FLAG_INT: u8 = 0x03; // intFlag
+const FLAG_UINT: u8 = 0x04; // uintFlag
+#[allow(dead_code)]
+const FLAG_FLOAT: u8 = 0x05; // floatFlag
+#[allow(dead_code)]
+const FLAG_DECIMAL: u8 = 0x06; // decimalFlag
+#[allow(dead_code)]
+const FLAG_DURATION: u8 = 0x07; // durationFlag
+#[allow(dead_code)]
+const FLAG_VARINT: u8 = 0x08; // varintFlag
+const FLAG_UVARINT: u8 = 0x09; // uvarintFlag
 
 #[async_trait]
 impl DataCollector for CoprocessorCollector {
@@ -1780,7 +1790,7 @@ impl DataCollector for CoprocessorCollector {
             Value::String(self.grpc_endpoint.clone()),
         );
         extra.insert("fallback_used".to_string(), Value::Bool(false)); // Now using actual gRPC
-        
+
         // Add schema metadata for DeltaLake writer
         let mut schema_metadata = serde_json::Map::new();
         for col in &table_schema.columns {
@@ -1791,7 +1801,10 @@ impl DataCollector for CoprocessorCollector {
                 schema_metadata.insert(name.clone(), Value::Object(obj));
             }
         }
-        extra.insert("schema_metadata".to_string(), Value::Object(schema_metadata));
+        extra.insert(
+            "schema_metadata".to_string(),
+            Value::Object(schema_metadata),
+        );
 
         let metadata = CollectionMetadata {
             instance: self.config.instance.clone(),
