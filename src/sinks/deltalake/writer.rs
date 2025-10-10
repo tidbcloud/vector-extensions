@@ -867,74 +867,100 @@ impl DeltaLakeWriter {
             DeltaOps::try_from_uri(&table_uri).await?
         };
 
-        // Try to write to existing table first, create if it doesn't exist
-        info!("Will attempt to write to Delta table at {}", table_uri);
-
-        // Try to write directly to existing table first
-        let write_result = table_ops.write(vec![record_batch.clone()]).await;
-
-        match write_result {
-            Ok(table) => {
-                info!(
-                    "✅ Successfully wrote to existing Delta table at {}",
-                    table_uri
-                );
-                info!("Table version: {:?}", table.version());
-                return Ok(());
+        // Check if table exists first using filesystem check
+        info!("Checking if Delta table exists at {}", table_uri);
+        
+        let table_exists = if table_uri.starts_with("s3://") {
+            // For S3, we can't easily check, so we'll try to load and handle errors
+            match table_ops.load().await {
+                Ok(table) => {
+                    info!("✅ Delta table exists at {} (version: {:?})", table_uri, table.0.version());
+                    true
+                }
+                Err(e) => {
+                    if e.to_string().contains("does not exist") || e.to_string().contains("not found") {
+                        info!("Table doesn't exist at {}, will create new table", table_uri);
+                        false
+                    } else {
+                        error!("Failed to check if Delta table exists: {}", e);
+                        return Err(e.into());
+                    }
+                }
             }
-            Err(e)
-                if e.to_string().contains("does not exist")
-                    || e.to_string().contains("not found") =>
-            {
-                info!("Table doesn't exist, will create new table: {}", e);
-                // Continue to table creation logic below
+        } else {
+            // For local filesystem, check if _delta_log directory exists
+            let delta_log_path = std::path::Path::new(&table_uri).join("_delta_log");
+            if delta_log_path.exists() {
+                info!("✅ Delta table exists at {} (found _delta_log directory)", table_uri);
+                true
+            } else {
+                info!("Table doesn't exist at {}, will create new table", table_uri);
+                false
             }
-            Err(e) => {
-                error!("Failed to write to Delta table: {}", e);
-                return Err(e.into());
+        };
+
+        if table_exists {
+            // Table exists, write to it directly
+            info!("Writing to existing Delta table at {}", table_uri);
+            
+            // Recreate table_ops since it was moved in the load() call
+            let table_ops = if let Some(storage_options) = &self.storage_options {
+                DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
+            } else {
+                DeltaOps::try_from_uri(&table_uri).await?
+            };
+            
+            let write_result = table_ops.write(vec![record_batch.clone()]).await;
+            
+            match write_result {
+                Ok(table) => {
+                    info!("✅ Successfully wrote to existing Delta table at {}", table_uri);
+                    info!("Table version: {:?}", table.version());
+                    return Ok(());
+                }
+                Err(e) => {
+                    error!("Failed to write to existing Delta table: {}", e);
+                    return Err(e.into());
+                }
             }
         }
 
         // If we reach here, table doesn't exist and needs to be created
-        let table_exists = false;
+        // Create new table first
+        info!(
+            "Creating new Delta table at {} for table {}",
+            table_uri, self.table_config.name
+        );
+        let schema = self.schema.as_ref().ok_or("Schema not available")?;
 
-        if !table_exists {
-            // Create new table first
-            info!(
-                "Creating new Delta table at {} for table {}",
-                table_uri, self.table_config.name
-            );
-            let schema = self.schema.as_ref().ok_or("Schema not available")?;
+        let mut create_builder = CreateBuilder::new().with_location(&table_uri).with_columns(
+            schema
+                .fields()
+                .iter()
+                .map(|field| self.arrow_field_to_delta_field(field)),
+        );
 
-            let mut create_builder = CreateBuilder::new().with_location(&table_uri).with_columns(
-                schema
-                    .fields()
-                    .iter()
-                    .map(|field| self.arrow_field_to_delta_field(field)),
-            );
-
-            // Add storage options for S3
-            if let Some(storage_options) = &self.storage_options {
-                create_builder = create_builder.with_storage_options(storage_options.clone());
-            }
-
-            // Add partition columns if configured
-            if let Some(partition_cols) = &self.table_config.partition_by {
-                info!(
-                    "Setting partition columns for table {}: {:?}",
-                    self.table_config.name, partition_cols
-                );
-                create_builder = create_builder.with_partition_columns(partition_cols.clone());
-            } else {
-                info!(
-                    "No partition columns configured for table {}",
-                    self.table_config.name
-                );
-            }
-
-            create_builder.await?;
-            info!("Successfully created new Delta table");
+        // Add storage options for S3
+        if let Some(storage_options) = &self.storage_options {
+            create_builder = create_builder.with_storage_options(storage_options.clone());
         }
+
+        // Add partition columns if configured
+        if let Some(partition_cols) = &self.table_config.partition_by {
+            info!(
+                "Setting partition columns for table {}: {:?}",
+                self.table_config.name, partition_cols
+            );
+            create_builder = create_builder.with_partition_columns(partition_cols.clone());
+        } else {
+            info!(
+                "No partition columns configured for table {}",
+                self.table_config.name
+            );
+        }
+
+        create_builder.await?;
+        info!("Successfully created new Delta table");
 
         // Now write the data using DeltaOps - reload the table_ops to get the created table
         let table_ops = if let Some(storage_options) = &self.storage_options {
