@@ -123,55 +123,14 @@ impl CoprocessorCollector {
 
         info!("Fetching schema from: {}", url);
 
-        // Create HTTP client with TLS configuration if provided
-        let client = if let Some(tls_config) = tls {
-            // Create client with TLS configuration
-            let mut client_builder = reqwest::Client::builder();
-            
-            // Configure TLS settings
-            if let Some(verify_certificate) = tls_config.verify_certificate {
-                if !verify_certificate {
-                    client_builder = client_builder.danger_accept_invalid_certs(true);
-                }
-            }
-            
-            if let Some(verify_hostname) = tls_config.verify_hostname {
-                if !verify_hostname {
-                    client_builder = client_builder.danger_accept_invalid_hostnames(true);
-                }
-            }
-
-            // Add CA certificate if provided
-            if let Some(ca_file) = &tls_config.ca_file {
-                let ca_cert = std::fs::read(ca_file)
-                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read CA file {}: {}", ca_file.display(), e)))?;
-                let ca_cert = reqwest::Certificate::from_pem(&ca_cert)
-                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to parse CA certificate: {}", e)))?;
-                client_builder = client_builder.add_root_certificate(ca_cert);
-            }
-
-            // Add client certificate if provided
-            if let (Some(crt_file), Some(key_file)) = (&tls_config.crt_file, &tls_config.key_file) {
-                let cert = std::fs::read(crt_file)
-                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read certificate file {}: {}", crt_file.display(), e)))?;
-                let key = std::fs::read(key_file)
-                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read key file {}: {}", key_file.display(), e)))?;
-                
-                // Combine certificate and key into a single PEM file
-                let mut combined_pem = cert;
-                combined_pem.extend_from_slice(&key);
-                
-                let identity = reqwest::Identity::from_pem(&combined_pem)
-                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to parse client certificate: {}", e)))?;
-                client_builder = client_builder.identity(identity);
-            }
-
-            client_builder.build()
-                .map_err(|e| CollectionError::ConfigurationError(format!("Failed to build HTTP client: {}", e)))?
-        } else {
-            // Create basic HTTP client without TLS
-            reqwest::Client::new()
-        };
+        // Create HTTP client using shared helper to ensure consistent TLS behavior across the project
+        let client = crate::utils::http::build_reqwest_client(
+            tls.clone(),
+            Some(Duration::from_secs(10)),
+            Some(Duration::from_secs(5)),
+        )
+        .await
+        .map_err(|e| CollectionError::ConfigurationError(format!("Failed to build HTTP client: {}", e)))?;
 
         let response = client
             .get(&url)
