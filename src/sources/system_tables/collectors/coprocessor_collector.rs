@@ -1,12 +1,105 @@
 use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use http;
 use prost::Message;
 use serde_json::Value;
-use tonic::transport::{Channel, Endpoint};
-use tracing::{debug, info, warn};
+use tonic::transport::Channel;
+use tracing::{debug, error, info, warn};
+
+// TLS proxy implementation for gRPC connections
+mod tls_proxy {
+    use std::pin::Pin;
+
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio_openssl::SslStream;
+    use tracing::{error, info};
+    use vector_lib::tls::{tls_connector_builder, MaybeTlsSettings, TlsConfig};
+
+    /// Create a TLS proxy for gRPC connections, similar to topsql implementation
+    pub async fn create_tls_proxy(
+        tls_config: Option<&TlsConfig>,
+        address: &str,
+    ) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
+        info!("Creating TLS proxy for address: {}", address);
+        
+        let outbound = tls_connect(tls_config, address).await?;
+        let listener = TcpListener::bind("0.0.0.0:0").await?;
+        let local_address = listener.local_addr()?;
+
+        info!("TLS proxy listening on port: {}", local_address.port());
+
+        tokio::spawn(async move {
+            let res = accept_and_proxy(listener, outbound).await;
+            if let Err(error) = res {
+                error!("TLS proxy failed: {}", error);
+            }
+        });
+
+        Ok(local_address.port())
+    }
+
+    async fn tls_connect(
+        tls_config: Option<&TlsConfig>,
+        address: &str,
+    ) -> Result<SslStream<TcpStream>, Box<dyn std::error::Error + Send + Sync>> {
+        let uri = address.parse::<http::Uri>()?;
+        let host = uri.host().unwrap_or_default();
+        let port = uri.port().map(|p| p.as_u16()).unwrap_or(443);
+
+        info!("Connecting to TLS endpoint: {}:{}", host, port);
+        
+        let raw_stream = TcpStream::connect(format!("{}:{}", &host, port)).await?;
+
+        let tls_settings = MaybeTlsSettings::tls_client(tls_config)?;
+        let mut config_builder = tls_connector_builder(&tls_settings)?;
+        config_builder.set_alpn_protos(b"\x02h2")?;
+
+        let config = config_builder.build().configure()?;
+        let ssl = config.into_ssl(host)?;
+
+        let mut stream = SslStream::new(ssl, raw_stream)?;
+        Pin::new(&mut stream).connect().await?;
+
+        info!("TLS connection established to {}:{}", host, port);
+        Ok(stream)
+    }
+
+    async fn accept_and_proxy(
+        listener: TcpListener,
+        outbound: SslStream<TcpStream>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (inbound, _) = listener.accept().await?;
+        drop(listener);
+        transfer(inbound, outbound).await?;
+        Ok(())
+    }
+
+    async fn transfer(
+        mut inbound: tokio::net::TcpStream,
+        outbound: SslStream<TcpStream>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (mut ri, mut wi) = inbound.split();
+        let (mut ro, mut wo) = tokio::io::split(outbound);
+
+        let client_to_server = async {
+            tokio::io::copy(&mut ri, &mut wo).await?;
+            wo.shutdown().await
+        };
+
+        let server_to_client = async {
+            tokio::io::copy(&mut ro, &mut wi).await?;
+            wi.shutdown().await
+        };
+
+        tokio::try_join!(client_to_server, server_to_client)?;
+
+        Ok(())
+    }
+}
 
 use crate::sources::system_tables::data_collector::{
     CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
@@ -69,15 +162,16 @@ impl CoprocessorCollector {
             }
         };
 
-        // Build gRPC endpoint (use status port which is typically 10080 for standard TiDB setup)
-        // The status port is usually MySQL port + 6080, so 4000 -> 10080
-        let status_port = if port == 4000 { 10080 } else { port + 6080 };
+        // Build gRPC endpoint using topsql-style port calculation
+        // TiDB secondary port is typically used for gRPC (status port)
+        // For standard TiDB setup: MySQL port 4000 -> status port 10080
+        let grpc_port = if port == 4000 { 10080 } else { port + 6080 };
         let grpc_scheme = if matches!(config.config_type, CollectorConfigType::Coprocessor { tls: Some(_), .. }) {
             "https"
         } else {
             "http"
         };
-        let grpc_endpoint = format!("{}://{}:{}", grpc_scheme, host, status_port);
+        let grpc_endpoint = format!("{}://{}:{}", grpc_scheme, host, grpc_port);
 
         Ok(Self {
             config,
@@ -87,50 +181,90 @@ impl CoprocessorCollector {
         })
     }
 
-    /// Establish gRPC connection
+    /// Establish gRPC connection using topsql-style TLS proxy approach
     async fn create_grpc_connection(&self) -> Result<Channel, CollectionError> {
         info!("Creating gRPC connection to: {}", self.grpc_endpoint);
 
-        let mut endpoint = Endpoint::from_shared(self.grpc_endpoint.clone())
-            .map_err(|e| CollectionError::ConfigurationError(format!("Invalid endpoint: {}", e)))?
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5));
+        // Extract TLS config for topsql-style handling
+        let tls_config = match &self.config.config_type {
+            CollectorConfigType::Coprocessor { tls, .. } => tls.as_ref(),
+            _ => None,
+        };
 
-        // Configure TLS for gRPC if tls is present
-        if let CollectorConfigType::Coprocessor { tls: Some(ref tls), ref host, .. } = self.config.config_type {
-            // Build base TLS config, set SNI only when hostname verification is enabled
-            let mut tls_config = if tls.verify_hostname.unwrap_or(true) {
-                tonic::transport::ClientTlsConfig::new().domain_name(host.clone())
-            } else {
-                tonic::transport::ClientTlsConfig::new()
-            };
-
-            if let Some(ca_file) = &tls.ca_file {
-                let ca_bytes = std::fs::read(ca_file)
-                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read gRPC CA file {}: {}", ca_file.display(), e)))?;
-                let ca = tonic::transport::Certificate::from_pem(ca_bytes);
-                tls_config = tls_config.ca_certificate(ca);
-            }
-
-            if let (Some(crt_file), Some(key_file)) = (&tls.crt_file, &tls.key_file) {
-                let crt_bytes = std::fs::read(crt_file)
-                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read client cert {}: {}", crt_file.display(), e)))?;
-                let key_bytes = std::fs::read(key_file)
-                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read client key {}: {}", key_file.display(), e)))?;
-                let identity = tonic::transport::Identity::from_pem(crt_bytes, key_bytes);
-                tls_config = tls_config.identity(identity);
-            }
-
-            endpoint = endpoint
-                .tls_config(tls_config)
-                .map_err(|e| CollectionError::ConfigurationError(format!("Failed to apply gRPC TLS config: {}", e)))?;
-        }
+        let endpoint = if tls_config.is_none() {
+            // No TLS - direct connection like topsql
+            info!("No TLS config, using direct HTTP connection");
+            Channel::from_shared(self.grpc_endpoint.clone())
+                .map_err(|e| CollectionError::ConfigurationError(format!("Invalid endpoint: {}", e)))?
+                .http2_keep_alive_interval(Duration::from_secs(300))
+                .keep_alive_timeout(Duration::from_secs(10))
+                .keep_alive_while_idle(true)
+        } else {
+            // TLS enabled - use topsql-style TLS proxy approach
+            info!("TLS enabled, creating TLS proxy for gRPC connection");
+            
+            // Convert our TlsConfig to vector_lib::tls::TlsConfig
+            let vector_tls_config = self.convert_to_vector_tls_config(tls_config.unwrap())?;
+            
+            // Create TLS proxy and get local port
+            let proxy_port = tls_proxy::create_tls_proxy(Some(&vector_tls_config), &self.grpc_endpoint)
+                .await
+                .map_err(|e| CollectionError::ConfigurationError(format!("Failed to create TLS proxy: {}", e)))?;
+            
+            info!("TLS proxy created on local port: {}", proxy_port);
+            
+            // Connect to local proxy instead of remote endpoint
+            let proxy_endpoint = format!("http://127.0.0.1:{}", proxy_port);
+            Channel::from_shared(proxy_endpoint)
+                .map_err(|e| CollectionError::ConfigurationError(format!("Invalid proxy endpoint: {}", e)))?
+                .http2_keep_alive_interval(Duration::from_secs(300))
+                .keep_alive_timeout(Duration::from_secs(10))
+                .keep_alive_while_idle(true)
+        };
 
         let channel = endpoint.connect().await.map_err(|e| {
-            CollectionError::ConnectionError(format!("gRPC connection failed: {}", e))
+            let error_details = format!(
+                "gRPC connection failed: {} (endpoint: {}, TLS enabled: {})",
+                e,
+                self.grpc_endpoint,
+                matches!(self.config.config_type, CollectorConfigType::Coprocessor { tls: Some(_), .. })
+            );
+            
+            // Print additional error context for debugging
+            if let Some(source) = e.source() {
+                error!("gRPC connection error source: {}", source);
+            }
+            
+            CollectionError::ConnectionError(error_details)
         })?;
 
         Ok(channel)
+    }
+
+    /// Convert our TlsConfig to vector_lib::tls::TlsConfig for TLS proxy
+    fn convert_to_vector_tls_config(&self, tls: &crate::sources::system_tables::TlsConfig) -> Result<vector_lib::tls::TlsConfig, CollectionError> {
+        let mut vector_tls = vector_lib::tls::TlsConfig::default();
+        
+        // Set verification options
+        if let Some(verify_certificate) = tls.verify_certificate {
+            vector_tls.verify_certificate = Some(verify_certificate);
+        }
+        if let Some(verify_hostname) = tls.verify_hostname {
+            vector_tls.verify_hostname = Some(verify_hostname);
+        }
+        
+        // Set certificate files
+        if let Some(ca_file) = &tls.ca_file {
+            vector_tls.ca_file = Some(ca_file.clone());
+        }
+        if let Some(crt_file) = &tls.crt_file {
+            vector_tls.crt_file = Some(crt_file.clone());
+        }
+        if let Some(key_file) = &tls.key_file {
+            vector_tls.key_file = Some(key_file.clone());
+        }
+        
+        Ok(vector_tls)
     }
 
     /// Get table schema via HTTP API
@@ -147,13 +281,13 @@ impl CoprocessorCollector {
                 ))
             }
         };
-        let status_port = if port == 4000 { 10080 } else { port + 6080 }; // TiDB status port
+        let grpc_port = if port == 4000 { 10080 } else { port + 6080 }; // TiDB status port
 
         // Use HTTPS if TLS config is provided, otherwise use HTTP
         let protocol = if tls.is_some() { "https" } else { "http" };
         let url = format!(
             "{}://{}:{}/schema/{}/{}",
-            protocol, host, status_port, table.source_schema, table.source_table
+            protocol, host, grpc_port, table.source_schema, table.source_table
         );
 
         info!("Fetching schema from: {}", url);
