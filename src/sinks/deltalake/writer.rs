@@ -354,8 +354,10 @@ impl DeltaLakeWriter {
             // For decimal, we'll use Float64 as a reasonable approximation
             DataType::Float64
         } else if mysql_type_lower.contains("timestamp") {
-            // Use Timestamp for TIMESTAMP columns to enable native TIMESTAMP support
-            DataType::Timestamp(TimeUnit::Microsecond, None)
+            // TODO: Change back to Timestamp type when Delta Lake writer features are properly supported
+            // Use Utf8 instead of Timestamp to avoid writer feature requirements
+            // Original: DataType::Timestamp(TimeUnit::Microsecond, None)
+            DataType::Utf8
         } else if mysql_type_lower.contains("datetime") {
             // Use Utf8 for DATETIME columns (they don't have timezone info)
             DataType::Utf8
