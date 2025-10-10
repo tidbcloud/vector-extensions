@@ -424,7 +424,9 @@ impl SourceConfig for SystemTablesConfig {
                 database: "unused".to_string(),
                 max_connections: None,
                 connect_timeout: None,
-                tls: None,
+                // Preserve database_tls here so coprocessor collectors can use it
+                // for HTTPS schema fetching via controller -> for_coprocessor(tls)
+                tls: config.database_tls.clone(),
             }
         };
 
