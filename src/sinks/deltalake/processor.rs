@@ -116,7 +116,7 @@ impl DeltaLakeSink {
                 .cloned()
                 .unwrap_or_else(|| DeltaTableConfig {
                     name: table_name.to_string(),
-                    partition_by: Some(vec!["date".to_string(), "_vector_instance".to_string()]),
+                    partition_by: Some(vec!["date".to_string()]),
                     schema_evolution: Some(true),
                 });
 
