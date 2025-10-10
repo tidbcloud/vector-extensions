@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use deltalake::kernel::{DataType as DeltaDataType, StructField};
+use deltalake::kernel::{DataType as DeltaDataType, StructField, TableFeatures};
 use {
     arrow::array::{
         ArrayRef, BooleanBuilder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
@@ -354,10 +354,8 @@ impl DeltaLakeWriter {
             // For decimal, we'll use Float64 as a reasonable approximation
             DataType::Float64
         } else if mysql_type_lower.contains("timestamp") {
-            // TODO: Change back to Timestamp type when Delta Lake writer features are properly supported
-            // Use Utf8 instead of Timestamp to avoid writer feature requirements
-            // Original: DataType::Timestamp(TimeUnit::Microsecond, None)
-            DataType::Utf8
+            // Use Timestamp for TIMESTAMP columns to enable native TIMESTAMP support
+            DataType::Timestamp(TimeUnit::Microsecond, None)
         } else if mysql_type_lower.contains("datetime") {
             // Use Utf8 for DATETIME columns (they don't have timezone info)
             DataType::Utf8
@@ -963,6 +961,28 @@ impl DeltaLakeWriter {
 
         create_builder.await?;
         info!("Successfully created new Delta table");
+
+        // Add TimestampWithoutTimezone feature to support Timestamp columns
+        info!("Adding TimestampWithoutTimezone feature to Delta table");
+        let table_ops_for_feature = if let Some(storage_options) = &self.storage_options {
+            DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
+        } else {
+            DeltaOps::try_from_uri(&table_uri).await?
+        };
+        
+        match table_ops_for_feature
+            .add_feature()
+            .with_feature(TableFeatures::TimestampWithoutTimezone)
+            .with_allow_protocol_versions_increase(true)
+            .await
+        {
+            Ok(_) => {
+                info!("✅ Successfully added TimestampWithoutTimezone feature to Delta table");
+            }
+            Err(e) => {
+                warn!("Failed to add TimestampWithoutTimezone feature: {}. Continuing without it.", e);
+            }
+        }
 
         // Now write the data using DeltaOps - reload the table_ops to get the created table
         let table_ops = if let Some(storage_options) = &self.storage_options {
