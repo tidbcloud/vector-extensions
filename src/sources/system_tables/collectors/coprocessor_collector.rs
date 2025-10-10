@@ -72,7 +72,12 @@ impl CoprocessorCollector {
         // Build gRPC endpoint (use status port which is typically 10080 for standard TiDB setup)
         // The status port is usually MySQL port + 6080, so 4000 -> 10080
         let status_port = if port == 4000 { 10080 } else { port + 6080 };
-        let grpc_endpoint = format!("http://{}:{}", host, status_port);
+        let grpc_scheme = if matches!(config.config_type, CollectorConfigType::Coprocessor { tls: Some(_), .. }) {
+            "https"
+        } else {
+            "http"
+        };
+        let grpc_endpoint = format!("{}://{}:{}", grpc_scheme, host, status_port);
 
         Ok(Self {
             config,
@@ -86,10 +91,40 @@ impl CoprocessorCollector {
     async fn create_grpc_connection(&self) -> Result<Channel, CollectionError> {
         info!("Creating gRPC connection to: {}", self.grpc_endpoint);
 
-        let endpoint = Endpoint::from_shared(self.grpc_endpoint.clone())
+        let mut endpoint = Endpoint::from_shared(self.grpc_endpoint.clone())
             .map_err(|e| CollectionError::ConfigurationError(format!("Invalid endpoint: {}", e)))?
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5));
+
+        // Configure TLS for gRPC if tls is present
+        if let CollectorConfigType::Coprocessor { tls: Some(ref tls), ref host, .. } = self.config.config_type {
+            // Build base TLS config, set SNI only when hostname verification is enabled
+            let mut tls_config = if tls.verify_hostname.unwrap_or(true) {
+                tonic::transport::ClientTlsConfig::new().domain_name(host.clone())
+            } else {
+                tonic::transport::ClientTlsConfig::new()
+            };
+
+            if let Some(ca_file) = &tls.ca_file {
+                let ca_bytes = std::fs::read(ca_file)
+                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read gRPC CA file {}: {}", ca_file.display(), e)))?;
+                let ca = tonic::transport::Certificate::from_pem(ca_bytes);
+                tls_config = tls_config.ca_certificate(ca);
+            }
+
+            if let (Some(crt_file), Some(key_file)) = (&tls.crt_file, &tls.key_file) {
+                let crt_bytes = std::fs::read(crt_file)
+                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read client cert {}: {}", crt_file.display(), e)))?;
+                let key_bytes = std::fs::read(key_file)
+                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read client key {}: {}", key_file.display(), e)))?;
+                let identity = tonic::transport::Identity::from_pem(crt_bytes, key_bytes);
+                tls_config = tls_config.identity(identity);
+            }
+
+            endpoint = endpoint
+                .tls_config(tls_config)
+                .map_err(|e| CollectionError::ConfigurationError(format!("Failed to apply gRPC TLS config: {}", e)))?;
+        }
 
         let channel = endpoint.connect().await.map_err(|e| {
             CollectionError::ConnectionError(format!("gRPC connection failed: {}", e))
