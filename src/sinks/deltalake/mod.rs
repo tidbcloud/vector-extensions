@@ -566,8 +566,38 @@ impl DeltaLakeConfig {
             }
             AwsAuthentication::Default { .. } => {
                 info!("Using default AWS credential chain for Delta Lake S3 access");
-                // Default credential chain will be used - let AWS SDK handle it naturally
-                // Region is already set in the common section above
+                
+                // For Delta Lake, we need to ensure AWS credentials are available in environment
+                // Check if AWS credentials are available in environment variables
+                if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
+                    storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
+                }
+                if let Ok(secret_key) = std::env::var("AWS_SECRET_ACCESS_KEY") {
+                    storage_options.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key);
+                }
+                if let Ok(session_token) = std::env::var("AWS_SESSION_TOKEN") {
+                    storage_options.insert("AWS_SESSION_TOKEN".to_string(), session_token);
+                }
+                
+                // Set AWS profile if available
+                if let Ok(profile) = std::env::var("AWS_PROFILE") {
+                    storage_options.insert("AWS_PROFILE".to_string(), profile);
+                }
+                
+                // Set credentials file path if available
+                if let Ok(creds_file) = std::env::var("AWS_SHARED_CREDENTIALS_FILE") {
+                    storage_options.insert("AWS_SHARED_CREDENTIALS_FILE".to_string(), creds_file);
+                } else {
+                    // Set default credentials file path
+                    if let Ok(home) = std::env::var("HOME") {
+                        let default_creds_file = format!("{}/.aws/credentials", home);
+                        if std::path::Path::new(&default_creds_file).exists() {
+                            storage_options.insert("AWS_SHARED_CREDENTIALS_FILE".to_string(), default_creds_file);
+                        }
+                    }
+                }
+                
+                info!("Default AWS credential chain configured for Delta Lake");
             }
         }
 

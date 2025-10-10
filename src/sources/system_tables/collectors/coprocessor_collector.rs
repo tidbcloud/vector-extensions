@@ -145,10 +145,9 @@ impl CoprocessorCollector {
         let table_id = schema_json["id"].as_i64().unwrap_or(0);
 
         info!(
-            "Parsed table schema from HTTP API: table_id={}, raw_schema={}",
+            "Parsed table schema from HTTP API: table_id={}, columns_count={}",
             table_id,
-            serde_json::to_string_pretty(&schema_json)
-                .unwrap_or_else(|_| "Failed to serialize".to_string())
+            schema_json["cols"].as_array().map(|a| a.len()).unwrap_or(0)
         );
 
         let columns = if let Some(cols) = schema_json["cols"].as_array() {
@@ -164,14 +163,7 @@ impl CoprocessorCollector {
                 })
                 .collect();
 
-            info!(
-                "Parsed {} columns: {:?}",
-                parsed_cols.len(),
-                parsed_cols
-                    .iter()
-                    .map(|c| (c.id, c.tp, &c.name))
-                    .collect::<Vec<_>>()
-            );
+            info!("Parsed {} columns from schema", parsed_cols.len());
 
             parsed_cols
         } else {
@@ -649,7 +641,7 @@ impl CoprocessorCollector {
                     "Using row format parsing (encode_type=TypeDefault) for table {}.{}",
                     table.source_schema, table.source_table
                 );
-                self.parse_row_format_with_schema(data, table_schema)
+                self.parse_row_format_with_schema(data, table_schema, &table.source_table)
             }
             1 => {
                 // TypeChunk - chunk format parsing (currently not fully implemented)
@@ -658,14 +650,14 @@ impl CoprocessorCollector {
                     table.source_schema, table.source_table
                 );
                 warn!("Chunk format parsing is not fully implemented yet, using row format as fallback");
-                self.parse_row_format_with_schema(data, table_schema)
+                self.parse_row_format_with_schema(data, table_schema, &table.source_table)
             }
             _ => {
                 warn!(
                     "Unknown encode_type {} for table {}.{}, defaulting to row format",
                     encode_type, table.source_schema, table.source_table
                 );
-                self.parse_row_format_with_schema(data, table_schema)
+                self.parse_row_format_with_schema(data, table_schema, &table.source_table)
             }
         }
     }
@@ -675,6 +667,7 @@ impl CoprocessorCollector {
         &self,
         data: &[u8],
         table_schema: &TableSchema,
+        table_name: &str,
     ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
         debug!(
             "Parsing row format with provided schema: {} bytes, {} columns",
@@ -777,8 +770,8 @@ impl CoprocessorCollector {
                 break;
             }
 
-            // Log summary for first few rows
-            if row_index < 5 {
+            // Log summary for first few rows (only for CLUSTER_STATEMENTS_SUMMARY table)
+            if row_index < 5 && table_name == "CLUSTER_STATEMENTS_SUMMARY" {
                 let digest = row.get("DIGEST").unwrap_or(&Value::Null);
                 let exec_count = row.get("EXEC_COUNT").unwrap_or(&Value::Null);
                 let digest_text_len = row
@@ -791,7 +784,7 @@ impl CoprocessorCollector {
                         }
                     })
                     .unwrap_or(0);
-                info!("Row {} summary: DIGEST={:?}, EXEC_COUNT={:?}, DIGEST_TEXT_len={:?}, final_offset={}", 
+                debug!("Row {} summary: DIGEST={:?}, EXEC_COUNT={:?}, DIGEST_TEXT_len={:?}, final_offset={}", 
                       row_index, digest, exec_count, digest_text_len, offset);
             }
 
@@ -822,19 +815,6 @@ impl CoprocessorCollector {
         let flag = data[offset];
         let mut new_offset = offset + 1;
 
-        // Debug: Show flag and next bytes for first few calls
-        // if offset < 100 {
-        //     let preview_len = std::cmp::min(16, data.len() - offset);
-        //     let hex_preview: String = data[offset..offset + preview_len]
-        //     .iter()
-        //     .map(|b| format!("{:02x}", b))
-        //     .collect::<Vec<_>>()
-        //     .join(" ");
-        //     info!(
-        //         "RUST decode_value_from_bytes: offset={}, flag=0x{:02x}, next_bytes=[{}]",
-        //         offset, flag, hex_preview
-        //     );
-        // }
 
         let value = match flag {
             0x00 => Value::Null, // NilFlag
