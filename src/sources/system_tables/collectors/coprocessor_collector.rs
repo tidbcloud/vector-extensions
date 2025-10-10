@@ -103,9 +103,9 @@ impl CoprocessorCollector {
         &self,
         table: &TableConfig,
     ) -> Result<TableSchema, CollectionError> {
-        // Extract host and status port from coprocessor config
-        let (host, port) = match &self.config.config_type {
-            CollectorConfigType::Coprocessor { host, port, .. } => (host, *port),
+        // Extract host, port, and TLS config from coprocessor config
+        let (host, port, tls) = match &self.config.config_type {
+            CollectorConfigType::Coprocessor { host, port, tls, .. } => (host, *port, tls),
             _ => {
                 return Err(CollectionError::ConfigurationError(
                     "Invalid config type for coprocessor table schema fetch".to_string(),
@@ -114,14 +114,65 @@ impl CoprocessorCollector {
         };
         let status_port = if port == 4000 { 10080 } else { port + 6080 }; // TiDB status port
 
+        // Use HTTPS if TLS config is provided, otherwise use HTTP
+        let protocol = if tls.is_some() { "https" } else { "http" };
         let url = format!(
-            "http://{}:{}/schema/{}/{}",
-            host, status_port, table.source_schema, table.source_table
+            "{}://{}:{}/schema/{}/{}",
+            protocol, host, status_port, table.source_schema, table.source_table
         );
 
         info!("Fetching schema from: {}", url);
 
-        let client = reqwest::Client::new();
+        // Create HTTP client with TLS configuration if provided
+        let client = if let Some(tls_config) = tls {
+            // Create client with TLS configuration
+            let mut client_builder = reqwest::Client::builder();
+            
+            // Configure TLS settings
+            if let Some(verify_certificate) = tls_config.verify_certificate {
+                if !verify_certificate {
+                    client_builder = client_builder.danger_accept_invalid_certs(true);
+                }
+            }
+            
+            if let Some(verify_hostname) = tls_config.verify_hostname {
+                if !verify_hostname {
+                    client_builder = client_builder.danger_accept_invalid_hostnames(true);
+                }
+            }
+
+            // Add CA certificate if provided
+            if let Some(ca_file) = &tls_config.ca_file {
+                let ca_cert = std::fs::read(ca_file)
+                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read CA file {}: {}", ca_file.display(), e)))?;
+                let ca_cert = reqwest::Certificate::from_pem(&ca_cert)
+                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to parse CA certificate: {}", e)))?;
+                client_builder = client_builder.add_root_certificate(ca_cert);
+            }
+
+            // Add client certificate if provided
+            if let (Some(crt_file), Some(key_file)) = (&tls_config.crt_file, &tls_config.key_file) {
+                let cert = std::fs::read(crt_file)
+                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read certificate file {}: {}", crt_file.display(), e)))?;
+                let key = std::fs::read(key_file)
+                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to read key file {}: {}", key_file.display(), e)))?;
+                
+                // Combine certificate and key into a single PEM file
+                let mut combined_pem = cert;
+                combined_pem.extend_from_slice(&key);
+                
+                let identity = reqwest::Identity::from_pem(&combined_pem)
+                    .map_err(|e| CollectionError::ConfigurationError(format!("Failed to parse client certificate: {}", e)))?;
+                client_builder = client_builder.identity(identity);
+            }
+
+            client_builder.build()
+                .map_err(|e| CollectionError::ConfigurationError(format!("Failed to build HTTP client: {}", e)))?
+        } else {
+            // Create basic HTTP client without TLS
+            reqwest::Client::new()
+        };
+
         let response = client
             .get(&url)
             .timeout(Duration::from_secs(10))

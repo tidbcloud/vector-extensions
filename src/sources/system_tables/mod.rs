@@ -72,16 +72,16 @@ pub struct SystemTablesConfig {
     /// Kubernetes instance label for nextgen mode
     pub label_k8s_instance: Option<String>,
 
-    /// Database username
-    pub database_username: String,
-    /// Database password
-    pub database_password: String,
-    /// Database host
-    pub database_host: String,
-    /// Database port
-    pub database_port: u16,
-    /// Database name
-    pub database_name: String,
+    /// Database username (required for SQL collection method, optional for coprocessor)
+    pub database_username: Option<String>,
+    /// Database password (required for SQL collection method, optional for coprocessor)
+    pub database_password: Option<String>,
+    /// Database host (required for SQL collection method, optional for coprocessor)
+    pub database_host: Option<String>,
+    /// Database port (required for SQL collection method, optional for coprocessor)
+    pub database_port: Option<u16>,
+    /// Database name (required for SQL collection method, optional for coprocessor)
+    pub database_name: Option<String>,
     /// Database max connections
     pub database_max_connections: Option<u32>,
     /// Database connect timeout
@@ -180,6 +180,38 @@ pub fn default_collection_method() -> String {
 
 /// Helper functions for reading environment variables
 impl SystemTablesConfig {
+    /// Validate configuration based on collection method
+    pub fn validate(&self) -> vector::Result<()> {
+        match self.collection_method.to_lowercase().as_str() {
+            "sql" => {
+                // For SQL collection method, database fields are required
+                if self.database_username.is_none() {
+                    return Err("missing field `database_username` in `sources.tidb_system_tables` (required for SQL collection method)".into());
+                }
+                if self.database_password.is_none() {
+                    return Err("missing field `database_password` in `sources.tidb_system_tables` (required for SQL collection method)".into());
+                }
+                if self.database_host.is_none() {
+                    return Err("missing field `database_host` in `sources.tidb_system_tables` (required for SQL collection method)".into());
+                }
+                if self.database_port.is_none() {
+                    return Err("missing field `database_port` in `sources.tidb_system_tables` (required for SQL collection method)".into());
+                }
+                if self.database_name.is_none() {
+                    return Err("missing field `database_name` in `sources.tidb_system_tables` (required for SQL collection method)".into());
+                }
+            }
+            "coprocessor" | "http_api" | "custom_grpc" => {
+                // For coprocessor and other methods, database fields are optional
+                // These methods use gRPC/HTTP to communicate directly with TiKV/PD
+                info!("Using {} collection method - database connection fields are optional", self.collection_method);
+            }
+            _ => {
+                return Err(format!("unsupported collection method: {}. Supported methods: sql, coprocessor, http_api, custom_grpc", self.collection_method).into());
+            }
+        }
+        Ok(())
+    }
     /// Helper function to build TLS configuration from environment variables
     fn build_tls_config_from_env(
         ca_file_env: &str,
@@ -225,21 +257,21 @@ impl SystemTablesConfig {
             self.label_k8s_instance = Some(val);
         }
         if let Ok(val) = env::var(DatabaseEnvVars::USERNAME) {
-            self.database_username = val;
+            self.database_username = Some(val);
         }
         if let Ok(val) = env::var(DatabaseEnvVars::PASSWORD) {
-            self.database_password = val;
+            self.database_password = Some(val);
         }
         if let Ok(val) = env::var(DatabaseEnvVars::HOST) {
-            self.database_host = val;
+            self.database_host = Some(val);
         }
         if let Ok(val) = env::var(DatabaseEnvVars::PORT) {
             if let Ok(port) = val.parse() {
-                self.database_port = port;
+                self.database_port = Some(port);
             }
         }
         if let Ok(val) = env::var(DatabaseEnvVars::DATABASE) {
-            self.database_name = val;
+            self.database_name = Some(val);
         }
         if let Ok(val) = env::var(DatabaseEnvVars::MAX_CONNECTIONS) {
             if let Ok(connections) = val.parse() {
@@ -304,11 +336,11 @@ impl GenerateConfig for SystemTablesConfig {
             pd_address: Some("127.0.0.1:2379".to_owned()),
             tidb_group: None,
             label_k8s_instance: None,
-            database_username: "root".to_owned(),
-            database_password: "".to_owned(),
-            database_host: "127.0.0.1".to_owned(),
-            database_port: 4000,
-            database_name: "test".to_owned(),
+            database_username: Some("root".to_owned()),
+            database_password: Some("".to_owned()),
+            database_host: Some("127.0.0.1".to_owned()),
+            database_port: Some(4000),
+            database_name: Some("test".to_owned()),
             database_max_connections: Some(10),
             database_connect_timeout: Some(30),
             short_interval: 5,
@@ -340,12 +372,20 @@ impl SourceConfig for SystemTablesConfig {
         let mut config = self.clone();
         config.merge_with_env();
 
+        // Validate configuration based on collection method
+        config.validate()?;
+
         info!("Building system_tables source with configuration:");
-        info!(
-            "  Database: {}:{}/{}",
-            config.database_host, config.database_port, config.database_name
-        );
-        info!("  Username: {}", config.database_username);
+        if let (Some(ref host), Some(port), Some(ref database)) = (&config.database_host, config.database_port, &config.database_name) {
+            info!("  Database: {}:{}/{}", host, port, database);
+        } else {
+            info!("  Database: Not configured (using coprocessor method)");
+        }
+        if let Some(ref username) = config.database_username {
+            info!("  Username: {}", username);
+        } else {
+            info!("  Username: Not configured (using coprocessor method)");
+        }
         info!("  Max connections: {:?}", config.database_max_connections);
         info!("  Connect timeout: {:?}", config.database_connect_timeout);
         info!("  Database TLS enabled: {}", config.database_tls.is_some());
@@ -364,11 +404,11 @@ impl SourceConfig for SystemTablesConfig {
         // Create DatabaseConfig from merged configuration only if using SQL collection method
         let database_config = if config.collection_method.to_lowercase() == "sql" {
             DatabaseConfig {
-                username: config.database_username.clone(),
-                password: config.database_password.clone(),
-                host: config.database_host.clone(),
-                port: config.database_port,
-                database: config.database_name.clone(),
+                username: config.database_username.clone().unwrap_or_default(),
+                password: config.database_password.clone().unwrap_or_default(),
+                host: config.database_host.clone().unwrap_or_default(),
+                port: config.database_port.unwrap_or(4000),
+                database: config.database_name.clone().unwrap_or_default(),
                 max_connections: config.database_max_connections,
                 connect_timeout: config.database_connect_timeout,
                 tls: config.database_tls.clone(),

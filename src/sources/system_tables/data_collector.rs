@@ -123,6 +123,8 @@ pub enum CollectorConfigType {
         grpc_timeout_secs: u64,
         #[allow(dead_code)]
         max_retries: u32,
+        /// TLS configuration for HTTP schema fetching
+        tls: Option<crate::sources::system_tables::TlsConfig>,
     },
     /// HTTP API collector configuration
     HttpApi {
@@ -153,6 +155,7 @@ impl CollectorConfig {
         port: u16,
         grpc_timeout_secs: Option<u64>,
         max_retries: Option<u32>,
+        tls: Option<crate::sources::system_tables::TlsConfig>,
     ) -> Self {
         Self {
             instance,
@@ -161,6 +164,7 @@ impl CollectorConfig {
                 port,
                 grpc_timeout_secs: grpc_timeout_secs.unwrap_or(30),
                 max_retries: max_retries.unwrap_or(3),
+                tls,
             },
         }
     }

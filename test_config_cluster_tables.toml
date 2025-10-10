@@ -13,6 +13,23 @@ database_connect_timeout = 30
 # PD configuration (for topology discovery)
 pd_address = "127.0.0.1:2379"
 
+# Database TLS configuration (for schema fetching and HTTP API calls)
+database_tls.verify_certificate = false
+database_tls.verify_hostname = false
+# database_tls.ca_file = "/path/to/ca.pem"  # Optional: CA certificate file
+# database_tls.crt_file = "/path/to/client.pem"  # Optional: Client certificate file
+# database_tls.key_file = "/path/to/client-key.pem"  # Optional: Client private key file
+
+# PD TLS configuration (for topology discovery)
+pd_tls.verify_certificate = false
+pd_tls.verify_hostname = false
+# pd_tls.ca_file = "/path/to/pd-ca.pem"  # Optional: PD CA certificate file
+# pd_tls.crt_file = "/path/to/pd-client.pem"  # Optional: PD client certificate file
+# pd_tls.key_file = "/path/to/pd-client-key.pem"  # Optional: PD client private key file
+
+# Nextgen mode configuration
+tidb_group = "default"  # Required for nextgen mode
+
 # Collection configuration
 short_interval = 5
 long_interval = 30

@@ -295,12 +295,14 @@ impl Controller {
         let collector_config = match self.collection_method {
             CollectionMethod::Coprocessor => {
                 // For coprocessor method, use coprocessor-specific config
+                // Pass database TLS config for HTTP schema fetching
                 CollectorConfig::for_coprocessor(
                     instance,
                     component.host.clone(),
                     component.primary_port,
                     Some(30), // grpc_timeout_secs
                     Some(3),  // max_retries
+                    self.database_config.tls.clone(),
                 )
             }
             CollectionMethod::Sql => {
@@ -329,6 +331,7 @@ impl Controller {
                     component.primary_port,
                     Some(30),
                     Some(3),
+                    self.database_config.tls.clone(),
                 )
             }
         };
