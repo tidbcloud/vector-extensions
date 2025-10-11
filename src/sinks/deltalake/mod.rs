@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_sts::Client as StsClient;
 use serde::{Deserialize, Serialize};
 use vector::{
     aws::{AwsAuthentication, RegionOrEndpoint},
@@ -291,7 +289,7 @@ impl DeltaLakeConfig {
         storage_options: &mut HashMap<String, String>,
         _service: &S3Service,
     ) -> vector::Result<()> {
-        debug!("=== Starting apply_s3_storage_options ===");
+        info!("=== Applying S3 storage options (aws_s3_upload_file style) ===");
         debug!("Initial storage_options: {:?}", storage_options);
 
         // Initialize S3 handlers for Delta Lake
@@ -324,251 +322,61 @@ impl DeltaLakeConfig {
             }
         }
 
-        // Handle AWS authentication - add credentials to storage options if available
-        info!("Configuring AWS authentication for Delta Lake S3 access");
+        // Configure AWS authentication for Delta Lake using storage_options
+        // Delta Lake's object_store crate supports multiple authentication methods:
+        // 1. Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
+        // 2. IAM Role ARN (AWS_IAM_ROLE_ARN + AWS_IAM_ROLE_SESSION_NAME) - for AssumeRole
+        // 3. AWS Profile (AWS_PROFILE + AWS_SHARED_CREDENTIALS_FILE)
+        // 4. EC2/ECS/Lambda instance roles (automatic)
+        //
+        // This matches aws_s3_upload_file behavior which uses the same AWS SDK credential chain
+        info!("Configuring AWS authentication for Delta Lake (storage_options approach)");
+        
+        // Check Vector's auth configuration and map to Delta Lake storage_options
         match &self.auth {
-            AwsAuthentication::AccessKey {
-                access_key_id,
-                secret_access_key,
-                session_token,
-                assume_role,
-                ..
-            } => {
+            AwsAuthentication::Role { assume_role, external_id, .. } => {
+                // Configure IAM Role ARN for AssumeRole
+                // Delta Lake's object_store will automatically call AssumeRole with these settings
+                info!("Configuring Delta Lake with IAM Role ARN: {}", assume_role);
+                storage_options.insert("AWS_IAM_ROLE_ARN".to_string(), assume_role.clone());
+                storage_options.insert("AWS_IAM_ROLE_SESSION_NAME".to_string(), "vector-deltalake".to_string());
+                
+                if let Some(ext_id) = external_id {
+                    storage_options.insert("AWS_IAM_ROLE_EXTERNAL_ID".to_string(), ext_id.clone());
+                    info!("✓ Using external ID for role assumption");
+                }
+                
+                info!("✓ Delta Lake will use AssumeRole with IAM Role ARN");
+            }
+            AwsAuthentication::AccessKey { access_key_id, secret_access_key, session_token, assume_role, .. } => {
+                // Use static credentials
                 storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id.to_string());
-                storage_options.insert(
-                    "AWS_SECRET_ACCESS_KEY".to_string(),
-                    secret_access_key.to_string(),
-                );
+                storage_options.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_access_key.to_string());
+                
                 if let Some(token) = session_token {
                     storage_options.insert("AWS_SESSION_TOKEN".to_string(), token.to_string());
                 }
+                
                 if let Some(role_arn) = assume_role {
-                    info!(
-                        "Using access key with assume role authentication: {}",
-                        role_arn
-                    );
-                } else {
-                    info!("Using access key AWS credentials for Delta Lake S3 access");
+                    info!("Using access key with assume role: {}", role_arn);
+                    // Can also configure AssumeRole with base credentials
+                    storage_options.insert("AWS_IAM_ROLE_ARN".to_string(), role_arn.clone());
+                    storage_options.insert("AWS_IAM_ROLE_SESSION_NAME".to_string(), "vector-deltalake".to_string());
                 }
+                
+                info!("✓ Delta Lake using static AWS credentials");
             }
-            AwsAuthentication::File {
-                credentials_file,
-                profile,
-                ..
-            } => {
-                info!("Using file-based AWS credential chain for Delta Lake S3 access");
-                // Set credentials file path for Delta Lake
-                storage_options.insert(
-                    "AWS_SHARED_CREDENTIALS_FILE".to_string(),
-                    credentials_file.clone(),
-                );
+            AwsAuthentication::File { credentials_file, profile, .. } => {
+                // Use AWS profile
                 storage_options.insert("AWS_PROFILE".to_string(), profile.clone());
-            }
-            AwsAuthentication::Role {
-                assume_role,
-                external_id,
-                ..
-            } => {
-                info!(
-                    "Using role-based AWS authentication for Delta Lake S3 access: {}",
-                    assume_role
-                );
-
-                // Implement complete AssumeRole operation to obtain temporary credentials
-                let region_name = if let Some(region) = &self.region {
-                    region
-                        .region()
-                        .map(|r| r.to_string())
-                        .unwrap_or_else(|| "us-west-2".to_string())
-                } else {
-                    "us-west-2".to_string()
-                };
-
-                info!(
-                    "Performing AssumeRole operation for region: {}",
-                    region_name
-                );
-
-                // Check if basic credentials are available
-                debug!("Checking for basic AWS credentials...");
-                let has_access_key = std::env::var("AWS_ACCESS_KEY_ID").is_ok();
-                let has_profile = std::env::var("AWS_PROFILE").is_ok();
-                let home_dir = std::env::var("HOME").unwrap_or_default();
-                let creds_file_path = format!("{}/.aws/credentials", home_dir);
-                let has_creds_file = std::path::Path::new(&creds_file_path).exists();
-
-                debug!("AWS_ACCESS_KEY_ID available: {}", has_access_key);
-                if has_access_key {
-                    let key_preview = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
-                    info!(
-                        "AWS_ACCESS_KEY_ID preview: {}...",
-                        &key_preview[..std::cmp::min(key_preview.len(), 10)]
-                    );
-                }
-                info!("AWS_PROFILE available: {}", has_profile);
-                if has_profile {
-                    info!(
-                        "AWS_PROFILE value: {}",
-                        std::env::var("AWS_PROFILE").unwrap_or_default()
-                    );
-                }
-                info!("AWS credentials file path: {}", creds_file_path);
-                info!("AWS credentials file exists: {}", has_creds_file);
-
-                let has_basic_creds = has_access_key || has_profile || has_creds_file;
-                info!("Has basic credentials: {}", has_basic_creds);
-
-                // if !has_basic_creds {
-                //     error!("No basic AWS credentials found for AssumeRole operation");
-                //     return Err("AssumeRole requires basic AWS credentials (AWS_ACCESS_KEY_ID or AWS_PROFILE or ~/.aws/credentials). Please configure base credentials first.".into());
-                // }
-
-                // info!("✓ Basic AWS credentials found, proceeding with AssumeRole");
-
-                // Create AWS config and STS client
-                info!("Creating AWS config and STS client...");
-                let region_provider = RegionProviderChain::default_provider().or_else("us-west-2");
-                info!("Loading AWS config from environment");
-                let shared_config = aws_config::from_env().region(region_provider).load().await;
-                info!("AWS config loaded, region: {:?}", shared_config.region());
-
-                // Check configuration status
-                info!("AWS SDK configuration check:");
-                info!("  Region: {:?}", shared_config.region());
-                info!("  Endpoint URL: {:?}", shared_config.endpoint_url());
-                info!("  App name: {:?}", shared_config.app_name());
-
-                let sts_client = StsClient::new(&shared_config);
-                info!("STS client created successfully");
-
-                // Check if AWS STS service is accessible
-                info!("🔍 Checking AWS STS service connectivity...");
-                match sts_client.get_caller_identity().send().await {
-                    Ok(identity) => {
-                        info!("✅ AWS STS service connectivity is normal");
-                        debug!(
-                            "Current identity: Account={:?}, UserId={:?}, Arn={:?}",
-                            identity.account(),
-                            identity.user_id(),
-                            identity.arn()
-                        );
-                    }
-                    Err(e) => {
-                        warn!("⚠️ AWS STS connectivity check failed: {}", e);
-                        debug!("STS connectivity error: {:?}", e);
-                        warn!("Continuing with AssumeRole attempt, but it may fail...");
-                    }
-                }
-
-                // Call AssumeRole
-                debug!("Building AssumeRole request...");
-                debug!("Role ARN: {}", assume_role);
-                debug!("Session name: vector-deltalake");
-                debug!("Duration: 3600 seconds");
-
-                let mut assume_role_builder = sts_client
-                    .assume_role()
-                    .role_arn(assume_role)
-                    .role_session_name("vector-deltalake")
-                    .duration_seconds(3600);
-
-                if let Some(ext_id) = external_id {
-                    info!("Using external ID for role assumption: {}", ext_id);
-                    debug!("External ID: {}", ext_id);
-                    assume_role_builder = assume_role_builder.external_id(ext_id);
-                } else {
-                    debug!("No external ID provided");
-                }
-
-                info!("Sending AssumeRole request to AWS STS...");
-
-                let assume_role_result = assume_role_builder.send().await;
-
-                match assume_role_result {
-                    Ok(resp) => {
-                        debug!("AssumeRole request completed successfully");
-                        let creds = resp.credentials().unwrap();
-                        info!("✓ AssumeRole authentication successful");
-
-                        // ---- Pass temporary credentials to delta-rs ---- (following reference project)
-                        debug!(
-                            "Access Key ID: {}...",
-                            &creds.access_key_id()
-                                [..std::cmp::min(creds.access_key_id().len(), 10)]
-                        );
-                        debug!(
-                            "Secret Access Key: {}...",
-                            &creds.secret_access_key()
-                                [..std::cmp::min(creds.secret_access_key().len(), 10)]
-                        );
-                        debug!(
-                            "Session Token: {}...",
-                            &creds.session_token()
-                                [..std::cmp::min(creds.session_token().len(), 20)]
-                        );
-                        debug!("Credentials expire at: {:?}", creds.expiration());
-
-                        storage_options.insert(
-                            "AWS_ACCESS_KEY_ID".to_string(),
-                            creds.access_key_id().to_string(),
-                        );
-                        storage_options.insert(
-                            "AWS_SECRET_ACCESS_KEY".to_string(),
-                            creds.secret_access_key().to_string(),
-                        );
-                        storage_options.insert(
-                            "AWS_SESSION_TOKEN".to_string(),
-                            creds.session_token().to_string(),
-                        );
-
-                        // Optional: Enable DynamoDB locking if needed (reference project configuration)
-                        // storage_options.insert("AWS_S3_LOCKING_PROVIDER".to_string(), "dynamodb".to_string());
-                        // storage_options.insert("DELTA_DYNAMO_TABLE_NAME".to_string(), "delta_log".to_string());
-
-                        info!("✓ Temporary credentials configured for Delta Lake");
-                        debug!("Storage options now contain {} keys", storage_options.len());
-                    }
-                    Err(e) => {
-                        error!("AssumeRole operation failed: {}", e);
-                        debug!("AssumeRole error details: {:?}", e);
-
-                        // Detailed error analysis
-                        let error_msg = e.to_string();
-                        error!("Analyzing AssumeRole failure reasons:");
-
-                        if error_msg.contains("dispatch failure") {
-                            error!("❌ Network connection failed - possible causes:");
-                            error!("   1. Network connectivity issues (check internet connection)");
-                            error!("   2. AWS STS service unreachable");
-                            error!("   3. Firewall or proxy blocking connection");
-                            error!("   4. DNS resolution issues");
-                            error!("   5. Basic AWS credentials invalid or expired");
-                        } else if error_msg.contains("credentials") {
-                            error!("❌ Credentials problem:");
-                            error!("   1. Basic AWS credentials invalid");
-                            error!("   2. Credentials expired");
-                            error!("   3. Insufficient permissions");
-                        } else if error_msg.contains("role") || error_msg.contains("assume") {
-                            error!("❌ Role problem:");
-                            error!("   1. Role ARN does not exist");
-                            error!("   2. Role trust policy does not allow current user/service to assume role");
-                            error!("   3. External ID mismatch");
-                        } else {
-                            error!("❌ Other error: {}", error_msg);
-                        }
-
-                        // Check network connectivity
-                        info!("🔍 Performing network connectivity check...");
-
-                        return Err(format!("AssumeRole failed: {}. Check network connectivity and AWS credentials.", e).into());
-                    }
-                }
+                storage_options.insert("AWS_SHARED_CREDENTIALS_FILE".to_string(), credentials_file.clone());
+                info!("✓ Delta Lake using AWS profile: {}", profile);
             }
             AwsAuthentication::Default { .. } => {
-                info!("Using default AWS credential chain for Delta Lake S3 access");
+                // Use default AWS credential chain (environment variables, instance roles, etc.)
+                // Check environment variables and pass them to Delta Lake
+                info!("Using default AWS credential chain");
                 
-                // For Delta Lake, we need to ensure AWS credentials are available in environment
-                // Check if AWS credentials are available in environment variables
                 if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
                     storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
                 }
@@ -578,28 +386,23 @@ impl DeltaLakeConfig {
                 if let Ok(session_token) = std::env::var("AWS_SESSION_TOKEN") {
                     storage_options.insert("AWS_SESSION_TOKEN".to_string(), session_token);
                 }
-                
-                // Set AWS profile if available
                 if let Ok(profile) = std::env::var("AWS_PROFILE") {
                     storage_options.insert("AWS_PROFILE".to_string(), profile);
                 }
                 
-                // Set credentials file path if available
-                if let Ok(creds_file) = std::env::var("AWS_SHARED_CREDENTIALS_FILE") {
-                    storage_options.insert("AWS_SHARED_CREDENTIALS_FILE".to_string(), creds_file);
-                } else {
-                    // Set default credentials file path
-                    if let Ok(home) = std::env::var("HOME") {
-                        let default_creds_file = format!("{}/.aws/credentials", home);
-                        if std::path::Path::new(&default_creds_file).exists() {
-                            storage_options.insert("AWS_SHARED_CREDENTIALS_FILE".to_string(), default_creds_file);
-                        }
+                // Set default credentials file path if it exists
+                if let Ok(home) = std::env::var("HOME") {
+                    let default_creds_file = format!("{}/.aws/credentials", home);
+                    if std::path::Path::new(&default_creds_file).exists() {
+                        storage_options.insert("AWS_SHARED_CREDENTIALS_FILE".to_string(), default_creds_file);
                     }
                 }
                 
-                info!("Default AWS credential chain configured for Delta Lake");
+                info!("✓ Delta Lake will use AWS SDK's default credential chain");
             }
         }
+        
+        info!("✓ AWS authentication configured for Delta Lake via storage_options");
 
         debug!("=== Completed apply_s3_storage_options ===");
         debug!("Final storage_options: {:?}", storage_options);
