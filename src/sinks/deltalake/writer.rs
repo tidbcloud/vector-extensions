@@ -867,59 +867,28 @@ impl DeltaLakeWriter {
             DeltaOps::try_from_uri(&table_uri).await?
         };
 
-        // Check if table exists first using filesystem check
-        info!("Checking if Delta table exists at {}", table_uri);
+        // Try to write directly first (avoid load() which can panic in deltalake-core 0.28.1)
+        info!("Attempting to write to Delta table at {}", table_uri);
         
-        let table_exists = if table_uri.starts_with("s3://") {
-            // For S3, we can't easily check, so we'll try to load and handle errors
-            match table_ops.load().await {
-                Ok(table) => {
-                    info!("✅ Delta table exists at {} (version: {:?})", table_uri, table.0.version());
-                    true
-                }
-                Err(e) => {
-                    if e.to_string().contains("does not exist") || e.to_string().contains("not found") {
-                        info!("Table doesn't exist at {}, will create new table", table_uri);
-                        false
-                    } else {
-                        error!("Failed to check if Delta table exists: {}", e);
-                        return Err(e.into());
-                    }
-                }
+        let write_result = table_ops.write(vec![record_batch.clone()]).await;
+        
+        match write_result {
+            Ok(table) => {
+                info!("✅ Successfully wrote to Delta table at {}", table_uri);
+                info!("Table version: {:?}", table.version());
+                return Ok(());
             }
-        } else {
-            // For local filesystem, check if _delta_log directory exists
-            let delta_log_path = std::path::Path::new(&table_uri).join("_delta_log");
-            if delta_log_path.exists() {
-                info!("✅ Delta table exists at {} (found _delta_log directory)", table_uri);
-                true
-            } else {
-                info!("Table doesn't exist at {}, will create new table", table_uri);
-                false
-            }
-        };
-
-        if table_exists {
-            // Table exists, write to it directly
-            info!("Writing to existing Delta table at {}", table_uri);
-            
-            // Recreate table_ops since it was moved in the load() call
-            let table_ops = if let Some(storage_options) = &self.storage_options {
-                DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
-            } else {
-                DeltaOps::try_from_uri(&table_uri).await?
-            };
-            
-            let write_result = table_ops.write(vec![record_batch.clone()]).await;
-            
-            match write_result {
-                Ok(table) => {
-                    info!("✅ Successfully wrote to existing Delta table at {}", table_uri);
-                    info!("Table version: {:?}", table.version());
-                    return Ok(());
-                }
-                Err(e) => {
-                    error!("Failed to write to existing Delta table: {}", e);
+            Err(e) => {
+                // Check if error is due to table not existing
+                let error_str = e.to_string();
+                if error_str.contains("does not exist") 
+                    || error_str.contains("not found") 
+                    || error_str.contains("Not a Delta table") {
+                    info!("Table doesn't exist, will create it. Error was: {}", error_str);
+                    // Fall through to table creation below
+                } else {
+                    // Other error, fail immediately
+                    error!("Failed to write to Delta table: {}", e);
                     return Err(e.into());
                 }
             }
