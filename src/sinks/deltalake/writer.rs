@@ -970,17 +970,26 @@ impl DeltaLakeWriter {
             DeltaOps::try_from_uri(&table_uri).await?
         };
         
-        match table_ops_for_feature
-            .add_feature()
-            .with_feature(TableFeatures::TimestampWithoutTimezone)
-            .with_allow_protocol_versions_increase(true)
-            .await
-        {
-            Ok(_) => {
-                info!("✅ Successfully added TimestampWithoutTimezone feature to Delta table");
+        // Load the table first to ensure state is initialized
+        match table_ops_for_feature.load().await {
+            Ok((loaded_table, _stream)) => {
+                // Now try to add the feature with the loaded table
+                match DeltaOps::from(loaded_table)
+                    .add_feature()
+                    .with_feature(TableFeatures::TimestampWithoutTimezone)
+                    .with_allow_protocol_versions_increase(true)
+                    .await
+                {
+                    Ok(_) => {
+                        info!("✅ Successfully added TimestampWithoutTimezone feature to Delta table");
+                    }
+                    Err(e) => {
+                        warn!("Failed to add TimestampWithoutTimezone feature: {}. Continuing without it.", e);
+                    }
+                }
             }
             Err(e) => {
-                warn!("Failed to add TimestampWithoutTimezone feature: {}. Continuing without it.", e);
+                warn!("Failed to load table for feature addition: {}. Continuing without TimestampWithoutTimezone feature.", e);
             }
         }
 
