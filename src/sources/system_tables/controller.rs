@@ -388,19 +388,35 @@ impl Controller {
         };
 
         let collection_config = &tables[0]; // Use first table's config as reference
-        let interval_duration = Duration::from_secs(parse_collection_interval(
+        let interval_seconds = parse_collection_interval(
             &collection_config.collection_interval,
             &CollectionConfig {
                 short_interval: 5,
                 long_interval: 1800,
                 retention_days: 7,
             },
-        ));
+        );
+        let interval_duration = Duration::from_secs(interval_seconds);
+
+        let table_names: Vec<String> = tables.iter().map(|t| t.source_table.clone()).collect();
+        
+        info!(
+            "📊 Starting collection loop for tables: [{}] with interval: {}s ({})",
+            table_names.join(", "),
+            interval_seconds,
+            &collection_config.collection_interval
+        );
 
         let mut collection_interval = interval(interval_duration);
 
         loop {
             collection_interval.tick().await;
+
+            info!(
+                "🔄 Collection cycle starting - interval: {}s, tables: [{}]",
+                interval_seconds,
+                table_names.join(", ")
+            );
 
             // Collect data from each table
             for table in &tables {
