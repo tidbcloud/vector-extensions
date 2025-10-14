@@ -359,8 +359,9 @@ impl Controller {
 
                 // Start the collector task
                 let out_clone = self.out.clone();
+                let collection_config_clone = self.collection_config.clone();
                 let handle = tokio::spawn(async move {
-                    Self::run_collector_task(collector, tables, out_clone).await;
+                    Self::run_collector_task(collector, tables, out_clone, collection_config_clone).await;
                 });
                 let task = CollectorTask {
                     handle,
@@ -382,29 +383,28 @@ impl Controller {
         collector: Box<dyn DataCollector>,
         tables: Vec<TableConfig>,
         mut out: SourceSender,
+        collection_config: CollectionConfig,
     ) {
         use crate::sources::system_tables::data_collector::utils::{
             create_event_from_result, parse_collection_interval,
         };
 
-        let collection_config = &tables[0]; // Use first table's config as reference
+        let table_config = &tables[0]; // Use first table's config as reference
         let interval_seconds = parse_collection_interval(
-            &collection_config.collection_interval,
-            &CollectionConfig {
-                short_interval: 5,
-                long_interval: 1800,
-                retention_days: 7,
-            },
+            &table_config.collection_interval,
+            &collection_config,
         );
         let interval_duration = Duration::from_secs(interval_seconds);
 
         let table_names: Vec<String> = tables.iter().map(|t| t.source_table.clone()).collect();
         
         info!(
-            "📊 Starting collection loop for tables: [{}] with interval: {}s ({})",
+            "📊 Starting collection loop for tables: [{}] with interval: {}s ({}) [config: short={}s, long={}s]",
             table_names.join(", "),
             interval_seconds,
-            &collection_config.collection_interval
+            &table_config.collection_interval,
+            collection_config.short_interval,
+            collection_config.long_interval
         );
 
         let mut collection_interval = interval(interval_duration);
