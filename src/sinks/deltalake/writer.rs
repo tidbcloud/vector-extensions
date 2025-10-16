@@ -354,11 +354,11 @@ impl DeltaLakeWriter {
             // For decimal, we'll use Float64 as a reasonable approximation
             DataType::Float64
         } else if mysql_type_lower.contains("timestamp") {
-            // Use Timestamp for TIMESTAMP columns to enable native TIMESTAMP support
-            DataType::Timestamp(TimeUnit::Microsecond, None)
+            // MySQL TIMESTAMP -> Arrow Timestamp with timezone (UTC)
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string().into()))
         } else if mysql_type_lower.contains("datetime") {
-            // Use Utf8 for DATETIME columns (they don't have timezone info)
-            DataType::Utf8
+            // MySQL DATETIME -> Arrow Timestamp without timezone (naive timestamp)
+            DataType::Timestamp(TimeUnit::Microsecond, None)
         } else if mysql_type_lower.contains("date") {
             DataType::Date32
         } else if mysql_type_lower.contains("time") {
@@ -754,6 +754,37 @@ impl DeltaLakeWriter {
                     }
                 }
                 let array = builder.finish();
+                Ok(Arc::new(array))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => {
+                // Build a Vec<Option<i64>> of microseconds since epoch, then attach timezone
+                let mut values: Vec<Option<i64>> = Vec::with_capacity(events.len());
+                for event in events.iter() {
+                    if let Event::Log(log_event) = event {
+                        let v = match log_event.get(field.name().as_str()) {
+                            Some(LogValue::Integer(microseconds)) => Some(*microseconds),
+                            Some(LogValue::Bytes(bytes)) => {
+                                if let Ok(s) = std::str::from_utf8(bytes.as_ref()) {
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+                                        Some(dt.timestamp_micros())
+                                    } else if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                        Some(naive_dt.and_utc().timestamp_micros())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+                        values.push(v);
+                    } else {
+                        values.push(None);
+                    }
+                }
+                // tz is Arc<str>; clone to satisfy Into<Arc<str>>
+                let array = arrow::array::TimestampMicrosecondArray::from(values).with_timezone(tz.clone());
                 Ok(Arc::new(array))
             }
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
