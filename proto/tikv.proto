@@ -16,6 +16,7 @@ message EmptyResponse {}
 message ResourceUsageRecord {
   oneof record_oneof {
     GroupTagRecord record = 1;
+    RegionRecord region_record = 2;
   }
 }
 
@@ -23,6 +24,12 @@ message ResourceUsageRecord {
 message GroupTagRecord {
   bytes resource_group_tag = 1;
   repeated GroupTagRecordItem items = 2;
+}
+
+// RegionRecord is a set of resource usage data grouped by region.
+message RegionRecord {
+    uint64 region_id = 1;
+    repeated GroupTagRecordItem items = 2;
 }
 
 message GroupTagRecordItem {

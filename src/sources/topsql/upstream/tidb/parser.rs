@@ -143,6 +143,8 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                     stmt_kv_exec_count: psd.stmt_kv_exec_count.clone(),
                     stmt_duration_sum_ns: psd.stmt_duration_sum_ns,
                     stmt_duration_count: psd.stmt_duration_count,
+                    stmt_network_in_bytes: 0,
+                    stmt_network_out_bytes: 0,
                 };
                 match digest_items.get_mut(&k) {
                     None => {

@@ -30,6 +30,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
             Some(RecordOneof::Record(record)) => {
                 Self::parse_tikv_record(record, instance, schema_cache)
             }
+            Some(RecordOneof::RegionRecord(_)) => {
+                // We don't care about RegionRecord for now.
+                vec![]
+            }
             None => vec![],
         }
     }

@@ -16,6 +16,7 @@ impl ByteSizeOf for RecordOneof {
     fn allocated_bytes(&self) -> usize {
         match self {
             RecordOneof::Record(record) => record.resource_group_tag.len() + record.items.size_of(),
+            RecordOneof::RegionRecord(record) => 64 + record.items.size_of(),
         }
     }
 }
