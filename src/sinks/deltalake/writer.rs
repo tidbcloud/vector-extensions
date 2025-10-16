@@ -870,7 +870,17 @@ impl DeltaLakeWriter {
         // Try to write directly first (avoid load() which can panic in deltalake-core 0.28.1)
         info!("Attempting to write to Delta table at {}", table_uri);
         
-        let write_result = table_ops.write(vec![record_batch.clone()]).await;
+        let mut write_builder = table_ops.write(vec![record_batch.clone()]);
+        // Always pass partition columns on write; for new tables this applies partitioning,
+        // for existing tables it validates consistency
+        if let Some(partitions) = &self.table_config.partition_by {
+            write_builder = write_builder.with_partition_columns(partitions.clone());
+        }
+        // Allow protocol/schema update so timestamp ntz writer feature can be enabled when needed
+        write_builder = write_builder
+            .with_schema_mode(deltalake::operations::write::SchemaMode::Merge);
+
+        let write_result = write_builder.await;
         
         match write_result {
             Ok(table) => {
@@ -969,7 +979,13 @@ impl DeltaLakeWriter {
             DeltaOps::try_from_uri(&table_uri).await?
         };
 
-        let write_result = table_ops.write(vec![record_batch]).await?;
+        let mut write_builder = table_ops.write(vec![record_batch]);
+        if let Some(partitions) = &self.table_config.partition_by {
+            write_builder = write_builder.with_partition_columns(partitions.clone());
+        }
+        write_builder = write_builder
+            .with_schema_mode(deltalake::operations::write::SchemaMode::Merge);
+        let write_result = write_builder.await?;
 
         info!(
             "Successfully wrote data to Delta Lake table at {}, version: {:?}",
