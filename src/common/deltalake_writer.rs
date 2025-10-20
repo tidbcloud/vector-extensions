@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -13,10 +14,251 @@ use {
     deltalake::DeltaOps,
 };
 
+use vector::{
+    aws::{AwsAuthentication, RegionOrEndpoint},
+    sinks::s3_common::service::S3Service,
+};
+
 use vector_lib::event::Event;
 use vector_lib::event::{LogEvent, Value as LogValue};
 
-use crate::sinks::deltalake::{DeltaTableConfig, WriteConfig};
+/// Delta table configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaTableConfig {
+    /// Table name
+    pub name: String,
+
+    /// Partition columns
+    pub partition_by: Option<Vec<String>>,
+
+    /// Enable schema evolution
+    pub schema_evolution: Option<bool>,
+}
+
+/// Write configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WriteConfig {
+    /// Batch size for writing
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+
+    /// Write timeout in seconds
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+
+    /// Compression format
+    #[serde(default = "default_compression")]
+    pub compression: String,
+}
+
+/// Compression format
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CompressionFormat {
+    /// Snappy compression
+    Snappy,
+    /// Gzip compression
+    Gzip,
+    /// No compression
+    None,
+}
+
+pub const fn default_batch_size() -> usize {
+    1000
+}
+
+pub const fn default_timeout_secs() -> u64 {
+    30
+}
+
+pub fn default_compression() -> String {
+    "snappy".to_string()
+}
+
+pub struct StorageOptionsBuilder {
+    /// AWS region or endpoint
+    pub region: Option<RegionOrEndpoint>,
+
+    /// Specifies which addressing style to use
+    pub force_path_style: Option<bool>,
+
+    /// AWS authentication
+    pub auth: AwsAuthentication,
+}
+
+impl StorageOptionsBuilder {
+    pub fn new(
+        region: Option<RegionOrEndpoint>,
+        force_path_style: Option<bool>,
+        auth: AwsAuthentication,
+    ) -> Self {
+        Self {
+            region,
+            force_path_style,
+            auth,
+        }
+    }
+
+    pub async fn build(
+        &self,
+        storage_options: &mut HashMap<String, String>,
+        _service: &S3Service,
+    ) -> vector::Result<()> {
+        info!("=== Applying S3 storage options (aws_s3_upload_file style) ===");
+        debug!("Initial storage_options: {:?}", storage_options);
+
+        // Initialize S3 handlers for Delta Lake
+        deltalake::aws::register_handlers(None);
+        debug!("Delta Lake S3 handlers registered");
+
+        // Set AWS storage options for Delta Lake
+        storage_options.insert("AWS_STORAGE_ALLOW_HTTP".to_string(), "true".to_string());
+
+        // Set region from configuration
+        if let Some(region) = &self.region {
+            // Convert region to string - this will be picked up by Delta Lake
+            if let Some(region_str) = region.region() {
+                storage_options.insert("AWS_REGION".to_string(), region_str.to_string());
+            }
+
+            // Set endpoint if using custom endpoint
+            if let Some(endpoint) = region.endpoint() {
+                storage_options.insert("AWS_ENDPOINT_URL".to_string(), endpoint);
+            }
+        }
+
+        // Set addressing style
+        if let Some(force_path_style) = self.force_path_style {
+            if force_path_style {
+                storage_options.insert("AWS_S3_ADDRESSING_STYLE".to_string(), "path".to_string());
+            } else {
+                storage_options
+                    .insert("AWS_S3_ADDRESSING_STYLE".to_string(), "virtual".to_string());
+            }
+        }
+
+        // Configure AWS authentication for Delta Lake using storage_options
+        // Delta Lake's object_store crate supports multiple authentication methods:
+        // 1. Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
+        // 2. IAM Role ARN (AWS_IAM_ROLE_ARN + AWS_IAM_ROLE_SESSION_NAME) - for AssumeRole
+        // 3. AWS Profile (AWS_PROFILE + AWS_SHARED_CREDENTIALS_FILE)
+        // 4. EC2/ECS/Lambda instance roles (automatic)
+        //
+        // This matches aws_s3_upload_file behavior which uses the same AWS SDK credential chain
+        info!("Configuring AWS authentication for Delta Lake (storage_options approach)");
+
+        // Check Vector's auth configuration and map to Delta Lake storage_options
+        match &self.auth {
+            AwsAuthentication::Role {
+                assume_role,
+                external_id,
+                ..
+            } => {
+                // Configure IAM Role ARN for AssumeRole
+                // Delta Lake's object_store will automatically call AssumeRole with these settings
+                info!("Configuring Delta Lake with IAM Role ARN: {}", assume_role);
+                storage_options.insert("AWS_IAM_ROLE_ARN".to_string(), assume_role.clone());
+                storage_options.insert(
+                    "AWS_IAM_ROLE_SESSION_NAME".to_string(),
+                    "vector-deltalake".to_string(),
+                );
+
+                if let Some(ext_id) = external_id {
+                    storage_options.insert("AWS_IAM_ROLE_EXTERNAL_ID".to_string(), ext_id.clone());
+                    info!("✓ Using external ID for role assumption");
+                }
+
+                info!("✓ Delta Lake will use AssumeRole with IAM Role ARN");
+            }
+            AwsAuthentication::AccessKey {
+                access_key_id,
+                secret_access_key,
+                session_token,
+                assume_role,
+                ..
+            } => {
+                // Use static credentials
+                storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id.to_string());
+                storage_options.insert(
+                    "AWS_SECRET_ACCESS_KEY".to_string(),
+                    secret_access_key.to_string(),
+                );
+
+                if let Some(token) = session_token {
+                    storage_options.insert("AWS_SESSION_TOKEN".to_string(), token.to_string());
+                }
+
+                if let Some(role_arn) = assume_role {
+                    info!("Using access key with assume role: {}", role_arn);
+                    // Can also configure AssumeRole with base credentials
+                    storage_options.insert("AWS_IAM_ROLE_ARN".to_string(), role_arn.clone());
+                    storage_options.insert(
+                        "AWS_IAM_ROLE_SESSION_NAME".to_string(),
+                        "vector-deltalake".to_string(),
+                    );
+                }
+
+                info!("✓ Delta Lake using static AWS credentials");
+            }
+            AwsAuthentication::File {
+                credentials_file,
+                profile,
+                ..
+            } => {
+                // Use AWS profile
+                storage_options.insert("AWS_PROFILE".to_string(), profile.clone());
+                storage_options.insert(
+                    "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+                    credentials_file.clone(),
+                );
+                info!("✓ Delta Lake using AWS profile: {}", profile);
+            }
+            AwsAuthentication::Default { .. } => {
+                // Use default AWS credential chain (environment variables, instance roles, etc.)
+                // Check environment variables and pass them to Delta Lake
+                info!("Using default AWS credential chain");
+
+                if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
+                    storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
+                }
+                if let Ok(secret_key) = std::env::var("AWS_SECRET_ACCESS_KEY") {
+                    storage_options.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key);
+                }
+                if let Ok(session_token) = std::env::var("AWS_SESSION_TOKEN") {
+                    storage_options.insert("AWS_SESSION_TOKEN".to_string(), session_token);
+                }
+                if let Ok(profile) = std::env::var("AWS_PROFILE") {
+                    storage_options.insert("AWS_PROFILE".to_string(), profile);
+                }
+
+                // Set default credentials file path if it exists
+                if let Ok(home) = std::env::var("HOME") {
+                    let default_creds_file = format!("{}/.aws/credentials", home);
+                    if std::path::Path::new(&default_creds_file).exists() {
+                        storage_options.insert(
+                            "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+                            default_creds_file,
+                        );
+                    }
+                }
+
+                info!("✓ Delta Lake will use AWS SDK's default credential chain");
+            }
+        }
+
+        info!("✓ AWS authentication configured for Delta Lake via storage_options");
+
+        debug!("=== Completed apply_s3_storage_options ===");
+        debug!("Final storage_options: {:?}", storage_options);
+        info!("✓ S3 storage options applied successfully");
+        // Log final storage options for debugging
+        info!(
+            "Final Delta Lake storage options configured: {:?}",
+            storage_options
+        );
+
+        Ok(())
+    }
+}
 
 /// Delta Lake table writer
 pub struct DeltaLakeWriter {
@@ -869,9 +1111,9 @@ impl DeltaLakeWriter {
 
         // Try to write directly first (avoid load() which can panic in deltalake-core 0.28.1)
         info!("Attempting to write to Delta table at {}", table_uri);
-        
+
         let write_result = table_ops.write(vec![record_batch.clone()]).await;
-        
+
         match write_result {
             Ok(table) => {
                 info!("✅ Successfully wrote to Delta table at {}", table_uri);
@@ -881,10 +1123,14 @@ impl DeltaLakeWriter {
             Err(e) => {
                 // Check if error is due to table not existing
                 let error_str = e.to_string();
-                if error_str.contains("does not exist") 
-                    || error_str.contains("not found") 
-                    || error_str.contains("Not a Delta table") {
-                    info!("Table doesn't exist, will create it. Error was: {}", error_str);
+                if error_str.contains("does not exist")
+                    || error_str.contains("not found")
+                    || error_str.contains("Not a Delta table")
+                {
+                    info!(
+                        "Table doesn't exist, will create it. Error was: {}",
+                        error_str
+                    );
                     // Fall through to table creation below
                 } else {
                     // Other error, fail immediately
@@ -938,7 +1184,7 @@ impl DeltaLakeWriter {
         } else {
             DeltaOps::try_from_uri(&table_uri).await?
         };
-        
+
         // Load the table first to ensure state is initialized
         match table_ops_for_feature.load().await {
             Ok((loaded_table, _stream)) => {
@@ -950,7 +1196,9 @@ impl DeltaLakeWriter {
                     .await
                 {
                     Ok(_) => {
-                        info!("✅ Successfully added TimestampWithoutTimezone feature to Delta table");
+                        info!(
+                            "✅ Successfully added TimestampWithoutTimezone feature to Delta table"
+                        );
                     }
                     Err(e) => {
                         warn!("Failed to add TimestampWithoutTimezone feature: {}. Continuing without it.", e);

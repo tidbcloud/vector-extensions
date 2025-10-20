@@ -25,7 +25,7 @@ mod tls_proxy {
         address: &str,
     ) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
         info!("Creating TLS proxy for address: {}", address);
-        
+
         let outbound = tls_connect(tls_config, address).await?;
         let listener = TcpListener::bind("0.0.0.0:0").await?;
         let local_address = listener.local_addr()?;
@@ -51,7 +51,7 @@ mod tls_proxy {
         let port = uri.port().map(|p| p.as_u16()).unwrap_or(443);
 
         info!("Connecting to TLS endpoint: {}:{}", host, port);
-        
+
         let raw_stream = TcpStream::connect(format!("{}:{}", &host, port)).await?;
 
         let tls_settings = MaybeTlsSettings::tls_client(tls_config)?;
@@ -166,7 +166,10 @@ impl CoprocessorCollector {
         // TiDB secondary port is typically used for gRPC (status port)
         // For standard TiDB setup: MySQL port 4000 -> status port 10080
         let grpc_port = if port == 4000 { 10080 } else { port + 6080 };
-        let grpc_scheme = if matches!(config.config_type, CollectorConfigType::Coprocessor { tls: Some(_), .. }) {
+        let grpc_scheme = if matches!(
+            config.config_type,
+            CollectorConfigType::Coprocessor { tls: Some(_), .. }
+        ) {
             "https"
         } else {
             "http"
@@ -195,28 +198,38 @@ impl CoprocessorCollector {
             // No TLS - direct connection like topsql
             info!("No TLS config, using direct HTTP connection");
             Channel::from_shared(self.grpc_endpoint.clone())
-                .map_err(|e| CollectionError::ConfigurationError(format!("Invalid endpoint: {}", e)))?
+                .map_err(|e| {
+                    CollectionError::ConfigurationError(format!("Invalid endpoint: {}", e))
+                })?
                 .http2_keep_alive_interval(Duration::from_secs(300))
                 .keep_alive_timeout(Duration::from_secs(10))
                 .keep_alive_while_idle(true)
         } else {
             // TLS enabled - use topsql-style TLS proxy approach
             info!("TLS enabled, creating TLS proxy for gRPC connection");
-            
+
             // Convert our TlsConfig to vector_lib::tls::TlsConfig
             let vector_tls_config = self.convert_to_vector_tls_config(tls_config.unwrap())?;
-            
+
             // Create TLS proxy and get local port
-            let proxy_port = tls_proxy::create_tls_proxy(Some(&vector_tls_config), &self.grpc_endpoint)
-                .await
-                .map_err(|e| CollectionError::ConfigurationError(format!("Failed to create TLS proxy: {}", e)))?;
-            
+            let proxy_port =
+                tls_proxy::create_tls_proxy(Some(&vector_tls_config), &self.grpc_endpoint)
+                    .await
+                    .map_err(|e| {
+                        CollectionError::ConfigurationError(format!(
+                            "Failed to create TLS proxy: {}",
+                            e
+                        ))
+                    })?;
+
             info!("TLS proxy created on local port: {}", proxy_port);
-            
+
             // Connect to local proxy instead of remote endpoint
             let proxy_endpoint = format!("http://127.0.0.1:{}", proxy_port);
             Channel::from_shared(proxy_endpoint)
-                .map_err(|e| CollectionError::ConfigurationError(format!("Invalid proxy endpoint: {}", e)))?
+                .map_err(|e| {
+                    CollectionError::ConfigurationError(format!("Invalid proxy endpoint: {}", e))
+                })?
                 .http2_keep_alive_interval(Duration::from_secs(300))
                 .keep_alive_timeout(Duration::from_secs(10))
                 .keep_alive_while_idle(true)
@@ -227,14 +240,17 @@ impl CoprocessorCollector {
                 "gRPC connection failed: {} (endpoint: {}, TLS enabled: {})",
                 e,
                 self.grpc_endpoint,
-                matches!(self.config.config_type, CollectorConfigType::Coprocessor { tls: Some(_), .. })
+                matches!(
+                    self.config.config_type,
+                    CollectorConfigType::Coprocessor { tls: Some(_), .. }
+                )
             );
-            
+
             // Print additional error context for debugging
             if let Some(source) = e.source() {
                 error!("gRPC connection error source: {}", source);
             }
-            
+
             CollectionError::ConnectionError(error_details)
         })?;
 
@@ -242,9 +258,12 @@ impl CoprocessorCollector {
     }
 
     /// Convert our TlsConfig to vector_lib::tls::TlsConfig for TLS proxy
-    fn convert_to_vector_tls_config(&self, tls: &crate::sources::system_tables::TlsConfig) -> Result<vector_lib::tls::TlsConfig, CollectionError> {
+    fn convert_to_vector_tls_config(
+        &self,
+        tls: &crate::sources::system_tables::TlsConfig,
+    ) -> Result<vector_lib::tls::TlsConfig, CollectionError> {
         let mut vector_tls = vector_lib::tls::TlsConfig::default();
-        
+
         // Set verification options
         if let Some(verify_certificate) = tls.verify_certificate {
             vector_tls.verify_certificate = Some(verify_certificate);
@@ -252,7 +271,7 @@ impl CoprocessorCollector {
         if let Some(verify_hostname) = tls.verify_hostname {
             vector_tls.verify_hostname = Some(verify_hostname);
         }
-        
+
         // Set certificate files
         if let Some(ca_file) = &tls.ca_file {
             vector_tls.ca_file = Some(ca_file.clone());
@@ -263,7 +282,7 @@ impl CoprocessorCollector {
         if let Some(key_file) = &tls.key_file {
             vector_tls.key_file = Some(key_file.clone());
         }
-        
+
         Ok(vector_tls)
     }
 
@@ -274,7 +293,9 @@ impl CoprocessorCollector {
     ) -> Result<TableSchema, CollectionError> {
         // Extract host, port, and TLS config from coprocessor config
         let (host, port, tls) = match &self.config.config_type {
-            CollectorConfigType::Coprocessor { host, port, tls, .. } => (host, *port, tls),
+            CollectorConfigType::Coprocessor {
+                host, port, tls, ..
+            } => (host, *port, tls),
             _ => {
                 return Err(CollectionError::ConfigurationError(
                     "Invalid config type for coprocessor table schema fetch".to_string(),
@@ -299,7 +320,9 @@ impl CoprocessorCollector {
             Some(Duration::from_secs(5)),
         )
         .await
-        .map_err(|e| CollectionError::ConfigurationError(format!("Failed to build HTTP client: {}", e)))?;
+        .map_err(|e| {
+            CollectionError::ConfigurationError(format!("Failed to build HTTP client: {}", e))
+        })?;
 
         let response = client
             .get(&url)
@@ -993,7 +1016,6 @@ impl CoprocessorCollector {
 
         let flag = data[offset];
         let mut new_offset = offset + 1;
-
 
         let value = match flag {
             0x00 => Value::Null, // NilFlag

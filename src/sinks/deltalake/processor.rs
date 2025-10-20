@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use vector_lib::event::Event;
 use vector_lib::sink::StreamSink;
 
-use crate::sinks::deltalake::{writer::DeltaLakeWriter, DeltaTableConfig, WriteConfig};
+use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
 
 /// Delta Lake sink processor
 pub struct DeltaLakeSink {
@@ -119,7 +119,6 @@ impl DeltaLakeSink {
                     partition_by: Some(vec!["date".to_string()]),
                     schema_evolution: Some(true),
                 });
-
             DeltaLakeWriter::new(
                 table_path,
                 table_config,

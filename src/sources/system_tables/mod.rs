@@ -204,7 +204,10 @@ impl SystemTablesConfig {
             "coprocessor" | "http_api" | "custom_grpc" => {
                 // For coprocessor and other methods, database fields are optional
                 // These methods use gRPC/HTTP to communicate directly with TiKV/PD
-                info!("Using {} collection method - database connection fields are optional", self.collection_method);
+                info!(
+                    "Using {} collection method - database connection fields are optional",
+                    self.collection_method
+                );
             }
             _ => {
                 return Err(format!("unsupported collection method: {}. Supported methods: sql, coprocessor, http_api, custom_grpc", self.collection_method).into());
@@ -376,7 +379,11 @@ impl SourceConfig for SystemTablesConfig {
         config.validate()?;
 
         info!("Building system_tables source with configuration:");
-        if let (Some(ref host), Some(port), Some(ref database)) = (&config.database_host, config.database_port, &config.database_name) {
+        if let (Some(ref host), Some(port), Some(ref database)) = (
+            &config.database_host,
+            config.database_port,
+            &config.database_name,
+        ) {
             info!("  Database: {}:{}/{}", host, port, database);
         } else {
             info!("  Database: Not configured (using coprocessor method)");
