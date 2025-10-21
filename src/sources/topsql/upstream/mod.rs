@@ -79,6 +79,7 @@ struct BaseTopSQLSource {
     top_n: usize,
     downsampling_interval: u32,
     schema_cache: Arc<SchemaCache>,
+    enable_row_format: bool,
 }
 
 impl BaseTopSQLSource {
@@ -90,6 +91,7 @@ impl BaseTopSQLSource {
         top_n: usize,
         downsampling_interval: u32,
         schema_cache: Arc<SchemaCache>,
+        enable_row_format: bool,
     ) -> Option<Self> {
         let protocal = if tls.is_none() {
             "http".into()
@@ -113,6 +115,7 @@ impl BaseTopSQLSource {
                 top_n,
                 downsampling_interval,
                 schema_cache,
+                enable_row_format,
             }),
             None => None,
         }
@@ -267,6 +270,7 @@ impl BaseTopSQLSource {
                 response,
                 self.instance.clone(),
                 self.schema_cache.clone(),
+                self.enable_row_format,
             );
             batch.append(&mut events);
         }
@@ -326,6 +330,7 @@ impl LegacyTopSQLSource {
         top_n: usize,
         downsampling_interval: u32,
         schema_cache: Arc<SchemaCache>,
+        enable_row_format: bool,
     ) -> Option<Self> {
         let base = BaseTopSQLSource::new(
             component,
@@ -335,6 +340,7 @@ impl LegacyTopSQLSource {
             top_n,
             downsampling_interval,
             schema_cache,
+            enable_row_format,
         )?;
         Some(LegacyTopSQLSource { base })
     }
@@ -403,6 +409,7 @@ impl NextgenTopSQLSource {
             top_n,
             downsampling_interval,
             schema_cache,
+            false,
         )?;
         let behavior = NextgenTopSQLBehavior {
             keyspace_to_vmtenants,
@@ -431,6 +438,7 @@ impl TopSQLSource {
         downsampling_interval: u32,
         schema_cache: Arc<SchemaCache>,
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
+        enable_row_format: bool,
     ) -> Option<Self> {
         use crate::common::features::is_nextgen_mode;
 
@@ -455,6 +463,7 @@ impl TopSQLSource {
                 top_n,
                 downsampling_interval,
                 schema_cache,
+                enable_row_format,
             )?;
             Some(TopSQLSource::Legacy(source))
         }

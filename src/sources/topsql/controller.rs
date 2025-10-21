@@ -29,6 +29,7 @@ pub struct Controller {
     schema_update_interval: Duration,
     active_schema_manager: Option<ActiveSchemaManager>,
     keyspace_to_vmtenants: HashMap<String, (String, String)>,
+    enable_row_format: bool,
     out: SourceSender,
 }
 
@@ -50,6 +51,7 @@ impl Controller {
         tidb_group: Option<String>,
         label_k8s_instance: Option<String>,
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
+        enable_row_format: bool,
         out: SourceSender,
     ) -> vector::Result<Self> {
         let topo_fetcher = TopologyFetcher::new(
@@ -81,6 +83,7 @@ impl Controller {
             schema_update_interval,
             active_schema_manager: None,
             keyspace_to_vmtenants,
+            enable_row_format,
             out,
         })
     }
@@ -261,6 +264,7 @@ impl Controller {
             self.downsampling_interval,
             self.schema_cache.clone(),
             self.keyspace_to_vmtenants.clone(),
+            self.enable_row_format,
         );
         let source = match source {
             Some(source) => source,

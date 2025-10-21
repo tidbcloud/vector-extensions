@@ -26,16 +26,21 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         response: Self::UpstreamEvent,
         instance: String,
         schema_cache: Arc<SchemaCache>,
+        enable_row_format: bool,
     ) -> Vec<LogEvent> {
-        match response.record_oneof {
-            Some(RecordOneof::Record(record)) => {
-                Self::parse_tikv_record(record, instance, schema_cache)
+        if !enable_row_format {
+            match response.record_oneof {
+                Some(RecordOneof::Record(record)) => {
+                    Self::parse_tikv_record(record, instance, schema_cache)
+                }
+                Some(RecordOneof::RegionRecord(_)) => {
+                    // We don't care about RegionRecord for now.
+                    vec![]
+                }
+                None => vec![],
             }
-            Some(RecordOneof::RegionRecord(_)) => {
-                // We don't care about RegionRecord for now.
-                vec![]
-            }
-            None => vec![],
+        } else {
+            vec![]
         }
     }
 
@@ -186,6 +191,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                             new_item.cpu_time_ms += item.cpu_time_ms;
                             new_item.read_keys += item.read_keys;
                             new_item.write_keys += item.write_keys;
+                            new_item.network_in_bytes += item.network_in_bytes;
+                            new_item.network_out_bytes += item.network_out_bytes;
+                            new_item.logical_read_bytes += item.logical_read_bytes;
+                            new_item.logical_write_bytes += item.logical_write_bytes;
                             new_items.insert(new_ts, new_item);
                         }
                     }
@@ -382,6 +391,10 @@ mod tests {
                             cpu_time_ms: i.cpu_time_ms,
                             read_keys: i.read_keys,
                             write_keys: i.write_keys,
+                            network_in_bytes: 0,
+                            network_out_bytes: 0,
+                            logical_read_bytes: 0,
+                            logical_write_bytes: 0,
                         })
                         .collect(),
                 })),
