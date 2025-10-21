@@ -2,15 +2,15 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use chrono::Utc;
-use vector::event::LogEvent;
+use vector_lib::event::{Event, KeyString, LogEvent, Value as LogValue};
 
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
     INSTANCE_TYPE_TIDB, INSTANCE_TYPE_TIKV, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_IS_INTERNAL_SQL,
     LABEL_NAME, LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_SQL_DIGEST,
-    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_NETWORK_BYTES, METRIC_NAME_PLAN_META,
-    METRIC_NAME_SQL_META, METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS,
-    METRIC_NAME_STMT_EXEC_COUNT,
+    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_NETWORK_BYTES, METRIC_NAME_NETWORK_IN_BYTES,
+    METRIC_NAME_NETWORK_OUT_BYTES, METRIC_NAME_PLAN_META, METRIC_NAME_SQL_META,
+    METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT,
 };
 use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser};
 use crate::sources::topsql::upstream::tidb::proto::top_sql_sub_response::RespOneof;
@@ -38,7 +38,18 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                 None => vec![],
             }
         } else {
-            vec![]
+            match response.resp_oneof {
+                Some(RespOneof::Record(record)) => {
+                    Self::parse_tidb_record_to_row_format(record, instance)
+                }
+                Some(RespOneof::SqlMeta(sql_meta)) => {
+                    Self::parse_tidb_sql_meta_to_row_format(sql_meta)
+                }
+                Some(RespOneof::PlanMeta(plan_meta)) => {
+                    Self::parse_tidb_plan_meta_to_row_format(plan_meta)
+                }
+                None => vec![],
+            }
         }
     }
 
@@ -418,6 +429,95 @@ impl TopSqlSubResponseParser {
             &[Utc::now()],
             &[1.0],
         )]
+    }
+
+    fn parse_tidb_record_to_row_format(record: TopSqlRecord, instance: String) -> Vec<LogEvent> {
+        let mut events = vec![];
+        for item in &record.items {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
+
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert("_vector_table", "tidb_topsql");
+            log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
+            log.insert("instance_type", INSTANCE_TYPE_TIDB.to_string());
+            log.insert("instance", instance.clone());
+            log.insert(
+                LABEL_SQL_DIGEST,
+                hex::encode_upper(record.sql_digest.clone()),
+            );
+            log.insert(
+                LABEL_PLAN_DIGEST,
+                hex::encode_upper(record.plan_digest.clone()),
+            );
+            log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
+            log.insert(
+                METRIC_NAME_STMT_EXEC_COUNT,
+                LogValue::from(item.stmt_exec_count),
+            );
+            log.insert(
+                METRIC_NAME_STMT_DURATION_SUM_NS,
+                LogValue::from(item.stmt_duration_sum_ns),
+            );
+            log.insert(
+                METRIC_NAME_STMT_DURATION_COUNT,
+                LogValue::from(item.stmt_duration_count),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_IN_BYTES,
+                LogValue::from(item.stmt_network_in_bytes),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_OUT_BYTES,
+                LogValue::from(item.stmt_network_out_bytes),
+            );
+            let mut tikv_exec_count = BTreeMap::<KeyString, LogValue>::new();
+            for (tikv_instance, exec_count) in item.stmt_kv_exec_count.iter() {
+                tikv_exec_count.insert(
+                    KeyString::from(tikv_instance.as_str()),
+                    LogValue::from(*exec_count),
+                );
+            }
+            log.insert(
+                "topsql_tikv_stmt_exec_count",
+                LogValue::Object(tikv_exec_count),
+            );
+            events.push(event.into_log());
+        }
+        events
+    }
+
+    fn parse_tidb_sql_meta_to_row_format(sql_meta: SqlMeta) -> Vec<LogEvent> {
+        let mut events = vec![];
+        let mut event = Event::Log(LogEvent::default());
+        let log = event.as_mut_log();
+
+        // Add metadata with Vector prefix (ensure all fields have values)
+        log.insert("_vector_table", "tidb_sql_meta");
+        log.insert("timestamps", Utc::now());
+        log.insert(LABEL_SQL_DIGEST, hex::encode_upper(sql_meta.sql_digest));
+        log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql);
+        log.insert(LABEL_IS_INTERNAL_SQL, sql_meta.is_internal_sql.to_string());
+        events.push(event.into_log());
+        events
+    }
+
+    fn parse_tidb_plan_meta_to_row_format(plan_meta: PlanMeta) -> Vec<LogEvent> {
+        let mut events = vec![];
+        let mut event = Event::Log(LogEvent::default());
+        let log = event.as_mut_log();
+
+        // Add metadata with Vector prefix (ensure all fields have values)
+        log.insert("_vector_table", "tidb_plan_meta");
+        log.insert("timestamps", Utc::now());
+        log.insert(LABEL_PLAN_DIGEST, hex::encode_upper(plan_meta.plan_digest));
+        log.insert(LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan);
+        log.insert(
+            LABEL_ENCODED_NORMALIZED_PLAN,
+            hex::encode_upper(plan_meta.encoded_normalized_plan),
+        );
+        events.push(event.into_log());
+        events
     }
 }
 

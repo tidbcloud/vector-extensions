@@ -6,7 +6,7 @@ use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::{
     consts::{
         LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, LABEL_PLAN_DIGEST,
-        LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
+        LABEL_REGION_ID, LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
     },
     utils::make_metric_like_log_event,
 };
@@ -45,6 +45,7 @@ impl Default for Buf {
                 (LABEL_DB_NAME, String::new()),
                 (LABEL_TABLE_NAME, String::new()),
                 (LABEL_TABLE_ID, String::new()),
+                (LABEL_REGION_ID, String::new()),
             ],
             timestamps: vec![],
             values: vec![],
@@ -95,6 +96,11 @@ impl Buf {
 
     pub fn table_id(&mut self, table_id: impl Into<String>) -> &mut Self {
         self.labels[8].1 = table_id.into();
+        self
+    }
+
+    pub fn region_id(&mut self, region_id: impl Into<String>) -> &mut Self {
+        self.labels[9].1 = region_id.into();
         self
     }
 

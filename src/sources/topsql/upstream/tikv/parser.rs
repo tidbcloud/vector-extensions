@@ -1,21 +1,21 @@
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
-
-use prost::Message;
-use vector::event::LogEvent;
-
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
     INSTANCE_TYPE_TIKV, KV_TAG_LABEL_INDEX, KV_TAG_LABEL_ROW, KV_TAG_LABEL_UNKNOWN,
-    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_LOGICAL_BYTES, METRIC_NAME_NETWORK_BYTES,
+    LABEL_PLAN_DIGEST, LABEL_REGION_ID, LABEL_SQL_DIGEST, METRIC_NAME_CPU_TIME_MS,
+    METRIC_NAME_LOGICAL_BYTES, METRIC_NAME_LOGICAL_READ_BYTES, METRIC_NAME_LOGICAL_WRITE_BYTES,
+    METRIC_NAME_NETWORK_BYTES, METRIC_NAME_NETWORK_IN_BYTES, METRIC_NAME_NETWORK_OUT_BYTES,
     METRIC_NAME_READ_KEYS, METRIC_NAME_WRITE_KEYS,
 };
 use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser};
 use crate::sources::topsql::upstream::tidb::proto::ResourceGroupTag;
 use crate::sources::topsql::upstream::tikv::proto::resource_usage_record::RecordOneof;
 use crate::sources::topsql::upstream::tikv::proto::{
-    GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord,
+    GroupTagRecord, GroupTagRecordItem, RegionRecord, ResourceUsageRecord,
 };
+use prost::Message;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use vector_lib::event::{Event, LogEvent, Value as LogValue};
 
 pub struct ResourceUsageRecordParser;
 
@@ -33,14 +33,21 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                 Some(RecordOneof::Record(record)) => {
                     Self::parse_tikv_record(record, instance, schema_cache)
                 }
-                Some(RecordOneof::RegionRecord(_)) => {
-                    // We don't care about RegionRecord for now.
-                    vec![]
+                Some(RecordOneof::RegionRecord(record)) => {
+                    Self::parse_tikv_region_record(record, instance, schema_cache)
                 }
                 None => vec![],
             }
         } else {
-            vec![]
+            match response.record_oneof {
+                Some(RecordOneof::Record(record)) => {
+                    Self::parse_tikv_record_for_row_format(record, instance, schema_cache)
+                }
+                Some(RecordOneof::RegionRecord(record)) => {
+                    Self::parse_tikv_region_record_for_row_format(record, instance, schema_cache)
+                }
+                None => vec![],
+            }
         }
     }
 
@@ -302,6 +309,193 @@ impl ResourceUsageRecordParser {
             }));
 
         logs
+    }
+
+    fn parse_tikv_region_record(
+        record: RegionRecord,
+        instance: String,
+        schema_cache: Arc<SchemaCache>,
+    ) -> Vec<LogEvent> {
+        // Log schema cache info
+        debug!(
+            message = "Schema cache available in parse_tikv_record",
+            entries = schema_cache.entry_count(),
+            schema_version = schema_cache.schema_version()
+        );
+        let mut logs = vec![];
+        let mut buf = Buf::default();
+        buf.instance(instance)
+            .instance_type(INSTANCE_TYPE_TIKV)
+            .region_id(record.region_id.to_string());
+
+        macro_rules! append {
+            ($( ($label_name:expr, $item_name:tt), )* ) => {
+                $(
+                    buf.label_name($label_name)
+                        .points(record.items.iter().filter_map(|item| {
+                            if item.$item_name > 0 {
+                                Some((item.timestamp_sec, item.$item_name as f64))
+                            } else {
+                                None
+                            }
+                        }));
+                    if let Some(event) = buf.build_event() {
+                        logs.push(event);
+                    }
+                )*
+            };
+        }
+        append!(
+            // cpu_time_ms
+            (METRIC_NAME_CPU_TIME_MS, cpu_time_ms),
+            // read_keys
+            (METRIC_NAME_READ_KEYS, read_keys),
+            // write_keys
+            (METRIC_NAME_WRITE_KEYS, write_keys),
+        );
+
+        // network_in_bytes + network_out_bytes
+        buf.label_name(METRIC_NAME_NETWORK_BYTES)
+            .points(record.items.iter().filter_map(|item| {
+                if item.network_in_bytes > 0 || item.network_out_bytes > 0 {
+                    Some((
+                        item.timestamp_sec,
+                        (item.network_in_bytes + item.network_out_bytes) as f64,
+                    ))
+                } else {
+                    None
+                }
+            }));
+
+        // logical_read_bytes + logical_write_bytes
+        buf.label_name(METRIC_NAME_LOGICAL_BYTES)
+            .points(record.items.iter().filter_map(|item| {
+                if item.logical_read_bytes > 0 || item.logical_write_bytes > 0 {
+                    Some((
+                        item.timestamp_sec,
+                        (item.logical_read_bytes + item.logical_write_bytes) as f64,
+                    ))
+                } else {
+                    None
+                }
+            }));
+
+        logs
+    }
+
+    fn parse_tikv_record_for_row_format(
+        record: GroupTagRecord,
+        instance: String,
+        schema_cache: Arc<SchemaCache>,
+    ) -> Vec<LogEvent> {
+        // Log schema cache info
+        debug!(
+            message = "Schema cache available in parse_tikv_record",
+            entries = schema_cache.entry_count(),
+            schema_version = schema_cache.schema_version()
+        );
+
+        let decoded = Self::decode_tag(record.resource_group_tag.as_slice());
+        if decoded.is_none() {
+            return vec![];
+        }
+        let (sql_digest, plan_digest, tag_label, table_id) = decoded.unwrap();
+
+        let mut db_name = "".to_string();
+        let mut table_name = "".to_string();
+        let mut table_id_str = "".to_string();
+
+        if let Some(tid) = table_id {
+            table_id_str = tid.to_string();
+            if let Some(table_detail) = schema_cache.get(tid) {
+                db_name = table_detail.db.clone();
+                table_name = table_detail.name;
+            }
+        }
+        let mut events = vec![];
+        for item in &record.items {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
+
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert("_vector_table", "tikv_topsql");
+            log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
+            log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
+            log.insert("instance", instance.clone());
+            log.insert(LABEL_SQL_DIGEST, hex::encode_upper(sql_digest.clone()));
+            log.insert(LABEL_PLAN_DIGEST, hex::encode_upper(plan_digest.clone()));
+            log.insert("tag_label", tag_label.clone());
+            log.insert("db_name", db_name.clone());
+            log.insert("table_name", table_name.clone());
+            log.insert("table_id", table_id_str.clone());
+            log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
+            log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
+            log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys));
+            log.insert(
+                METRIC_NAME_NETWORK_IN_BYTES,
+                LogValue::from(item.network_in_bytes),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_OUT_BYTES,
+                LogValue::from(item.network_out_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_READ_BYTES,
+                LogValue::from(item.logical_read_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_WRITE_BYTES,
+                LogValue::from(item.logical_write_bytes),
+            );
+            events.push(event.into_log());
+        }
+        events
+    }
+
+    fn parse_tikv_region_record_for_row_format(
+        record: RegionRecord,
+        instance: String,
+        schema_cache: Arc<SchemaCache>,
+    ) -> Vec<LogEvent> {
+        // Log schema cache info
+        debug!(
+            message = "Schema cache available in parse_tikv_record",
+            entries = schema_cache.entry_count(),
+            schema_version = schema_cache.schema_version()
+        );
+        let mut events = vec![];
+        for item in &record.items {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
+
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert("_vector_table", "tikv_topsql");
+            log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
+            log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
+            log.insert("instance", instance.clone());
+            log.insert(LABEL_REGION_ID, record.region_id.to_string());
+            log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
+            log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
+            log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys));
+            log.insert(
+                METRIC_NAME_NETWORK_IN_BYTES,
+                LogValue::from(item.network_in_bytes),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_OUT_BYTES,
+                LogValue::from(item.network_out_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_READ_BYTES,
+                LogValue::from(item.logical_read_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_WRITE_BYTES,
+                LogValue::from(item.logical_write_bytes),
+            );
+            events.push(event.into_log());
+        }
+        events
     }
 
     fn decode_tag(tag: &[u8]) -> Option<(String, String, String, Option<i64>)> {
