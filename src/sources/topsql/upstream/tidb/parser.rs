@@ -8,8 +8,9 @@ use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
     INSTANCE_TYPE_TIDB, INSTANCE_TYPE_TIKV, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_IS_INTERNAL_SQL,
     LABEL_NAME, LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_SQL_DIGEST,
-    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_PLAN_META, METRIC_NAME_SQL_META,
-    METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT,
+    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_NETWORK_BYTES, METRIC_NAME_PLAN_META,
+    METRIC_NAME_SQL_META, METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS,
+    METRIC_NAME_STMT_EXEC_COUNT,
 };
 use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser};
 use crate::sources::topsql::upstream::tidb::proto::top_sql_sub_response::RespOneof;
@@ -329,6 +330,19 @@ impl TopSqlSubResponseParser {
             // stmt_duration_count
             (METRIC_NAME_STMT_DURATION_COUNT, stmt_duration_count),
         );
+
+        // stmt_network_in_bytes + stmt_network_out_bytes
+        buf.label_name(METRIC_NAME_NETWORK_BYTES)
+            .points(record.items.iter().filter_map(|item| {
+                if item.stmt_network_in_bytes > 0 || item.stmt_network_out_bytes > 0 {
+                    Some((
+                        item.timestamp_sec,
+                        (item.stmt_network_in_bytes + item.stmt_network_out_bytes) as f64,
+                    ))
+                } else {
+                    None
+                }
+            }));
 
         // stmt_kv_exec_count
         buf.label_name(METRIC_NAME_STMT_EXEC_COUNT)

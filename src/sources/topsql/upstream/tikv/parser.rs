@@ -7,7 +7,8 @@ use vector::event::LogEvent;
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
     INSTANCE_TYPE_TIKV, KV_TAG_LABEL_INDEX, KV_TAG_LABEL_ROW, KV_TAG_LABEL_UNKNOWN,
-    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_READ_KEYS, METRIC_NAME_WRITE_KEYS,
+    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_LOGICAL_BYTES, METRIC_NAME_NETWORK_BYTES,
+    METRIC_NAME_READ_KEYS, METRIC_NAME_WRITE_KEYS,
 };
 use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser};
 use crate::sources::topsql::upstream::tidb::proto::ResourceGroupTag;
@@ -44,6 +45,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
             cpu_time_ms: u32,
             read_keys: u32,
             write_keys: u32,
+            network_in_bytes: u64,
+            network_out_bytes: u64,
+            logical_read_bytes: u64,
+            logical_write_bytes: u64,
         }
 
         let mut new_responses = vec![];
@@ -66,6 +71,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                             cpu_time_ms: item.cpu_time_ms,
                             read_keys: item.read_keys,
                             write_keys: item.write_keys,
+                            network_in_bytes: item.network_in_bytes,
+                            network_out_bytes: item.network_out_bytes,
+                            logical_read_bytes: item.logical_read_bytes,
+                            logical_write_bytes: item.logical_write_bytes,
                         };
                         match ts_digests.get_mut(&item.timestamp_sec) {
                             None => {
@@ -94,6 +103,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                 others.cpu_time_ms += e.cpu_time_ms;
                 others.read_keys += e.read_keys;
                 others.write_keys += e.write_keys;
+                others.network_in_bytes += e.network_in_bytes;
+                others.network_out_bytes += e.network_out_bytes;
+                others.logical_read_bytes += e.logical_read_bytes;
+                others.logical_write_bytes += e.logical_write_bytes;
             }
             v.truncate(top_n);
             match ts_others.get_mut(&ts) {
@@ -104,6 +117,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                     existed_others.cpu_time_ms += others.cpu_time_ms;
                     existed_others.read_keys += others.read_keys;
                     existed_others.write_keys += others.write_keys;
+                    existed_others.network_in_bytes += others.network_in_bytes;
+                    existed_others.network_out_bytes += others.network_out_bytes;
+                    existed_others.logical_read_bytes += others.logical_read_bytes;
+                    existed_others.logical_write_bytes += others.logical_write_bytes;
                 }
             }
         }
@@ -116,6 +133,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                     cpu_time_ms: psd.cpu_time_ms,
                     read_keys: psd.read_keys,
                     write_keys: psd.write_keys,
+                    network_in_bytes: psd.network_in_bytes,
+                    network_out_bytes: psd.network_out_bytes,
+                    logical_read_bytes: psd.logical_read_bytes,
+                    logical_write_bytes: psd.logical_write_bytes,
                 };
                 match digest_items.get_mut(&psd.resource_group_tag) {
                     None => {
@@ -244,6 +265,32 @@ impl ResourceUsageRecordParser {
             // write_keys
             (METRIC_NAME_WRITE_KEYS, write_keys),
         );
+
+        // network_in_bytes + network_out_bytes
+        buf.label_name(METRIC_NAME_NETWORK_BYTES)
+            .points(record.items.iter().filter_map(|item| {
+                if item.network_in_bytes > 0 || item.network_out_bytes > 0 {
+                    Some((
+                        item.timestamp_sec,
+                        (item.network_in_bytes + item.network_out_bytes) as f64,
+                    ))
+                } else {
+                    None
+                }
+            }));
+
+        // logical_read_bytes + logical_write_bytes
+        buf.label_name(METRIC_NAME_LOGICAL_BYTES)
+            .points(record.items.iter().filter_map(|item| {
+                if item.logical_read_bytes > 0 || item.logical_write_bytes > 0 {
+                    Some((
+                        item.timestamp_sec,
+                        (item.logical_read_bytes + item.logical_write_bytes) as f64,
+                    ))
+                } else {
+                    None
+                }
+            }));
 
         logs
     }
