@@ -431,6 +431,7 @@ impl TopSqlSubResponseParser {
         )]
     }
 
+    // TODO: consider apply chunk style LogEvent for better performance
     fn parse_tidb_record_to_row_format(record: TopSqlRecord, instance: String) -> Vec<LogEvent> {
         let mut events = vec![];
         for item in &record.items {
