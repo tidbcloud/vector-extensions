@@ -419,7 +419,7 @@ impl ResourceUsageRecordParser {
 
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert("_vector_table", "tikv_topsql");
-            log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
+            log.insert("timestamps", LogValue::from(item.timestamp_sec));
             log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
             log.insert("instance", instance.clone());
             log.insert(LABEL_SQL_DIGEST, hex::encode_upper(sql_digest.clone()));
@@ -469,7 +469,7 @@ impl ResourceUsageRecordParser {
             let log = event.as_mut_log();
 
             // Add metadata with Vector prefix (ensure all fields have values)
-            log.insert("dest_table", "tikv_topsql");
+            log.insert("dest_table", "tikv_topregion");
             log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
             log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
             log.insert("instance", instance.clone());

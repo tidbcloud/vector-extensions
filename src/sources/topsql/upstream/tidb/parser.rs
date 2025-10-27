@@ -440,7 +440,7 @@ impl TopSqlSubResponseParser {
 
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert("dest_table", "tidb_topsql");
-            log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
+            log.insert("timestamps", LogValue::from(item.timestamp_sec));
             log.insert("instance_type", INSTANCE_TYPE_TIDB.to_string());
             log.insert("instance", instance.clone());
             log.insert(
@@ -495,7 +495,6 @@ impl TopSqlSubResponseParser {
 
         // Add metadata with Vector prefix (ensure all fields have values)
         log.insert("dest_table", "tidb_sql_meta");
-        log.insert("timestamps", Utc::now());
         log.insert(LABEL_SQL_DIGEST, hex::encode_upper(sql_meta.sql_digest));
         log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql);
         log.insert(LABEL_IS_INTERNAL_SQL, sql_meta.is_internal_sql.to_string());
@@ -510,7 +509,6 @@ impl TopSqlSubResponseParser {
 
         // Add metadata with Vector prefix (ensure all fields have values)
         log.insert("dest_table", "tidb_plan_meta");
-        log.insert("timestamps", Utc::now());
         log.insert(LABEL_PLAN_DIGEST, hex::encode_upper(plan_meta.plan_digest));
         log.insert(LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan);
         log.insert(

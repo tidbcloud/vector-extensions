@@ -6,6 +6,7 @@ use futures::{stream::BoxStream, StreamExt};
 use hashlru::Cache;
 use tokio::sync::Mutex;
 use vector_lib::event::Event;
+use vector_lib::event::Value as LogValue;
 use vector_lib::sink::StreamSink;
 
 use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
@@ -13,8 +14,16 @@ use crate::sources::topsql::upstream::consts::{
     LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_REGION_ID,
     LABEL_SQL_DIGEST, METRIC_NAME_LOGICAL_READ_BYTES, METRIC_NAME_LOGICAL_WRITE_BYTES,
     METRIC_NAME_NETWORK_IN_BYTES, METRIC_NAME_NETWORK_OUT_BYTES, METRIC_NAME_READ_KEYS,
-    METRIC_NAME_WRITE_KEYS,
+    METRIC_NAME_STMT_EXEC_COUNT, METRIC_NAME_WRITE_KEYS,
 };
+
+#[derive(Default, Eq, PartialEq, Clone, Hash)]
+struct TiKVExecCountKey {
+    sql_digest: String,
+    plan_digest: String,
+    timestamps: u64,
+    instance: String,
+}
 
 /// Delta Lake sink processor
 pub struct TopSQLDeltaLakeSink {
@@ -25,6 +34,7 @@ pub struct TopSQLDeltaLakeSink {
     writers: Arc<Mutex<HashMap<String, DeltaLakeWriter>>>,
     sql_cache: Arc<Mutex<Cache<String, String>>>,
     plan_cache: Arc<Mutex<Cache<String, String>>>,
+    tikv_exec_count_cache: Arc<Mutex<Cache<TiKVExecCountKey, u64>>>,
 }
 
 impl TopSQLDeltaLakeSink {
@@ -41,8 +51,9 @@ impl TopSQLDeltaLakeSink {
             write_config,
             storage_options,
             writers: Arc::new(Mutex::new(HashMap::new())),
-            sql_cache: Arc::new(Mutex::new(Cache::new(10000))),
+            sql_cache: Arc::new(Mutex::new(Cache::new(10000))), // TODO: Cache size can be adjusted
             plan_cache: Arc::new(Mutex::new(Cache::new(10000))),
+            tikv_exec_count_cache: Arc::new(Mutex::new(Cache::new(5000))),
         }
     }
 
@@ -62,6 +73,7 @@ impl TopSQLDeltaLakeSink {
         let mut table_events: HashMap<String, Vec<Event>> = HashMap::new();
         let mut sql_cache = self.sql_cache.lock().await;
         let mut plan_cache = self.plan_cache.lock().await;
+        let mut tikv_exec_count_cache = self.tikv_exec_count_cache.lock().await;
 
         for event in events {
             if let Event::Log(mut log_event) = event {
@@ -106,11 +118,13 @@ impl TopSQLDeltaLakeSink {
                                 }
                             });
                     }
-                    "tidb_topsql" | "tikv_topsql" => {
+                    "tidb_topsql" => {
                         // Enrich SQL and Plan from cache
+                        let mut tikv_exec_count_key = TiKVExecCountKey::default();
                         if let Some(sql_digest) =
                             log_event.get(LABEL_SQL_DIGEST).and_then(|v| v.as_str())
                         {
+                            tikv_exec_count_key.sql_digest = sql_digest.to_string();
                             if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
                                 log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
                             }
@@ -118,9 +132,78 @@ impl TopSQLDeltaLakeSink {
                         if let Some(plan_digest) =
                             log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str())
                         {
+                            tikv_exec_count_key.plan_digest = plan_digest.to_string();
                             if let Some(plan) = plan_cache.get(&plan_digest.to_string()) {
                                 log_event.insert(LABEL_NORMALIZED_PLAN, plan.clone());
                             }
+                        }
+                        if let Some(timestamps) =
+                            log_event.get("timestamps").and_then(|v| v.as_integer())
+                        {
+                            tikv_exec_count_key.timestamps = timestamps as u64;
+                        }
+                        {
+                            let tikv_exec_map = log_event
+                                .get("topsql_tikv_stmt_exec_count")
+                                .and_then(|v| v.as_object());
+                            if let Some(tikv_exec_map) = tikv_exec_map {
+                                for (key, value) in tikv_exec_map {
+                                    tikv_exec_count_key.instance = key.to_string();
+                                    let count = value.as_integer().unwrap_or(0) as u64;
+                                    if count == 0 {
+                                        continue;
+                                    }
+
+                                    let handle =
+                                        tikv_exec_count_cache.get_mut(&tikv_exec_count_key);
+                                    if let Some(handle) = handle {
+                                        *handle += count;
+                                    } else {
+                                        tikv_exec_count_cache
+                                            .insert(tikv_exec_count_key.clone(), count);
+                                    }
+                                }
+                            }
+                        }
+
+                        table_events
+                            .entry(table_name.to_string())
+                            .or_insert_with(Vec::new)
+                            .push(Event::Log(log_event));
+                    }
+                    "tikv_topsql" => {
+                        let mut tikv_exec_count_key = TiKVExecCountKey::default();
+                        // Enrich SQL and Plan from cache
+                        if let Some(sql_digest) =
+                            log_event.get(LABEL_SQL_DIGEST).and_then(|v| v.as_str())
+                        {
+                            tikv_exec_count_key.sql_digest = sql_digest.to_string();
+                            if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
+                                log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
+                            }
+                        }
+                        if let Some(plan_digest) =
+                            log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str())
+                        {
+                            tikv_exec_count_key.plan_digest = plan_digest.to_string();
+                            if let Some(plan) = plan_cache.get(&plan_digest.to_string()) {
+                                log_event.insert(LABEL_NORMALIZED_PLAN, plan.clone());
+                            }
+                        }
+                        if let Some(timestamps) =
+                            log_event.get("timestamps").and_then(|v| v.as_integer())
+                        {
+                            tikv_exec_count_key.timestamps = timestamps as u64;
+                        }
+                        if let Some(instance) = log_event.get("instance").and_then(|v| v.as_str()) {
+                            tikv_exec_count_key.instance = instance.to_string();
+                        }
+                        {
+                            let exec_count = tikv_exec_count_cache
+                                .get(&tikv_exec_count_key)
+                                .unwrap_or(&0);
+                            log_event
+                                .insert(METRIC_NAME_STMT_EXEC_COUNT, LogValue::from(*exec_count));
                         }
 
                         table_events
@@ -177,7 +260,7 @@ impl TopSQLDeltaLakeSink {
                 schema_info.insert(
                     "timestamps".into(),
                     serde_json::json!({
-                        "mysql_type": "text",
+                        "mysql_type": "bigint",
                         "is_nullable": false
                     }),
                 );
