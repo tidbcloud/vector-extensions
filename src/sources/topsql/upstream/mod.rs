@@ -2,7 +2,7 @@ pub mod parser;
 pub mod tidb;
 pub mod tikv;
 
-mod consts;
+pub(crate) mod consts;
 mod tls_proxy;
 mod utils;
 

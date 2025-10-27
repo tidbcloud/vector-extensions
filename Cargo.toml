@@ -63,6 +63,7 @@ url = { version = "2.5.4", default-features = false, features = ["serde"] }
 vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.49.0", default-features = false, features = ["aws-config", "sinks-aws_s3", "gcp", "sinks-gcp"] }
 vector-config = { git = "https://github.com/vectordotdev/vector", tag = "v0.49.0", default-features = false }
 vector-lib = { git = "https://github.com/vectordotdev/vector", tag = "v0.49.0", default-features = false }
+hashlru = "0.11.1"
 
  
 

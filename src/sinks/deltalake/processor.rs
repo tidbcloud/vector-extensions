@@ -118,6 +118,13 @@ impl DeltaLakeSink {
                     name: table_name.to_string(),
                     partition_by: Some(vec!["date".to_string()]),
                     schema_evolution: Some(true),
+                    standard_columns: Some(vec![
+                        "_vector_table".to_string(),
+                        "_vector_source_table".to_string(),
+                        "_vector_source_schema".to_string(),
+                        "_vector_instance".to_string(),
+                        "_vector_timestamp".to_string(),
+                    ]),
                 });
             DeltaLakeWriter::new(
                 table_path,

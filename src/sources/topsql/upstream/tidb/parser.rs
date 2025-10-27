@@ -439,7 +439,7 @@ impl TopSqlSubResponseParser {
             let log = event.as_mut_log();
 
             // Add metadata with Vector prefix (ensure all fields have values)
-            log.insert("_vector_table", "tidb_topsql");
+            log.insert("dest_table", "tidb_topsql");
             log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
             log.insert("instance_type", INSTANCE_TYPE_TIDB.to_string());
             log.insert("instance", instance.clone());
@@ -494,7 +494,7 @@ impl TopSqlSubResponseParser {
         let log = event.as_mut_log();
 
         // Add metadata with Vector prefix (ensure all fields have values)
-        log.insert("_vector_table", "tidb_sql_meta");
+        log.insert("dest_table", "tidb_sql_meta");
         log.insert("timestamps", Utc::now());
         log.insert(LABEL_SQL_DIGEST, hex::encode_upper(sql_meta.sql_digest));
         log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql);
@@ -509,7 +509,7 @@ impl TopSqlSubResponseParser {
         let log = event.as_mut_log();
 
         // Add metadata with Vector prefix (ensure all fields have values)
-        log.insert("_vector_table", "tidb_plan_meta");
+        log.insert("dest_table", "tidb_plan_meta");
         log.insert("timestamps", Utc::now());
         log.insert(LABEL_PLAN_DIGEST, hex::encode_upper(plan_meta.plan_digest));
         log.insert(LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan);

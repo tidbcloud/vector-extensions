@@ -33,6 +33,9 @@ pub struct DeltaTableConfig {
 
     /// Enable schema evolution
     pub schema_evolution: Option<bool>,
+
+    /// Standard columns to include
+    pub standard_columns: Option<Vec<String>>,
 }
 
 /// Write configuration
@@ -382,18 +385,12 @@ impl DeltaLakeWriter {
             // Build fixed field list based on cached MySQL schema and Vector system fields
 
             // 1. Add Vector system fields first
-            let standard_fields = [
-                "_vector_table",
-                "_vector_source_table",
-                "_vector_source_schema",
-                "_vector_instance",
-                "_vector_timestamp",
-            ];
-
-            for field_name in &standard_fields {
-                fields.push(Field::new(*field_name, DataType::Utf8, false));
-                added_fields.insert(field_name.to_string());
-            }
+            if let Some(standard_columns) = &self.table_config.standard_columns {
+                for field_name in standard_columns {
+                    fields.push(Field::new(field_name, DataType::Utf8, false));
+                    added_fields.insert(field_name.to_string());
+                }
+            };
 
             // Add date field for partitioning (derived from _vector_timestamp)
             fields.push(Field::new("date", DataType::Utf8, false));
