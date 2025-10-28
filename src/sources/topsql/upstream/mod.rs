@@ -53,6 +53,8 @@ pub trait Upstream: Send {
     async fn build_stream(
         client: Self::Client,
     ) -> Result<tonic::codec::Streaming<Self::UpstreamEvent>, tonic::Status>;
+
+    fn get_wait_seconds() -> u64;
 }
 
 // Common trait for TopSQL source behavior
@@ -180,7 +182,7 @@ impl BaseTopSQLSource {
         let mut tick_stream = IntervalStream::new(time::interval(Duration::from_secs(1)));
         let mut instance_stream = IntervalStream::new(time::interval(Duration::from_secs(30)));
         let mut responses = vec![];
-        let mut last_event_recv_ts = chrono::Local::now().timestamp();
+        let mut responses_recv_ts_vec = vec![];
         info!(message = "Starting TopSQL source loop", instance = %self.instance, instance_type = %self.instance_type);
         let exit_state = loop {
             tokio::select! {
@@ -192,7 +194,7 @@ impl BaseTopSQLSource {
                             })
                             .emit(ByteSize(response.size_of()));
                             responses.push(response);
-                            last_event_recv_ts = chrono::Local::now().timestamp();
+                            responses_recv_ts_vec.push(chrono::Local::now().timestamp());
                         },
                         Some(Err(error)) => {
                             error!(message = "Failed to fetch events.", error = %error);
@@ -202,9 +204,10 @@ impl BaseTopSQLSource {
                     }
                 }
                 _ = tick_stream.next() => {
-                    if chrono::Local::now().timestamp() > last_event_recv_ts + 10 {
-                        if !responses.is_empty() {
+                    if !responses.is_empty() {
+                        if chrono::Local::now().timestamp() > responses_recv_ts_vec[0] + U::get_wait_seconds() as i64 {
                             self.handle_responses::<U>(responses).await;
+                            responses_recv_ts_vec.clear();
                             responses = vec![];
                         }
                     }

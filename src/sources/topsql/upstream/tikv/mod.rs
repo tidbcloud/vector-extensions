@@ -55,4 +55,8 @@ impl Upstream for TiKVUpstream {
             .await
             .map(|r| r.into_inner())
     }
+
+    fn get_wait_seconds() -> u64 {
+        60
+    }
 }

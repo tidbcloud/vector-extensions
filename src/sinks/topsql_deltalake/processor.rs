@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::MutexGuard;
 
 use futures::{stream::BoxStream, StreamExt};
 use hashlru::Cache;
@@ -35,6 +36,7 @@ pub struct TopSQLDeltaLakeSink {
     sql_cache: Arc<Mutex<Cache<String, String>>>,
     plan_cache: Arc<Mutex<Cache<String, String>>>,
     tikv_exec_count_cache: Arc<Mutex<Cache<TiKVExecCountKey, u64>>>,
+    tidb_event_cache: Arc<Mutex<Vec<Event>>>,
 }
 
 impl TopSQLDeltaLakeSink {
@@ -54,6 +56,65 @@ impl TopSQLDeltaLakeSink {
             sql_cache: Arc::new(Mutex::new(Cache::new(10000))), // TODO: Cache size can be adjusted
             plan_cache: Arc::new(Mutex::new(Cache::new(10000))),
             tikv_exec_count_cache: Arc::new(Mutex::new(Cache::new(5000))),
+            tidb_event_cache: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn process_tidb_records_events<'a>(
+        &self,
+        table_events: &mut HashMap<String, Vec<Event>>,
+        sql_cache: &mut MutexGuard<'a, Cache<String, String>>,
+        plan_cache: &mut MutexGuard<'a, Cache<String, String>>,
+        tikv_exec_count_cache: &mut MutexGuard<'a, Cache<TiKVExecCountKey, u64>>,
+        tidb_event_cache: &mut MutexGuard<'a, Vec<Event>>,
+    ) {
+        let table_name = "tidb_topsql";
+        for event in tidb_event_cache.iter_mut() {
+            if let Event::Log(ref mut log_event) = event {
+                // Enrich SQL and Plan from cache
+                let mut tikv_exec_count_key = TiKVExecCountKey::default();
+                if let Some(sql_digest) = log_event.get(LABEL_SQL_DIGEST).and_then(|v| v.as_str()) {
+                    tikv_exec_count_key.sql_digest = sql_digest.to_string();
+                    if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
+                        log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
+                    }
+                }
+                if let Some(plan_digest) = log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str())
+                {
+                    tikv_exec_count_key.plan_digest = plan_digest.to_string();
+                    if let Some(plan) = plan_cache.get(&plan_digest.to_string()) {
+                        log_event.insert(LABEL_NORMALIZED_PLAN, plan.clone());
+                    }
+                }
+                if let Some(timestamps) = log_event.get("timestamps").and_then(|v| v.as_integer()) {
+                    tikv_exec_count_key.timestamps = timestamps as u64;
+                }
+                {
+                    let tikv_exec_map = log_event
+                        .get("topsql_tikv_stmt_exec_count")
+                        .and_then(|v| v.as_object());
+                    if let Some(tikv_exec_map) = tikv_exec_map {
+                        for (key, value) in tikv_exec_map {
+                            tikv_exec_count_key.instance = key.to_string();
+                            let count = value.as_integer().unwrap_or(0) as u64;
+                            if count == 0 {
+                                continue;
+                            }
+
+                            let handle = tikv_exec_count_cache.get_mut(&tikv_exec_count_key);
+                            if let Some(handle) = handle {
+                                *handle += count;
+                            } else {
+                                tikv_exec_count_cache.insert(tikv_exec_count_key.clone(), count);
+                            }
+                        }
+                    }
+                }
+                table_events
+                    .entry(table_name.to_string())
+                    .or_insert_with(Vec::new)
+                    .push(Event::Log(log_event.clone()));
+            }
         }
     }
 
@@ -61,6 +122,7 @@ impl TopSQLDeltaLakeSink {
     async fn process_events(
         &self,
         events: Vec<Event>,
+        cache_tidb_events: bool,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if events.is_empty() {
             return Ok(());
@@ -74,6 +136,8 @@ impl TopSQLDeltaLakeSink {
         let mut sql_cache = self.sql_cache.lock().await;
         let mut plan_cache = self.plan_cache.lock().await;
         let mut tikv_exec_count_cache = self.tikv_exec_count_cache.lock().await;
+        let mut tidb_event_cache = self.tidb_event_cache.lock().await;
+        let mut tidb_event_cache_cleared = false;
 
         for event in events {
             if let Event::Log(mut log_event) = event {
@@ -119,59 +183,25 @@ impl TopSQLDeltaLakeSink {
                             });
                     }
                     "tidb_topsql" => {
-                        // Enrich SQL and Plan from cache
-                        let mut tikv_exec_count_key = TiKVExecCountKey::default();
-                        if let Some(sql_digest) =
-                            log_event.get(LABEL_SQL_DIGEST).and_then(|v| v.as_str())
-                        {
-                            tikv_exec_count_key.sql_digest = sql_digest.to_string();
-                            if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
-                                log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
-                            }
+                        if cache_tidb_events {
+                            tidb_event_cache.push(Event::Log(log_event.clone()));
+                            continue;
                         }
-                        if let Some(plan_digest) =
-                            log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str())
-                        {
-                            tikv_exec_count_key.plan_digest = plan_digest.to_string();
-                            if let Some(plan) = plan_cache.get(&plan_digest.to_string()) {
-                                log_event.insert(LABEL_NORMALIZED_PLAN, plan.clone());
-                            }
-                        }
-                        if let Some(timestamps) =
-                            log_event.get("timestamps").and_then(|v| v.as_integer())
-                        {
-                            tikv_exec_count_key.timestamps = timestamps as u64;
-                        }
-                        {
-                            let tikv_exec_map = log_event
-                                .get("topsql_tikv_stmt_exec_count")
-                                .and_then(|v| v.as_object());
-                            if let Some(tikv_exec_map) = tikv_exec_map {
-                                for (key, value) in tikv_exec_map {
-                                    tikv_exec_count_key.instance = key.to_string();
-                                    let count = value.as_integer().unwrap_or(0) as u64;
-                                    if count == 0 {
-                                        continue;
-                                    }
-
-                                    let handle =
-                                        tikv_exec_count_cache.get_mut(&tikv_exec_count_key);
-                                    if let Some(handle) = handle {
-                                        *handle += count;
-                                    } else {
-                                        tikv_exec_count_cache
-                                            .insert(tikv_exec_count_key.clone(), count);
-                                    }
-                                }
-                            }
-                        }
-
-                        table_events
-                            .entry(table_name.to_string())
-                            .or_insert_with(Vec::new)
-                            .push(Event::Log(log_event));
                     }
                     "tikv_topsql" => {
+                        // handle tidb events first, since tikv events may depend on tidb's tikv_exec_count info
+                        if !tidb_event_cache_cleared {
+                            self.process_tidb_records_events(
+                                &mut table_events,
+                                &mut sql_cache,
+                                &mut plan_cache,
+                                &mut tikv_exec_count_cache,
+                                &mut tidb_event_cache,
+                            );
+                            tidb_event_cache.clear();
+                            tidb_event_cache_cleared = true;
+                        }
+
                         let mut tikv_exec_count_key = TiKVExecCountKey::default();
                         // Enrich SQL and Plan from cache
                         if let Some(sql_digest) =
@@ -609,7 +639,7 @@ impl StreamSink<Event> for TopSQLDeltaLakeSink {
         let mut input = input.ready_chunks(self.write_config.batch_size);
 
         while let Some(events) = input.next().await {
-            if let Err(e) = self.process_events(events).await {
+            if let Err(e) = self.process_events(events, true).await {
                 error!("Failed to process events: {}", e);
             }
         }

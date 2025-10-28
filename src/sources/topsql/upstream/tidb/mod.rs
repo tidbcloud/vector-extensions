@@ -55,4 +55,8 @@ impl Upstream for TiDBUpstream {
             .await
             .map(|r| r.into_inner())
     }
+
+    fn get_wait_seconds() -> u64 {
+        0
+    }
 }
