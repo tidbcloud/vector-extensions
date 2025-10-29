@@ -369,6 +369,9 @@ impl TopSqlSubResponseParser {
                     None
                 }
             }));
+        if let Some(event) = buf.build_event() {
+            logs.push(event);
+        }
 
         // stmt_kv_exec_count
         buf.label_name(METRIC_NAME_STMT_EXEC_COUNT)

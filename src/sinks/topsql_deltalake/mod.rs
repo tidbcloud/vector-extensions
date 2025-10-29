@@ -129,7 +129,7 @@ impl GenerateConfig for TopSQLDeltaLakeConfig {
 }
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "deltalake")]
+#[typetag::serde(name = "topsql_deltalake")]
 impl SinkConfig for TopSQLDeltaLakeConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
         error!(

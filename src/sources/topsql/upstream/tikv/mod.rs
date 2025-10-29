@@ -57,6 +57,6 @@ impl Upstream for TiKVUpstream {
     }
 
     fn get_wait_seconds() -> u64 {
-        60
+        59
     }
 }

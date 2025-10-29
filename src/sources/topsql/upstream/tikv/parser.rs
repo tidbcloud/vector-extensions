@@ -207,6 +207,31 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                     }
                 }
                 record.items = new_items.into_values().collect();
+            } else if let Some(RecordOneof::RegionRecord(record)) = &mut response.record_oneof {
+                let mut new_items = BTreeMap::new();
+                for item in &record.items {
+                    let new_ts =
+                        item.timestamp_sec + (interval_sec - item.timestamp_sec % interval_sec);
+                    match new_items.get(&new_ts) {
+                        None => {
+                            let mut new_item = item.clone();
+                            new_item.timestamp_sec = new_ts;
+                            new_items.insert(new_ts, new_item);
+                        }
+                        Some(existed_item) => {
+                            let mut new_item = existed_item.clone();
+                            new_item.cpu_time_ms += item.cpu_time_ms;
+                            new_item.read_keys += item.read_keys;
+                            new_item.write_keys += item.write_keys;
+                            new_item.network_in_bytes += item.network_in_bytes;
+                            new_item.network_out_bytes += item.network_out_bytes;
+                            new_item.logical_read_bytes += item.logical_read_bytes;
+                            new_item.logical_write_bytes += item.logical_write_bytes;
+                            new_items.insert(new_ts, new_item);
+                        }
+                    }
+                }
+                record.items = new_items.into_values().collect();
             }
         }
     }
@@ -294,6 +319,9 @@ impl ResourceUsageRecordParser {
                     None
                 }
             }));
+        if let Some(event) = buf.build_event() {
+            logs.push(event);
+        }
 
         // logical_read_bytes + logical_write_bytes
         buf.label_name(METRIC_NAME_LOGICAL_BYTES)
@@ -307,6 +335,9 @@ impl ResourceUsageRecordParser {
                     None
                 }
             }));
+        if let Some(event) = buf.build_event() {
+            logs.push(event);
+        }
 
         logs
     }
@@ -327,6 +358,7 @@ impl ResourceUsageRecordParser {
         buf.instance(instance)
             .instance_type(INSTANCE_TYPE_TIKV)
             .region_id(record.region_id.to_string());
+        warn!("Parsing TiKV RegionRecord {}", record.region_id);
 
         macro_rules! append {
             ($( ($label_name:expr, $item_name:tt), )* ) => {
@@ -366,6 +398,9 @@ impl ResourceUsageRecordParser {
                     None
                 }
             }));
+        if let Some(event) = buf.build_event() {
+            logs.push(event);
+        }
 
         // logical_read_bytes + logical_write_bytes
         buf.label_name(METRIC_NAME_LOGICAL_BYTES)
@@ -379,7 +414,9 @@ impl ResourceUsageRecordParser {
                     None
                 }
             }));
-
+        if let Some(event) = buf.build_event() {
+            logs.push(event);
+        }
         logs
     }
 
@@ -418,12 +455,12 @@ impl ResourceUsageRecordParser {
             let log = event.as_mut_log();
 
             // Add metadata with Vector prefix (ensure all fields have values)
-            log.insert("_vector_table", "tikv_topsql");
+            log.insert("dest_table", "tikv_topsql");
             log.insert("timestamps", LogValue::from(item.timestamp_sec));
             log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
             log.insert("instance", instance.clone());
-            log.insert(LABEL_SQL_DIGEST, hex::encode_upper(sql_digest.clone()));
-            log.insert(LABEL_PLAN_DIGEST, hex::encode_upper(plan_digest.clone()));
+            log.insert(LABEL_SQL_DIGEST, sql_digest.clone());
+            log.insert(LABEL_PLAN_DIGEST, plan_digest.clone());
             log.insert("tag_label", tag_label.clone());
             log.insert("db_name", db_name.clone());
             log.insert("table_name", table_name.clone());

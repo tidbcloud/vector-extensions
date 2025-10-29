@@ -11,6 +11,11 @@ use vector_lib::event::Value as LogValue;
 use vector_lib::sink::StreamSink;
 
 use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
+use crate::sources::topsql::upstream::consts::LABEL_INSTANCE;
+use crate::sources::topsql::upstream::consts::LABEL_INSTANCE_TYPE;
+use crate::sources::topsql::upstream::consts::METRIC_NAME_CPU_TIME_MS;
+use crate::sources::topsql::upstream::consts::METRIC_NAME_STMT_DURATION_COUNT;
+use crate::sources::topsql::upstream::consts::METRIC_NAME_STMT_DURATION_SUM_NS;
 use crate::sources::topsql::upstream::consts::{
     LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_REGION_ID,
     LABEL_SQL_DIGEST, METRIC_NAME_LOGICAL_READ_BYTES, METRIC_NAME_LOGICAL_WRITE_BYTES,
@@ -77,6 +82,8 @@ impl TopSQLDeltaLakeSink {
                     tikv_exec_count_key.sql_digest = sql_digest.to_string();
                     if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
                         log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
+                    } else {
+                        info!("tidb sql_digest: {} not found in sql_cache", sql_digest);
                     }
                 }
                 if let Some(plan_digest) = log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str())
@@ -163,6 +170,12 @@ impl TopSQLDeltaLakeSink {
                                     {
                                         *handle = sql.to_string();
                                     }
+                                } else {
+                                    if let Some(sql) =
+                                        log_event.get(LABEL_NORMALIZED_SQL).and_then(|v| v.as_str())
+                                    {
+                                        sql_cache.insert(sql_digest.to_string(), sql.to_string());
+                                    }
                                 }
                             });
                     }
@@ -178,6 +191,14 @@ impl TopSQLDeltaLakeSink {
                                         .and_then(|v| v.as_str())
                                     {
                                         *handle = plan.to_string();
+                                    }
+                                } else {
+                                    if let Some(plan) = log_event
+                                        .get(LABEL_NORMALIZED_PLAN)
+                                        .and_then(|v| v.as_str())
+                                    {
+                                        plan_cache
+                                            .insert(plan_digest.to_string(), plan.to_string());
                                     }
                                 }
                             });
@@ -210,6 +231,8 @@ impl TopSQLDeltaLakeSink {
                             tikv_exec_count_key.sql_digest = sql_digest.to_string();
                             if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
                                 log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
+                            } else {
+                                info!("tikv sql_digest: {} not found in sql_cache", sql_digest);
                             }
                         }
                         if let Some(plan_digest) =
@@ -295,28 +318,28 @@ impl TopSQLDeltaLakeSink {
                     }),
                 );
                 schema_info.insert(
-                    "instance_type".into(),
+                    LABEL_INSTANCE_TYPE.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
                     }),
                 );
                 schema_info.insert(
-                    "instance".into(),
+                    LABEL_INSTANCE.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
                     }),
                 );
                 schema_info.insert(
-                    "sql_digest".into(),
+                    LABEL_SQL_DIGEST.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
                     }),
                 );
                 schema_info.insert(
-                    "plan_digest".into(),
+                    LABEL_PLAN_DIGEST.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
@@ -337,28 +360,28 @@ impl TopSQLDeltaLakeSink {
                     }),
                 );
                 schema_info.insert(
-                    "cpu_time_ms".into(),
+                    METRIC_NAME_CPU_TIME_MS.into(),
                     serde_json::json!({
                         "mysql_type": "int",
                         "is_nullable": false
                     }),
                 );
                 schema_info.insert(
-                    "stmt_exec_count".into(),
+                    METRIC_NAME_STMT_EXEC_COUNT.into(),
                     serde_json::json!({
                         "mysql_type": "bigint",
                         "is_nullable": true
                     }),
                 );
                 schema_info.insert(
-                    "stmt_duration_sum_ns".into(),
+                    METRIC_NAME_STMT_DURATION_SUM_NS.into(),
                     serde_json::json!({
                         "mysql_type": "bigint",
                         "is_nullable": true
                     }),
                 );
                 schema_info.insert(
-                    "stmt_duration_count".into(),
+                    METRIC_NAME_STMT_DURATION_COUNT.into(),
                     serde_json::json!({
                         "mysql_type": "bigint",
                         "is_nullable": true
@@ -395,28 +418,28 @@ impl TopSQLDeltaLakeSink {
                     }),
                 );
                 schema_info.insert(
-                    "instance_type".into(),
+                    LABEL_INSTANCE_TYPE.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
                     }),
                 );
                 schema_info.insert(
-                    "instance".into(),
+                    LABEL_INSTANCE.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
                     }),
                 );
                 schema_info.insert(
-                    "sql_digest".into(),
+                    LABEL_SQL_DIGEST.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
                     }),
                 );
                 schema_info.insert(
-                    "plan_digest".into(),
+                    LABEL_PLAN_DIGEST.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
@@ -437,7 +460,7 @@ impl TopSQLDeltaLakeSink {
                     }),
                 );
                 schema_info.insert(
-                    "cpu_time_ms".into(),
+                    METRIC_NAME_CPU_TIME_MS.into(),
                     serde_json::json!({
                         "mysql_type": "int",
                         "is_nullable": false
@@ -452,6 +475,13 @@ impl TopSQLDeltaLakeSink {
                 );
                 schema_info.insert(
                     METRIC_NAME_WRITE_KEYS.into(),
+                    serde_json::json!({
+                        "mysql_type": "bigint",
+                        "is_nullable": true
+                    }),
+                );
+                schema_info.insert(
+                    METRIC_NAME_STMT_EXEC_COUNT.into(),
                     serde_json::json!({
                         "mysql_type": "bigint",
                         "is_nullable": true
@@ -502,14 +532,14 @@ impl TopSQLDeltaLakeSink {
                     }),
                 );
                 schema_info.insert(
-                    "instance_type".into(),
+                    LABEL_INSTANCE_TYPE.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
                     }),
                 );
                 schema_info.insert(
-                    "instance".into(),
+                    LABEL_INSTANCE.into(),
                     serde_json::json!({
                         "mysql_type": "text",
                         "is_nullable": false
@@ -523,7 +553,7 @@ impl TopSQLDeltaLakeSink {
                     }),
                 );
                 schema_info.insert(
-                    "cpu_time_ms".into(),
+                    METRIC_NAME_CPU_TIME_MS.into(),
                     serde_json::json!({
                         "mysql_type": "int",
                         "is_nullable": false

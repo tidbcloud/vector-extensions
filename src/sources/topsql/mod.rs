@@ -115,6 +115,7 @@ impl SourceConfig for TopSQLConfig {
         let label_k8s_instance = self.label_k8s_instance.clone();
         let keyspace_to_vmtenants = self.keyspace_to_vmtenants.clone().unwrap_or_default();
         let enable_row_format = self.enable_row_format;
+        info!("TopSql source enable_row_format: {}", enable_row_format);
 
         Ok(Box::pin(async move {
             let controller = Controller::new(
