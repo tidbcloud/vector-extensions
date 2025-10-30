@@ -30,7 +30,7 @@ collection_method = "coprocessor"
 source_schema = "information_schema"
 source_table = "CLUSTER_STATEMENTS_SUMMARY"
 dest_table = "statements_summary"
-collection_interval = "short"
+collection_interval = "auto(300)"
 enabled = true
 
 # Output to Delta Lake (local storage, using default partitioning)

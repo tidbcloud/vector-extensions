@@ -176,6 +176,13 @@ create_vector_config() {
 
     log_info "Creating Vector configuration file: $config_file (sink: $sink_type)"
 
+    # Determine collection interval (supports AUTO for coprocessor tests)
+    local interval_value="short"
+    if [ -n "$AUTO_INTERVAL" ]; then
+        interval_value="auto(${AUTO_INTERVAL})"
+        log_info "Using AUTO interval: ${interval_value}"
+    fi
+
     cat > "$config_file" <<EOF
 # Vector Configuration File - System Tables Source Test
 # Collection method: $collection_method, Output: $sink_type
@@ -209,7 +216,7 @@ collection_method = "$collection_method"
 source_schema = "information_schema"
 source_table = "CLUSTER_STATEMENTS_SUMMARY"
 dest_table = "statements_summary"
-collection_interval = "short"
+collection_interval = "${interval_value}"
 enabled = true
 
 EOF
@@ -449,6 +456,7 @@ Commands:
 
 Options:
     -d, --duration SECONDS    Test duration (default: 30s)
+    --auto SECONDS            Use AUTO rotate-aligned collection: collection_interval = "auto(SECONDS)"
     --no-cleanup              Do not clean up test files on exit
     -h, --help               Show help information
 
@@ -459,6 +467,7 @@ Examples:
     $0 test-sql -d 60        # Test SQL method for 60 seconds (console output)
     $0 test-sql-delta -d 60  # Test SQL method for 60 seconds (Delta Lake output)
     $0 test-copr-delta --no-cleanup -d 60  # Test coprocessor method without cleanup
+    $0 test-copr --auto 300 -d 120         # Coprocessor with auto(300), pull at rotate-20s
     $0 test-all-delta -d 120 # Test all methods for 120 seconds (Delta Lake output)
     $0 cleanup               # Clean up test files
 
@@ -477,6 +486,7 @@ EOF
 main() {
     local duration=30
     local command=""
+    AUTO_INTERVAL=""
 
     # Parse arguments
     local no_cleanup=false
@@ -484,6 +494,10 @@ main() {
         case $1 in
             -d|--duration)
                 duration="$2"
+                shift 2
+                ;;
+            --auto)
+                AUTO_INTERVAL="$2"
                 shift 2
                 ;;
             --no-cleanup)

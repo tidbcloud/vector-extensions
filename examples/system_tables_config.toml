@@ -42,7 +42,7 @@ max_retries = 3
 source_schema = "information_schema"
 source_table = "CLUSTER_STATEMENTS_SUMMARY"
 dest_table = "cluster_statements_summary"
-collection_interval = "short"  # 可选: short (30s), medium (5m), long (1h)
+collection_interval = "auto(300)"  # 对齐 TiDB rotate=300s，在 rotate 前20s抓取；也支持: short/long/custom=SECONDS
 enabled = true
 
 # 表配置 - CLUSTER_TIDB_STATEMENTS_STATS (集群表)

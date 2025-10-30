@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use tokio::time::interval;
+use tokio::time::{interval, sleep_until, Instant};
 use tracing::{debug, error, info, warn};
 use vector::shutdown::ShutdownSignal;
 use vector::SourceSender;
@@ -390,94 +390,217 @@ impl Controller {
         };
 
         let table_config = &tables[0]; // Use first table's config as reference
-        let interval_seconds = parse_collection_interval(
-            &table_config.collection_interval,
-            &collection_config,
-        );
-        let interval_duration = Duration::from_secs(interval_seconds);
-
         let table_names: Vec<String> = tables.iter().map(|t| t.source_table.clone()).collect();
-        
-        info!(
-            "📊 Starting collection loop for tables: [{}] with interval: {}s ({}) [config: short={}s, long={}s]",
-            table_names.join(", "),
-            interval_seconds,
-            &table_config.collection_interval,
-            collection_config.short_interval,
-            collection_config.long_interval
-        );
 
-        let mut collection_interval = interval(interval_duration);
+        // Special AUTO scheduling for coprocessor + STATEMENTS_SUMMARY tables
+        let is_copr = matches!(collector.collection_method(), CollectionMethod::Coprocessor);
+        let has_statements_summary = tables
+            .iter()
+            .any(|t| t.source_table.contains("STATEMENTS_SUMMARY"));
+        let auto_interval_secs = if is_copr && table_config.collection_interval.starts_with("auto(") {
+            table_config
+                .collection_interval
+                .trim_start_matches("auto(")
+                .trim_end_matches(')')
+                .parse::<u64>()
+                .unwrap_or(300)
+        } else {
+            0
+        };
 
-        loop {
-            collection_interval.tick().await;
-
+        if is_copr && has_statements_summary && auto_interval_secs > 0 {
             info!(
-                "🔄 Collection cycle starting - interval: {}s, tables: [{}]",
-                interval_seconds,
-                table_names.join(", ")
+                "📊 Starting AUTO aligned collection for tables: [{}], TiDB rotate={}s (pull at rotate-20s)",
+                table_names.join(", "),
+                auto_interval_secs
             );
 
-            // Collect data from each table
-            for table in &tables {
-                if !table.enabled {
-                    continue;
+            // Main loop aligned to TiDB rotate boundary: floor(now/interval)*interval + interval - 20s
+            loop {
+                let now_secs = chrono::Utc::now().timestamp() as u64;
+                let begin_for_cur = (now_secs / auto_interval_secs) * auto_interval_secs;
+                let rotate_at = begin_for_cur + auto_interval_secs;
+                // target time is 20s before rotate; if already passed, use next interval
+                let mut target = rotate_at.saturating_sub(20);
+                if now_secs >= target {
+                    let next_begin = rotate_at;
+                    let next_rotate = next_begin + auto_interval_secs;
+                    target = next_rotate.saturating_sub(20);
                 }
 
-                // Check if collector can handle this table
-                if !collector.can_collect_table(table) {
-                    warn!(
-                        "Collector {} cannot handle table {}.{}",
-                        collector.collection_method(),
-                        table.source_schema,
-                        table.source_table
-                    );
-                    continue;
-                }
+                let sleep_secs = target.saturating_sub(now_secs);
+                info!(
+                    "⏳ Waiting {}s until next aligned pull at t={} (rotate-20s)",
+                    sleep_secs,
+                    target
+                );
+                let wake_at = Instant::now() + Duration::from_secs(sleep_secs);
+                sleep_until(wake_at).await;
 
-                match collector.collect_table_data(table).await {
-                    Ok(result) => {
-                        let row_count = result.data.len();
-                        info!(
-                            "Collected {} rows from table {} using {}",
-                            row_count,
-                            table.source_table,
-                            collector.collection_method()
+                info!("🔄 AUTO collection cycle starting for tables: [{}]", table_names.join(", "));
+
+                // Collect with up to 5 retries to adapt around rotate jitter
+                for table in &tables {
+                    if !table.enabled {
+                        continue;
+                    }
+                    if !collector.can_collect_table(table) {
+                        warn!(
+                            "Collector {} cannot handle table {}.{}",
+                            collector.collection_method(),
+                            table.source_schema,
+                            table.source_table
                         );
+                        continue;
+                    }
 
-                        // Convert data to events and send
-                        for row_data in &result.data {
-                            let event = create_event_from_result(&result, row_data.clone());
-
-                            // Send event to sinks
-                            if let Err(e) = out.send_event(event).await {
-                                error!(
-                                    "Failed to send event for table {}: {}",
-                                    table.source_table, e
+                    let mut attempts = 0u8;
+                    loop {
+                        attempts += 1;
+                        match collector.collect_table_data(table).await {
+                            Ok(result) => {
+                                let row_count = result.data.len();
+                                info!(
+                                    "Collected {} rows from table {} using {} (attempt {}/{})",
+                                    row_count,
+                                    table.source_table,
+                                    collector.collection_method(),
+                                    attempts,
+                                    5
                                 );
-                            } else {
-                                debug!("Successfully sent event for table {}", table.source_table);
+
+                                for row_data in &result.data {
+                                    let event = create_event_from_result(&result, row_data.clone());
+                                    if let Err(e) = out.send_event(event).await {
+                                        error!(
+                                            "Failed to send event for table {}: {}",
+                                            table.source_table, e
+                                        );
+                                    } else {
+                                        debug!(
+                                            "Successfully sent event for table {}",
+                                            table.source_table
+                                        );
+                                    }
+                                }
+                                break;
+                            }
+                            Err(e) => {
+                                if attempts >= 5 {
+                                    error!(
+                                        "Failed to collect data from table {} using {} after {} attempts: {}",
+                                        table.source_table,
+                                        collector.collection_method(),
+                                        attempts,
+                                        e
+                                    );
+                                    break;
+                                } else {
+                                    warn!(
+                                        "Collect failed for table {} (attempt {}/{}): {}. Retrying in 3s...",
+                                        table.source_table,
+                                        attempts,
+                                        5,
+                                        e
+                                    );
+                                    tokio::time::sleep(Duration::from_secs(3)).await;
+                                }
                             }
                         }
                     }
-                    Err(e) => {
-                        error!(
-                            "Failed to collect data from table {} using {}: {}",
-                            table.source_table,
-                            collector.collection_method(),
-                            e
-                        );
-                    }
+                }
+
+                if let Err(e) = collector.health_check().await {
+                    warn!(
+                        "Health check failed for {} collector: {}",
+                        collector.collection_method(),
+                        e
+                    );
                 }
             }
+        } else {
+            // Default fixed-interval scheduling
+            let interval_seconds = parse_collection_interval(
+                &table_config.collection_interval,
+                &collection_config,
+            );
+            let interval_duration = Duration::from_secs(interval_seconds);
 
-            // Perform periodic health check
-            if let Err(e) = collector.health_check().await {
-                warn!(
-                    "Health check failed for {} collector: {}",
-                    collector.collection_method(),
-                    e
+            info!(
+                "📊 Starting collection loop for tables: [{}] with interval: {}s ({}) [config: short={}s, long={}s]",
+                table_names.join(", "),
+                interval_seconds,
+                &table_config.collection_interval,
+                collection_config.short_interval,
+                collection_config.long_interval
+            );
+
+            let mut collection_interval = interval(interval_duration);
+
+            loop {
+                collection_interval.tick().await;
+
+                info!(
+                    "🔄 Collection cycle starting - interval: {}s, tables: [{}]",
+                    interval_seconds,
+                    table_names.join(", ")
                 );
+
+                for table in &tables {
+                    if !table.enabled {
+                        continue;
+                    }
+                    if !collector.can_collect_table(table) {
+                        warn!(
+                            "Collector {} cannot handle table {}.{}",
+                            collector.collection_method(),
+                            table.source_schema,
+                            table.source_table
+                        );
+                        continue;
+                    }
+                    match collector.collect_table_data(table).await {
+                        Ok(result) => {
+                            let row_count = result.data.len();
+                            info!(
+                                "Collected {} rows from table {} using {}",
+                                row_count,
+                                table.source_table,
+                                collector.collection_method()
+                            );
+                            for row_data in &result.data {
+                                let event = create_event_from_result(&result, row_data.clone());
+                                if let Err(e) = out.send_event(event).await {
+                                    error!(
+                                        "Failed to send event for table {}: {}",
+                                        table.source_table, e
+                                    );
+                                } else {
+                                    debug!(
+                                        "Successfully sent event for table {}",
+                                        table.source_table
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to collect data from table {} using {}: {}",
+                                table.source_table,
+                                collector.collection_method(),
+                                e
+                            );
+                        }
+                    }
+                }
+
+                if let Err(e) = collector.health_check().await {
+                    warn!(
+                        "Health check failed for {} collector: {}",
+                        collector.collection_method(),
+                        e
+                    );
+                }
             }
         }
     }
