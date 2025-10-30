@@ -196,8 +196,8 @@ impl CoprocessorCollector {
             info!("No TLS config, using direct HTTP connection");
             Channel::from_shared(self.grpc_endpoint.clone())
                 .map_err(|e| CollectionError::ConfigurationError(format!("Invalid endpoint: {}", e)))?
-                .http2_keep_alive_interval(Duration::from_secs(300))
-                .keep_alive_timeout(Duration::from_secs(10))
+                .http2_keep_alive_interval(Duration::from_secs(60))
+                .keep_alive_timeout(Duration::from_secs(30))
                 .keep_alive_while_idle(true)
         } else {
             // TLS enabled - use topsql-style TLS proxy approach
@@ -217,8 +217,8 @@ impl CoprocessorCollector {
             let proxy_endpoint = format!("http://127.0.0.1:{}", proxy_port);
             Channel::from_shared(proxy_endpoint)
                 .map_err(|e| CollectionError::ConfigurationError(format!("Invalid proxy endpoint: {}", e)))?
-                .http2_keep_alive_interval(Duration::from_secs(300))
-                .keep_alive_timeout(Duration::from_secs(10))
+                .http2_keep_alive_interval(Duration::from_secs(60))
+                .keep_alive_timeout(Duration::from_secs(30))
                 .keep_alive_while_idle(true)
         };
 
