@@ -145,7 +145,7 @@ where
 pub struct CoprocessorCollector {
     config: CollectorConfig,
     grpc_endpoint: String,
-    client_channel: Option<Channel>,
+    client_channel: tokio::sync::Mutex<Option<Channel>>,
     cached_schemas: std::sync::Mutex<HashMap<String, TableSchema>>,
 }
 
@@ -176,7 +176,7 @@ impl CoprocessorCollector {
         Ok(Self {
             config,
             grpc_endpoint,
-            client_channel: None,
+            client_channel: tokio::sync::Mutex::new(None),
             cached_schemas: std::sync::Mutex::new(HashMap::new()),
         })
     }
@@ -531,9 +531,14 @@ impl CoprocessorCollector {
         request: &CoprocessorRequest,
         table: &TableConfig,
     ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
-        let channel = self.client_channel.as_ref().ok_or_else(|| {
-            CollectionError::ConfigurationError("gRPC channel not initialized".to_string())
-        })?;
+        // Grab current channel
+        let channel = {
+            let guard = self.client_channel.lock().await;
+            guard
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| CollectionError::ConfigurationError("gRPC channel not initialized".to_string()))?
+        };
 
         // Create TiKV client
         let mut client = TikvClient::new(channel.clone());
@@ -555,10 +560,31 @@ impl CoprocessorCollector {
             &serialized[..std::cmp::min(64, serialized.len())]
         );
 
-        let response = client
-            .coprocessor(request.clone())
-            .await
-            .map_err(|e| CollectionError::NetworkError(format!("gRPC request failed: {}", e)))?;
+        let response = match client.coprocessor(request.clone()).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!(
+                    "gRPC request failed: {}. Recreating channel and retrying once (endpoint: {})",
+                    e,
+                    self.grpc_endpoint
+                );
+                let new_channel = self.create_grpc_connection().await.map_err(|err| {
+                    CollectionError::NetworkError(format!(
+                        "Failed to recreate gRPC channel after error '{}': {}",
+                        e, err
+                    ))
+                })?;
+                {
+                    let mut guard = self.client_channel.lock().await;
+                    *guard = Some(new_channel.clone());
+                }
+                let mut client_retry = TikvClient::new(new_channel);
+                client_retry
+                    .coprocessor(request.clone())
+                    .await
+                    .map_err(|e2| CollectionError::NetworkError(format!("gRPC request failed after reconnect: {}", e2)))?
+            }
+        };
 
         let cop_response = response.into_inner();
 
@@ -872,7 +898,7 @@ impl CoprocessorCollector {
 
         // Parse all available rows
         while offset < data.len() {
-            info!(
+            debug!(
                 "RUST: Starting row {} at offset {} (remaining bytes: {})",
                 row_index,
                 offset,
@@ -912,7 +938,7 @@ impl CoprocessorCollector {
 
                         // Special debug for request unit columns to verify float decoding
                         if column_name.contains("REQUEST_UNIT") && row_index < 3 {
-                            info!(
+                            debug!(
                                 "DEBUG REQUEST_UNIT: Row {} Col {} Name {} Type {} Raw value={:?}",
                                 row_index, col_idx, column_name, table_col.tp, value
                             );
@@ -1887,7 +1913,10 @@ impl DataCollector for CoprocessorCollector {
         );
 
         let channel = self.create_grpc_connection().await?;
-        self.client_channel = Some(channel);
+        {
+            let mut guard = self.client_channel.lock().await;
+            *guard = Some(channel);
+        }
 
         info!("Coprocessor collector initialized successfully");
         Ok(())
@@ -1900,9 +1929,13 @@ impl DataCollector for CoprocessorCollector {
         let start_time = Instant::now();
         let timestamp = chrono::Utc::now();
 
-        let _channel = self.client_channel.as_ref().ok_or_else(|| {
-            CollectionError::ConfigurationError("gRPC channel not initialized".to_string())
-        })?;
+        // Ensure we have a channel; lazily initialize if missing (avoid holding lock across await)
+        let need_init = { self.client_channel.lock().await.is_none() };
+        if need_init {
+            let channel = self.create_grpc_connection().await?;
+            let mut ch = self.client_channel.lock().await;
+            *ch = Some(channel);
+        }
 
         // Try to get table schema
         let table_schema = match self.get_table_schema_via_http(table).await {
@@ -1986,7 +2019,7 @@ impl DataCollector for CoprocessorCollector {
     }
 
     async fn health_check(&self) -> Result<(), CollectionError> {
-        if self.client_channel.is_none() {
+        if self.client_channel.lock().await.is_none() {
             return Err(CollectionError::ConfigurationError(
                 "gRPC channel not initialized".to_string(),
             ));
