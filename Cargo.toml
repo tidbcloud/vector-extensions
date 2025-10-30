@@ -6,6 +6,10 @@ readme = "README.md"
 publish = false
 default-run = "vector"
 
+[lib]
+name = "vector_extensions"
+path = "src/lib.rs"
+
 [[bin]]
 name = "vector"
 path = "src/main.rs"

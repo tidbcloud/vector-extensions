@@ -13,9 +13,9 @@ use vector_lib::{
 use crate::sources::system_tables::controller::Controller;
 
 // New abstracted collectors
-mod collector_factory;
-mod collectors;
-mod data_collector;
+pub mod collector_factory;
+pub mod collectors;
+pub mod data_collector;
 
 // Main controller
 mod controller;
