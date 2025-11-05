@@ -6,9 +6,8 @@ mod consts;
 mod tls_proxy;
 mod utils;
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 
 use futures::StreamExt;
 use tokio::time;
@@ -32,7 +31,7 @@ use crate::sources::topsql::{
         parser::UpstreamEventParser,
         tidb::TiDBUpstream,
         tikv::TiKVUpstream,
-        utils::{instance_event, instance_event_metric, instance_event_with_tags},
+        utils::{instance_event, instance_event_with_tags},
     },
 };
 
@@ -55,34 +54,32 @@ pub trait Upstream: Send {
     ) -> Result<tonic::codec::Streaming<Self::UpstreamEvent>, tonic::Status>;
 }
 
-// Common trait for TopSQL source behavior
-#[async_trait::async_trait]
-trait TopSQLSourceBehavior {
-    async fn handle_instance_event(
-        &self,
-        instance: &str,
-        instance_type: &str,
-        out: &mut SourceSender,
-    );
-}
-
-// Base TopSQL source with common functionality
-struct BaseTopSQLSource {
+pub struct TopSQLSource {
     instance: String,
     instance_type: InstanceType,
     uri: String,
+
     tls: Option<TlsConfig>,
     protocal: String,
     out: SourceSender,
+
     init_retry_delay: Duration,
     retry_delay: Duration,
     top_n: usize,
     downsampling_interval: u32,
     schema_cache: Arc<SchemaCache>,
+    keyspace_to_vmtenants: HashMap<String, (String, String)>,
 }
 
-impl BaseTopSQLSource {
-    fn new(
+enum State {
+    RetryNow,
+    RetryDelay,
+}
+
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+
+impl TopSQLSource {
+    pub fn new(
         component: Component,
         tls: Option<TlsConfig>,
         out: SourceSender,
@@ -90,6 +87,7 @@ impl BaseTopSQLSource {
         top_n: usize,
         downsampling_interval: u32,
         schema_cache: Arc<SchemaCache>,
+        keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Option<Self> {
         let protocal = if tls.is_none() {
             "http".into()
@@ -97,7 +95,7 @@ impl BaseTopSQLSource {
             "https".into()
         };
         match component.topsql_address() {
-            Some(address) => Some(BaseTopSQLSource {
+            Some(address) => Some(TopSQLSource {
                 instance: address.clone(),
                 instance_type: component.instance_type,
                 uri: if tls.is_some() {
@@ -105,6 +103,7 @@ impl BaseTopSQLSource {
                 } else {
                     format!("http://{}", address)
                 },
+
                 tls,
                 protocal,
                 out,
@@ -113,35 +112,26 @@ impl BaseTopSQLSource {
                 top_n,
                 downsampling_interval,
                 schema_cache,
+                keyspace_to_vmtenants,
             }),
             None => None,
         }
     }
 
-    async fn run<B: TopSQLSourceBehavior>(mut self, mut shutdown: ShutdownSubscriber, behavior: B) {
+    pub async fn run(mut self, mut shutdown: ShutdownSubscriber) {
         let shutdown_subscriber = shutdown.clone();
         tokio::select! {
-            _ = self.run_loop(shutdown_subscriber, &behavior) => {}
+            _ = self.run_loop(shutdown_subscriber) => {}
             _ = shutdown.done() => {}
         }
     }
 
-    async fn run_loop<B: TopSQLSourceBehavior>(
-        &mut self,
-        shutdown_subscriber: ShutdownSubscriber,
-        behavior: &B,
-    ) {
+    async fn run_loop(&mut self, shutdown_subscriber: ShutdownSubscriber) {
         loop {
             let shutdown_subscriber = shutdown_subscriber.clone();
             let state = match self.instance_type {
-                InstanceType::TiDB => {
-                    self.run_once::<TiDBUpstream, B>(shutdown_subscriber, behavior)
-                        .await
-                }
-                InstanceType::TiKV => {
-                    self.run_once::<TiKVUpstream, B>(shutdown_subscriber, behavior)
-                        .await
-                }
+                InstanceType::TiDB => self.run_once::<TiDBUpstream>(shutdown_subscriber).await,
+                InstanceType::TiKV => self.run_once::<TiKVUpstream>(shutdown_subscriber).await,
                 _ => unreachable!(),
             };
 
@@ -162,11 +152,7 @@ impl BaseTopSQLSource {
         }
     }
 
-    async fn run_once<U: Upstream, B: TopSQLSourceBehavior>(
-        &mut self,
-        shutdown_subscriber: ShutdownSubscriber,
-        behavior: &B,
-    ) -> State {
+    async fn run_once<U: Upstream>(&mut self, shutdown_subscriber: ShutdownSubscriber) -> State {
         let response_stream = self.build_stream::<U>(shutdown_subscriber).await;
         let mut response_stream = match response_stream {
             Ok(stream) => stream,
@@ -178,8 +164,7 @@ impl BaseTopSQLSource {
         let mut instance_stream = IntervalStream::new(time::interval(Duration::from_secs(30)));
         let mut responses = vec![];
         let mut last_event_recv_ts = chrono::Local::now().timestamp();
-        info!(message = "Starting TopSQL source loop", instance = %self.instance, instance_type = %self.instance_type);
-        let exit_state = loop {
+        loop {
             tokio::select! {
                 response = response_stream.next() => {
                     match response {
@@ -206,12 +191,9 @@ impl BaseTopSQLSource {
                         }
                     }
                 }
-                _ = instance_stream.next() => self.handle_instance(behavior).await,
+                _ = instance_stream.next() => self.handle_instance().await,
             }
-        };
-
-        info!(message = "TopSQL source loop ended", instance = %self.instance, instance_type = %self.instance_type, exit_state = ?exit_state);
-        exit_state
+        }
     }
 
     async fn build_stream<U: Upstream>(
@@ -267,6 +249,7 @@ impl BaseTopSQLSource {
                 response,
                 self.instance.clone(),
                 self.schema_cache.clone(),
+                self.keyspace_to_vmtenants.clone(),
             );
             batch.append(&mut events);
         }
@@ -278,93 +261,14 @@ impl BaseTopSQLSource {
         }
     }
 
-    async fn handle_instance<B: TopSQLSourceBehavior>(&mut self, behavior: &B) {
-        behavior
-            .handle_instance_event(
-                &self.instance,
-                &self.instance_type.to_string(),
-                &mut self.out,
-            )
-            .await;
-    }
-
-    fn on_connected(&mut self) {
-        self.retry_delay = self.init_retry_delay;
-        info!("Connected to the upstream.");
-    }
-}
-
-// Legacy TopSQL source behavior
-struct LegacyTopSQLBehavior;
-
-#[async_trait::async_trait]
-impl TopSQLSourceBehavior for LegacyTopSQLBehavior {
-    async fn handle_instance_event(
-        &self,
-        instance: &str,
-        instance_type: &str,
-        out: &mut SourceSender,
-    ) {
-        let event = instance_event(instance.to_string(), instance_type.to_string());
-        if out.send_event(event).await.is_err() {
-            StreamClosedError { count: 1 }.emit();
-        }
-    }
-}
-
-// Legacy TopSQL source
-pub struct LegacyTopSQLSource {
-    base: BaseTopSQLSource,
-}
-
-impl LegacyTopSQLSource {
-    pub fn new(
-        component: Component,
-        tls: Option<TlsConfig>,
-        out: SourceSender,
-        init_retry_delay: Duration,
-        top_n: usize,
-        downsampling_interval: u32,
-        schema_cache: Arc<SchemaCache>,
-    ) -> Option<Self> {
-        let base = BaseTopSQLSource::new(
-            component,
-            tls,
-            out,
-            init_retry_delay,
-            top_n,
-            downsampling_interval,
-            schema_cache,
-        )?;
-        Some(LegacyTopSQLSource { base })
-    }
-
-    pub async fn run(self, shutdown: ShutdownSubscriber) {
-        let behavior = LegacyTopSQLBehavior;
-        self.base.run(shutdown, behavior).await;
-    }
-}
-
-// Nextgen TopSQL source behavior
-struct NextgenTopSQLBehavior {
-    keyspace_to_vmtenants: HashMap<String, (String, String)>,
-}
-
-#[async_trait::async_trait]
-impl TopSQLSourceBehavior for NextgenTopSQLBehavior {
-    async fn handle_instance_event(
-        &self,
-        instance: &str,
-        instance_type: &str,
-        out: &mut SourceSender,
-    ) {
+    async fn handle_instance(&mut self) {
         let mut batch = vec![];
-        let event = instance_event_metric(instance.to_string(), instance_type.to_string());
+        let event = instance_event(self.instance.clone(), self.instance_type.to_string());
         batch.push(event);
         for (cluster_id, (vm_account_id, vm_project_id)) in &self.keyspace_to_vmtenants {
             let event = instance_event_with_tags(
-                instance.to_string(),
-                instance_type.to_string(),
+                self.instance.clone(),
+                self.instance_type.to_string(),
                 cluster_id.clone(),
                 vm_account_id.clone(),
                 vm_project_id.clone(),
@@ -372,106 +276,13 @@ impl TopSQLSourceBehavior for NextgenTopSQLBehavior {
             batch.push(event);
         }
         let count = batch.len();
-        if out.send_batch(batch).await.is_err() {
+        if self.out.send_batch(batch).await.is_err() {
             StreamClosedError { count }.emit()
         }
     }
-}
 
-// Nextgen TopSQL source
-pub struct NextgenTopSQLSource {
-    base: BaseTopSQLSource,
-    behavior: NextgenTopSQLBehavior,
-}
-
-impl NextgenTopSQLSource {
-    pub fn new(
-        component: Component,
-        tls: Option<TlsConfig>,
-        out: SourceSender,
-        init_retry_delay: Duration,
-        top_n: usize,
-        downsampling_interval: u32,
-        schema_cache: Arc<SchemaCache>,
-        keyspace_to_vmtenants: HashMap<String, (String, String)>,
-    ) -> Option<Self> {
-        let base = BaseTopSQLSource::new(
-            component,
-            tls,
-            out,
-            init_retry_delay,
-            top_n,
-            downsampling_interval,
-            schema_cache,
-        )?;
-        let behavior = NextgenTopSQLBehavior {
-            keyspace_to_vmtenants,
-        };
-        Some(NextgenTopSQLSource { base, behavior })
-    }
-
-    pub async fn run(self, shutdown: ShutdownSubscriber) {
-        self.base.run(shutdown, self.behavior).await;
+    fn on_connected(&mut self) {
+        self.retry_delay = self.init_retry_delay;
+        info!("Connected to the upstream.");
     }
 }
-
-// Public interface that abstracts over both implementations
-pub enum TopSQLSource {
-    Legacy(LegacyTopSQLSource),
-    Nextgen(NextgenTopSQLSource),
-}
-
-impl TopSQLSource {
-    pub fn new(
-        component: Component,
-        tls: Option<TlsConfig>,
-        out: SourceSender,
-        init_retry_delay: Duration,
-        top_n: usize,
-        downsampling_interval: u32,
-        schema_cache: Arc<SchemaCache>,
-        keyspace_to_vmtenants: HashMap<String, (String, String)>,
-    ) -> Option<Self> {
-        use crate::common::features::is_nextgen_mode;
-
-        if is_nextgen_mode() {
-            let source = NextgenTopSQLSource::new(
-                component,
-                tls,
-                out,
-                init_retry_delay,
-                top_n,
-                downsampling_interval,
-                schema_cache,
-                keyspace_to_vmtenants,
-            )?;
-            Some(TopSQLSource::Nextgen(source))
-        } else {
-            let source = LegacyTopSQLSource::new(
-                component,
-                tls,
-                out,
-                init_retry_delay,
-                top_n,
-                downsampling_interval,
-                schema_cache,
-            )?;
-            Some(TopSQLSource::Legacy(source))
-        }
-    }
-
-    pub async fn run(self, shutdown: ShutdownSubscriber) {
-        match self {
-            TopSQLSource::Legacy(source) => source.run(shutdown).await,
-            TopSQLSource::Nextgen(source) => source.run(shutdown).await,
-        }
-    }
-}
-
-#[derive(Debug)]
-enum State {
-    RetryNow,
-    RetryDelay,
-}
-
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);

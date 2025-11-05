@@ -1,12 +1,14 @@
 use chrono::{DateTime, Utc};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use vector_lib::event::LogEvent;
+use vector::event::{Event, Metric, MetricKind, MetricTags, MetricValue};
 
 use crate::sources::topsql::schema_cache::SchemaCache;
+use crate::sources::topsql::upstream::consts::{LABEL_VM_ACCOUNT_ID, LABEL_VM_PROJECT_ID};
 use crate::sources::topsql::upstream::{
     consts::{
-        LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, LABEL_PLAN_DIGEST,
-        LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
+        LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_KEYSPACE_NAME, LABEL_NAME,
+        LABEL_PLAN_DIGEST, LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
     },
     utils::make_metric_like_log_event,
 };
@@ -18,7 +20,8 @@ pub trait UpstreamEventParser {
         event: Self::UpstreamEvent,
         instance: String,
         schema_cache: Arc<SchemaCache>,
-    ) -> Vec<LogEvent>;
+        keyspace_to_vmtenants: HashMap<String, (String, String)>,
+    ) -> Vec<Event>;
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent>;
 
@@ -44,6 +47,9 @@ impl Default for Buf {
                 (LABEL_DB_NAME, String::new()),
                 (LABEL_TABLE_NAME, String::new()),
                 (LABEL_TABLE_ID, String::new()),
+                (LABEL_KEYSPACE_NAME, String::new()),
+                (LABEL_VM_ACCOUNT_ID, String::new()),
+                (LABEL_VM_PROJECT_ID, String::new()),
             ],
             timestamps: vec![],
             values: vec![],
@@ -97,6 +103,21 @@ impl Buf {
         self
     }
 
+    pub fn keyspace_name(&mut self, keyspace_name: impl Into<String>) -> &mut Self {
+        self.labels[9].1 = keyspace_name.into();
+        self
+    }
+
+    pub fn vm_account_id(&mut self, vm_account_id: impl Into<String>) -> &mut Self {
+        self.labels[10].1 = vm_account_id.into();
+        self
+    }
+
+    pub fn vm_project_id(&mut self, vm_project_id: impl Into<String>) -> &mut Self {
+        self.labels[11].1 = vm_project_id.into();
+        self
+    }
+
     pub fn points(&mut self, points: impl Iterator<Item = (u64, f64)>) -> &mut Self {
         for (timestamp_sec, value) in points {
             self.timestamps.push(
@@ -108,15 +129,34 @@ impl Buf {
         self
     }
 
-    pub fn build_event(&mut self) -> Option<LogEvent> {
+    pub fn build_events(&mut self) -> Option<Vec<Event>> {
+        let mut tags = BTreeMap::new();
+        for (label, value) in &self.labels {
+            tags.insert(label.to_string(), value.clone());
+        }
+
         let res = if self.timestamps.is_empty() || self.values.is_empty() {
             None
         } else {
-            Some(make_metric_like_log_event(
-                &self.labels,
-                &self.timestamps,
-                &self.values,
-            ))
+            let mut events = vec![];
+            for (timestamp, value) in std::iter::zip(&self.timestamps, &self.values) {
+                let metric = Metric::new(
+                    self.labels[0].1.clone(),
+                    MetricKind::Absolute,
+                    MetricValue::Gauge {
+                        value: value.clone(),
+                    },
+                )
+                .with_timestamp(Some(timestamp.clone()))
+                .with_tags(Some(MetricTags::from(tags.clone())));
+                events.push(Event::Metric(metric));
+            }
+            Some(events)
+            // Some(make_metric_like_log_event(
+            //     &self.labels,
+            //     &self.timestamps,
+            //     &self.values,
+            // ))
         };
 
         self.timestamps.clear();
