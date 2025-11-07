@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tokio::sync::MutexGuard;
 
 use futures::{stream::BoxStream, StreamExt};
@@ -42,6 +43,7 @@ pub struct TopSQLDeltaLakeSink {
     plan_cache: Arc<Mutex<Cache<String, String>>>,
     tikv_exec_count_cache: Arc<Mutex<Cache<TiKVExecCountKey, u64>>>,
     tidb_event_cache: Arc<Mutex<Vec<Event>>>,
+    parallelism: AtomicUsize,
 }
 
 impl TopSQLDeltaLakeSink {
@@ -62,6 +64,7 @@ impl TopSQLDeltaLakeSink {
             plan_cache: Arc::new(Mutex::new(Cache::new(10000))),
             tikv_exec_count_cache: Arc::new(Mutex::new(Cache::new(5000))),
             tidb_event_cache: Arc::new(Mutex::new(Vec::new())),
+            parallelism: AtomicUsize::new(0),
         }
     }
 
@@ -661,6 +664,10 @@ impl TopSQLDeltaLakeSink {
 #[async_trait::async_trait]
 impl StreamSink<Event> for TopSQLDeltaLakeSink {
     async fn run(self: Box<Self>, input: BoxStream<'_, Event>) -> Result<(), ()> {
+        let c = self.parallelism.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if c > 0 {
+            error!("Delta Lake sink parallelism exceeded: {}", c + 1);
+        }
         info!(
             "Delta Lake sink starting with batch_size: {}, timeout_secs: {}",
             self.write_config.batch_size, self.write_config.timeout_secs
@@ -673,7 +680,7 @@ impl StreamSink<Event> for TopSQLDeltaLakeSink {
                 error!("Failed to process events: {}", e);
             }
         }
-
+        self.parallelism.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 }
