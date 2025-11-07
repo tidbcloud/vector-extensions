@@ -8,15 +8,11 @@ use prometheus_exporter::{
     self,
     prometheus::register_counter,
 };
-use prometheus_client::{
-    collector::Collector,
-    encoding::{DescriptorEncoder, EncodeMetric},
-    metrics::{
-        counter::ConstCounter,
-        gauge::{self, ConstGauge, Gauge},
-        MetricType,
-    },
-    registry::{Registry, Unit},
+
+use prometheus::{
+    IntCounter, IntGauge, Opts,
+    core::{Collector, Desc},
+    proto,
 };
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -27,107 +23,140 @@ mod sources;
 mod utils;
 
 
-/// Registers process metrics with the given registry. Note that the 'process_'
-/// prefix is NOT added and should be specified by the caller if desired.
-pub fn register(reg: &mut Registry) -> std::io::Result<()> {
-    let start_time = Instant::now();
-    let start_time_from_epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("process start time");
+    use std::{
+        fs,
+        io::{self, Error},
+        iter::FromIterator,
+    };
 
-    #[cfg(target_os = "linux")]
-    let system = linux::System::load()?;
+    use libc::c_int;
+    pub use libc::pid_t as Pid;
+    pub use procinfo::pid::{self, Stat as FullStat};
 
-    reg.register_with_unit(
-        "start_time",
-        "Time that the process started (in seconds since the UNIX epoch)",
-        Unit::Seconds,
-        ConstGauge::new(start_time_from_epoch.as_secs_f64()),
-    );
-
-    let clock_time_ts = Gauge::<f64, ClockMetric>::default();
-    reg.register_with_unit(
-        "clock_time",
-        "Current system time for this process",
-        Unit::Seconds,
-        clock_time_ts,
-    );
-
-    reg.register_collector(Box::new(ProcessCollector {
-        start_time,
-        #[cfg(target_os = "linux")]
-        system,
-    }));
-
-    Ok(())
-}
-
-#[derive(Debug)]
-struct ProcessCollector {
-    start_time: Instant,
-    #[cfg(target_os = "linux")]
-    system: linux::System,
-}
-
-impl Collector for ProcessCollector {
-    fn encode(&self, mut encoder: DescriptorEncoder<'_>) -> std::fmt::Result {
-        let uptime = ConstCounter::new(
-            Instant::now()
-                .saturating_duration_since(self.start_time)
-                .as_secs_f64(),
-        );
-        let ue = encoder.encode_descriptor(
-            "uptime",
-            "Total time since the process started (in seconds)",
-            Some(&Unit::Seconds),
-            MetricType::Counter,
-        )?;
-        uptime.encode(ue)?;
-
-        #[cfg(target_os = "linux")]
-        self.system.encode(encoder)?;
-
-        Ok(())
-    }
-}
-
-// Metric that always reports the current system time on a call to [`get`].
-#[derive(Copy, Clone, Debug, Default)]
-struct ClockMetric;
-
-impl gauge::Atomic<f64> for ClockMetric {
-    fn inc(&self) -> f64 {
-        self.get()
-    }
-
-    fn inc_by(&self, _v: f64) -> f64 {
-        self.get()
-    }
-
-    fn dec(&self) -> f64 {
-        self.get()
-    }
-
-    fn dec_by(&self, _v: f64) -> f64 {
-        self.get()
-    }
-
-    fn set(&self, _v: f64) -> f64 {
-        self.get()
-    }
-
-    fn get(&self) -> f64 {
-        match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(elapsed) => elapsed.as_secs_f64().floor(),
-            Err(e) => {
-                tracing::warn!(
-                    "System time is before the UNIX epoch; reporting negative timestamp"
-                );
-                -e.duration().as_secs_f64().floor()
+    lazy_static::lazy_static! {
+        // getconf CLK_TCK
+        static ref CLOCK_TICK: i64 = {
+            unsafe {
+                libc::sysconf(libc::_SC_CLK_TCK)
             }
+        };
+
+        static ref PROCESS_ID: Pid = unsafe { libc::getpid() };
+    }
+    /// Gets the ID of the current process.
+    #[inline]
+    pub fn process_id() -> Pid {
+        *PROCESS_ID
+    }
+
+    /// Gets the ID of the current thread.
+    #[inline]
+    pub fn thread_id() -> Pid {
+        thread_local! {
+            static TID: Pid = unsafe { libc::syscall(libc::SYS_gettid) as Pid };
+        }
+        TID.with(|t| *t)
+    }
+
+/// A collector to collect process metrics.
+pub struct ProcessCollector {
+    descs: Vec<Desc>,
+    cpu_total: IntCounter,
+    vsize: IntGauge,
+    rss: IntGauge,
+    start_time: IntGauge,
+}
+
+impl ProcessCollector {
+    pub fn new() -> Self {
+        let mut descs = Vec::new();
+
+        let cpu_total = IntCounter::with_opts(Opts::new(
+            "process_cpu_seconds_total",
+            "Total user and system CPU time spent in \
+                 seconds.",
+        ))
+        .unwrap();
+        descs.extend(cpu_total.desc().into_iter().cloned());
+
+        let vsize = IntGauge::with_opts(Opts::new(
+            "process_virtual_memory_bytes",
+            "Virtual memory size in bytes.",
+        ))
+        .unwrap();
+        descs.extend(vsize.desc().into_iter().cloned());
+
+        let rss = IntGauge::with_opts(Opts::new(
+            "process_resident_memory_bytes",
+            "Resident memory size in bytes.",
+        ))
+        .unwrap();
+        descs.extend(rss.desc().into_iter().cloned());
+
+        let start_time = IntGauge::with_opts(Opts::new(
+            "process_start_time_seconds",
+            "Start time of the process since unix epoch \
+                 in seconds.",
+        ))
+        .unwrap();
+        descs.extend(start_time.desc().into_iter().cloned());
+
+        Self {
+            descs,
+            cpu_total,
+            vsize,
+            rss,
+            start_time,
         }
     }
 }
+
+impl Collector for ProcessCollector {
+    fn desc(&self) -> Vec<&Desc> {
+        self.descs.iter().collect()
+    }
+
+    fn collect(&self) -> Vec<proto::MetricFamily> {
+        let p = match procfs::process::Process::myself() {
+            Ok(p) => p,
+            Err(..) => {
+                // we can't construct a Process object, so there's no stats to gather
+                return Vec::new();
+            }
+        };
+
+        // memory
+        self.vsize.set(p.stat.vsize as i64);
+        self.rss.set(p.stat.rss * *PAGESIZE);
+
+        // cpu
+        let cpu_total_mfs = {
+            let total = (p.stat.utime + p.stat.stime) / ticks_per_second() as u64;
+            let past = self.cpu_total.get();
+            self.cpu_total.inc_by(total - past);
+
+            self.cpu_total.collect()
+        };
+
+        // collect MetricFamilies.
+        let mut mfs = Vec::with_capacity(4);
+        mfs.extend(cpu_total_mfs);
+        mfs.extend(self.vsize.collect());
+        mfs.extend(self.rss.collect());
+        mfs.extend(self.start_time.collect());
+        mfs
+    }
+}
+
+lazy_static::lazy_static! {
+    // getconf PAGESIZE
+    static ref PAGESIZE: i64 = {
+        unsafe {
+            libc::sysconf(libc::_SC_PAGESIZE)
+        }
+    };
+}
+
 
 #[cfg(unix)]
 fn main() -> ExitCode {
@@ -136,10 +165,8 @@ fn main() -> ExitCode {
 
     let binding = "127.0.0.1:9184".parse().unwrap();
     let _exporter = prometheus_exporter::start(binding).unwrap();
-    let mut prom = prometheus_client::registry::Registry::default();
-    if let Err(error) = register(prom.sub_registry_with_prefix("vector_process")) {
-
-    }
+    let pc = ProcessCollector::new();
+    let _ = prometheus::register(Box::new(pc)).map_err(|e| Error::other(e.to_string()));
 
     // Install the default crypto provider for Rustls
     // This is required for Rustls 0.23+ to avoid the panic about crypto provider selection
