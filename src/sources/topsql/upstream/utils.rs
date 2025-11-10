@@ -17,7 +17,13 @@ pub fn make_metric_like_log_event(
 ) -> LogEvent {
     let mut labels_map = BTreeMap::<KeyString, Value>::new();
     for (k, v) in labels {
-        labels_map.insert((*k).into(), Value::Bytes(Bytes::from(v.clone())));
+        // truncate label value if it's too long, the default limit is 16KB in vminsert.
+        let truncated = if v.len() > 16384 {
+            v[..16384].to_string()
+        } else {
+            v.clone()
+        };
+        labels_map.insert((*k).into(), Value::Bytes(Bytes::from(truncated)));
     }
 
     let timestamps_vec = timestamps
