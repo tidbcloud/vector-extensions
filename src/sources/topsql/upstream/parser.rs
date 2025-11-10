@@ -17,12 +17,11 @@ pub fn truncate_label_value(s: String) -> String {
     // Truncate label value if it's too long, the default limit is 16KB in vminsert.
     const MAX_LABEL_LEN: usize = 16384;
     if s.len() > MAX_LABEL_LEN {
-        let mut truncated = s;
-        truncated.truncate(MAX_LABEL_LEN);
-        while !truncated.is_char_boundary(truncated.len()) && !truncated.is_empty() {
-            truncated.pop();
+        let mut idx = MAX_LABEL_LEN;
+        while idx != 0 && !s.is_char_boundary(idx) {
+            idx -= 1;
         }
-        truncated
+        s[..idx].to_string()
     } else {
         s
     }
