@@ -131,9 +131,10 @@ impl LegacyTopologyFetcher {
         tls_config: &Option<TlsConfig>,
     ) -> Result<etcd_client::Client, FetchError> {
         let etcd_connect_opt = Self::build_etcd_connect_opt(tls_config)?;
-        let etcd_client: etcd_client::Client = etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
-            .await
-            .context(BuildEtcdClientSnafu)?;
+        let etcd_client: etcd_client::Client =
+            etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
+                .await
+                .context(BuildEtcdClientSnafu)?;
         Ok(etcd_client)
     }
 
@@ -248,8 +249,8 @@ impl TopologyFetcher {
             })
         } else {
             // In legacy mode, pd_address is required
-            let pd_address = pd_address.ok_or_else(|| FetchError::ConfigurationError { 
-                message: "PD address is required in legacy mode".to_string()
+            let pd_address = pd_address.ok_or_else(|| FetchError::ConfigurationError {
+                message: "PD address is required in legacy mode".to_string(),
             })?;
             let fetcher = LegacyTopologyFetcher::new(pd_address, tls_config, proxy_config).await?;
             Ok(Self {
