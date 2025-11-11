@@ -11,7 +11,7 @@ use crate::sources::topsql::upstream::consts::{
     METRIC_NAME_CPU_TIME_MS, METRIC_NAME_PLAN_META, METRIC_NAME_SQL_META,
     METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT,
 };
-use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser};
+use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser, truncate_label_value};
 use crate::sources::topsql::upstream::tidb::proto::top_sql_sub_response::RespOneof;
 use crate::sources::topsql::upstream::tidb::proto::{
     PlanMeta, SqlMeta, TopSqlRecord, TopSqlRecordItem, TopSqlSubResponse,
@@ -367,7 +367,7 @@ impl TopSqlSubResponseParser {
             LABEL_SQL_DIGEST.to_owned(),
             hex::encode_upper(sql_meta.sql_digest),
         );
-        tags.insert(LABEL_NORMALIZED_SQL.to_owned(), sql_meta.normalized_sql);
+        tags.insert(LABEL_NORMALIZED_SQL.to_owned(), truncate_label_value(sql_meta.normalized_sql));
         tags.insert(
             LABEL_IS_INTERNAL_SQL.to_owned(),
             sql_meta.is_internal_sql.to_string(),
@@ -399,10 +399,10 @@ impl TopSqlSubResponseParser {
             LABEL_PLAN_DIGEST.to_owned(),
             hex::encode_upper(plan_meta.plan_digest),
         );
-        tags.insert(LABEL_NORMALIZED_PLAN.to_owned(), plan_meta.normalized_plan);
+        tags.insert(LABEL_NORMALIZED_PLAN.to_owned(), truncate_label_value(plan_meta.normalized_plan));
         tags.insert(
             LABEL_ENCODED_NORMALIZED_PLAN.to_owned(),
-            plan_meta.encoded_normalized_plan,
+            truncate_label_value(plan_meta.encoded_normalized_plan),
         );
         let metric = Metric::new(
             METRIC_NAME_PLAN_META,

@@ -13,6 +13,20 @@ use crate::sources::topsql::upstream::{
     utils::make_metric_like_log_event,
 };
 
+pub fn truncate_label_value(s: String) -> String {
+    // Truncate label value if it's too long, the default limit is 16KB in vminsert.
+    const MAX_LABEL_LEN: usize = 16384;
+    if s.len() > MAX_LABEL_LEN {
+        let mut idx = MAX_LABEL_LEN;
+        while idx != 0 && !s.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        s[..idx].to_string()
+    } else {
+        s
+    }
+}
+
 pub trait UpstreamEventParser {
     type UpstreamEvent;
 
@@ -132,7 +146,7 @@ impl Buf {
     pub fn build_events(&mut self) -> Option<Vec<Event>> {
         let mut tags = BTreeMap::new();
         for (label, value) in &self.labels {
-            tags.insert(label.to_string(), value.clone());
+            tags.insert(label.to_string(), truncate_label_value(value.clone()));
         }
 
         let res = if self.timestamps.is_empty() || self.values.is_empty() {
