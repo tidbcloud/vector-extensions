@@ -1,8 +1,7 @@
-use std::collections::BTreeMap;
-
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use ordered_float::NotNan;
+use std::collections::BTreeMap;
 use vector::event::{KeyString, Value};
 use vector_lib::event::{Event, LogEvent, Metric, MetricKind, MetricTags, MetricValue};
 
@@ -17,7 +16,17 @@ pub fn make_metric_like_log_event(
 ) -> LogEvent {
     let mut labels_map = BTreeMap::<KeyString, Value>::new();
     for (k, v) in labels {
-        labels_map.insert((*k).into(), Value::Bytes(Bytes::from(v.clone())));
+        const MAX_LABEL_VALUE_LEN: usize = 16384;
+        let mut new_v = v.clone();
+        // truncate label value if it's too long, the default limit is 16KB in vminsert.
+        if new_v.len() > MAX_LABEL_VALUE_LEN {
+            let mut idx = MAX_LABEL_VALUE_LEN;
+            while idx != 0 && !new_v.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            new_v.truncate(idx);
+        }
+        labels_map.insert((*k).into(), Value::Bytes(Bytes::from(new_v)));
     }
 
     let timestamps_vec = timestamps
@@ -85,4 +94,26 @@ pub fn instance_event_with_tags(
     .with_timestamp(Some(Utc::now()))
     .with_tags(Some(MetricTags::from(tags)));
     Event::Metric(metric)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_make_metric_like_log_event_truncates_long_labels() {
+        let long_value = "a".repeat(20000);
+        let labels = vec![("long_label", long_value)];
+        let timestamps = vec![Utc::now()];
+        let values = vec![1.0];
+
+        let log = make_metric_like_log_event(&labels, &timestamps, &values);
+
+        if let Some(Value::Object(labels_map)) = log.get("labels") {
+            if let Some(Value::Bytes(bytes)) = labels_map.get("long_label") {
+                assert_eq!(bytes.len(), 16384);
+                assert_eq!(bytes, &Bytes::from("a".repeat(16384)));
+            }
+        }
+    }
 }
