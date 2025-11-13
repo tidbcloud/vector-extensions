@@ -297,7 +297,8 @@ impl DeltaLakeConfig {
         debug!("Delta Lake S3 handlers registered");
 
         // Set AWS storage options for Delta Lake
-        storage_options.insert("AWS_STORAGE_ALLOW_HTTP".to_string(), "true".to_string());
+        // Note: deltalake-aws uses AWS_ALLOW_HTTP (defined in deltalake_aws::constants::AWS_ALLOW_HTTP)
+        storage_options.insert("AWS_ALLOW_HTTP".to_string(), "true".to_string());
 
         // Set region from configuration
         if let Some(region) = &self.region {
