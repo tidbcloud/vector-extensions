@@ -437,7 +437,7 @@ impl TopSqlSubResponseParser {
     // TODO: consider apply chunk style LogEvent for better performance
     fn parse_tidb_record_to_row_format(record: TopSqlRecord, instance: String) -> Vec<LogEvent> {
         let mut events = vec![];
-        for i in 1..50 {
+        for i in 1..500 {
             let i_str_now = i.to_string();
             let i_str = i_str_now.as_str();
             for item in &record.items {
@@ -445,7 +445,7 @@ impl TopSqlSubResponseParser {
                 let log = event.as_mut_log();
 
                 // Add metadata with Vector prefix (ensure all fields have values)
-                log.insert("dest_table", "tidb_topsql");
+                log.insert("source_table", "tidb_topsql");
                 log.insert("timestamps", LogValue::from(item.timestamp_sec));
                 log.insert("instance_type", INSTANCE_TYPE_TIDB.to_string());
                 log.insert("instance", instance.clone() + i_str);
@@ -498,14 +498,14 @@ impl TopSqlSubResponseParser {
     fn parse_tidb_sql_meta_to_row_format(sql_meta: SqlMeta) -> Vec<LogEvent> {
         let mut events = vec![];
         let sql_digest = hex::encode_upper(sql_meta.sql_digest);
-        for i in 1..100 {
+        for i in 1..1000 {
             let i_str_now = i.to_string();
             let i_str = i_str_now.as_str();
             let mut event = Event::Log(LogEvent::default());
             let log = event.as_mut_log();
 
             // Add metadata with Vector prefix (ensure all fields have values)
-            log.insert("dest_table", "tidb_sql_meta");
+            log.insert("source_table", "tidb_sql_meta");
             log.insert(LABEL_SQL_DIGEST, sql_digest.clone() + i_str);
             log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql.clone() + i_str);
             log.insert(LABEL_IS_INTERNAL_SQL, sql_meta.is_internal_sql.to_string());
@@ -519,14 +519,14 @@ impl TopSqlSubResponseParser {
         let plan_digest = hex::encode_upper(plan_meta.plan_digest);
         let encoded_normalized_plan =
             hex::encode_upper(plan_meta.encoded_normalized_plan);
-        for i in 1..100 {
+        for i in 1..1000 {
             let i_str_now = i.to_string();
             let i_str = i_str_now.as_str();
             let mut event = Event::Log(LogEvent::default());
             let log = event.as_mut_log();
 
             // Add metadata with Vector prefix (ensure all fields have values)
-            log.insert("dest_table", "tidb_plan_meta");
+            log.insert("source_table", "tidb_plan_meta");
             log.insert(LABEL_PLAN_DIGEST, plan_digest.clone() + i_str);
             log.insert(LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan.clone() + i_str);
             log.insert(

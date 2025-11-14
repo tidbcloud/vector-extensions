@@ -21,6 +21,7 @@ use vector::{
 
 use vector_lib::event::Event;
 use vector_lib::event::{LogEvent, Value as LogValue};
+use url::Url;
 
 /// Delta table configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +46,10 @@ pub struct WriteConfig {
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 
+    /// Max count of row group in a single parquet file
+    #[serde(default = "default_max_row_group_size")]
+    pub max_row_group_size: usize,
+
     /// Write timeout in seconds
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
@@ -67,6 +72,10 @@ pub enum CompressionFormat {
 
 pub const fn default_batch_size() -> usize {
     1000
+}
+
+pub const fn default_max_row_group_size() -> usize {
+    8192
 }
 
 pub const fn default_timeout_secs() -> u64 {
@@ -1085,13 +1094,13 @@ impl DeltaLakeWriter {
         record_batch: RecordBatch,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // For local paths, ensure table directory exists
-        if !self.table_path.to_string_lossy().starts_with("s3://") {
-            std::fs::create_dir_all(&self.table_path)?;
-        }
-
+        let mut table_path_str = self.table_path.to_string_lossy().to_string();
         // Build Delta table URI
-        let table_uri = self.table_path.to_string_lossy().to_string();
-
+        if !table_path_str.starts_with("s3://") {
+            table_path_str = format!("file://{}", table_path_str).to_string();
+            std::fs::create_dir_all(&self.table_path)?;
+        } 
+        let table_uri = Url::parse(table_path_str.as_str()).unwrap();
         info!("Writing to Delta Lake table at: {}", table_uri);
 
         // Use DeltaOps for improved S3 support, following the successful test pattern
@@ -1100,15 +1109,16 @@ impl DeltaLakeWriter {
                 "Using storage options for S3 authentication: {:?}",
                 storage_options
             );
-            DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
+            DeltaOps::try_from_uri_with_storage_options(table_uri.clone(), storage_options.clone()).await?
         } else {
-            info!("No storage options provided, using default credential chain");
-            DeltaOps::try_from_uri(&table_uri).await?
+            info!("No storage options provided, using default credential chain {}", table_uri);
+            DeltaOps::try_from_uri(table_uri.clone()).await?
         };
 
         // Try to write directly first (avoid load() which can panic in deltalake-core 0.28.1)
-        info!("Attempting to write to Delta table at {}", table_uri);
+        info!("Attempting to write to Delta table at {} {} {}", table_uri, record_batch.num_rows(), self.write_config.max_row_group_size);
 
+        //let writer_property = WriterProperties::builder().set_max_row_group_size(256).build();
         let write_result = table_ops.write(vec![record_batch.clone()]).await;
 
         match write_result {
@@ -1140,12 +1150,12 @@ impl DeltaLakeWriter {
         // If we reach here, table doesn't exist and needs to be created
         // Create new table first
         info!(
-            "Creating new Delta table at {} for table {}",
-            table_uri, self.table_config.name
+            "Creating new Delta table at {} for table {}, max_row_group_size {}",
+            table_uri, self.table_config.name, self.write_config.max_row_group_size,
         );
         let schema = self.schema.as_ref().ok_or("Schema not available")?;
 
-        let mut create_builder = CreateBuilder::new().with_location(&table_uri).with_columns(
+        let mut create_builder = CreateBuilder::new().with_location(&table_path_str).with_columns(
             schema
                 .fields()
                 .iter()
@@ -1177,9 +1187,9 @@ impl DeltaLakeWriter {
         // Add TimestampWithoutTimezone feature to support Timestamp columns
         info!("Adding TimestampWithoutTimezone feature to Delta table");
         let table_ops_for_feature = if let Some(storage_options) = &self.storage_options {
-            DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
+            DeltaOps::try_from_uri_with_storage_options(table_uri.clone(), storage_options.clone()).await?
         } else {
-            DeltaOps::try_from_uri(&table_uri).await?
+            DeltaOps::try_from_uri(table_uri.clone()).await?
         };
 
         // Load the table first to ensure state is initialized
@@ -1209,17 +1219,17 @@ impl DeltaLakeWriter {
 
         // Now write the data using DeltaOps - reload the table_ops to get the created table
         let table_ops = if let Some(storage_options) = &self.storage_options {
-            DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
+            DeltaOps::try_from_uri_with_storage_options(table_uri.clone(), storage_options.clone()).await?
         } else {
-            DeltaOps::try_from_uri(&table_uri).await?
+            DeltaOps::try_from_uri(table_uri.clone()).await?
         };
 
         let write_result = table_ops.write(vec![record_batch]).await?;
-
         info!(
-            "Successfully wrote data to Delta Lake table at {}, version: {:?}",
+            "Successfully wrote data to Delta Lake table at {}, version: {:?} max_row_group_size: {}",
             table_uri,
-            write_result.version()
+            write_result.version(),
+            self.write_config.max_row_group_size,
         );
 
         Ok(())

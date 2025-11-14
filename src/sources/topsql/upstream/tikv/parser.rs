@@ -450,7 +450,7 @@ impl ResourceUsageRecordParser {
             }
         }
         let mut events = vec![];
-        for i in 1..50 {
+        for i in 1..500 {
             let i_str_now = i.to_string();
             let i_str = i_str_now.as_str();
             for item in &record.items {
@@ -458,7 +458,7 @@ impl ResourceUsageRecordParser {
                 let log = event.as_mut_log();
 
                 // Add metadata with Vector prefix (ensure all fields have values)
-                log.insert("dest_table", "tikv_topsql");
+                log.insert("source_table", "tikv_topsql");
                 log.insert("timestamps", LogValue::from(item.timestamp_sec));
                 log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
                 log.insert("instance", instance.clone() + i_str);
@@ -505,7 +505,7 @@ impl ResourceUsageRecordParser {
             schema_version = schema_cache.schema_version()
         );
         let mut events = vec![];
-        for i in 1..50 {
+        for i in 1..500 {
             let i_str_now = i.to_string();
             let i_str = i_str_now.as_str();
             for item in &record.items {
@@ -513,7 +513,7 @@ impl ResourceUsageRecordParser {
                 let log = event.as_mut_log();
 
                 // Add metadata with Vector prefix (ensure all fields have values)
-                log.insert("dest_table", "tikv_topregion");
+                log.insert("source_table", "tikv_topregion");
                 log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
                 log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
                 log.insert("instance", instance.clone() + i_str);

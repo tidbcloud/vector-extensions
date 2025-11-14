@@ -24,6 +24,196 @@ use crate::sources::topsql::upstream::consts::{
     METRIC_NAME_STMT_EXEC_COUNT, METRIC_NAME_WRITE_KEYS,
 };
 
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref TOPSQL_SCHEMA: serde_json::Map<String, serde_json::Value> = {
+        let mut schema_info = serde_json::Map::new();
+        schema_info.insert(
+            "timestamps".into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_INSTANCE_TYPE.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_INSTANCE.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_SQL_DIGEST.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_PLAN_DIGEST.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_NORMALIZED_SQL.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_NORMALIZED_PLAN.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_CPU_TIME_MS.into(),
+            serde_json::json!({
+                "mysql_type": "int",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_STMT_EXEC_COUNT.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_STMT_DURATION_SUM_NS.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_STMT_DURATION_COUNT.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_NETWORK_IN_BYTES.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_NETWORK_OUT_BYTES.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        // tikv specific columns
+        schema_info.insert(
+            METRIC_NAME_READ_KEYS.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_WRITE_KEYS.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_LOGICAL_READ_BYTES.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_LOGICAL_WRITE_BYTES.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        // tikv region specific fields
+        schema_info.insert(
+            LABEL_REGION_ID.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info
+    };
+    static ref INSTANCE_SCHEMA: serde_json::Map<String, serde_json::Value> = {
+        let mut schema_info = serde_json::Map::new();
+        schema_info.insert(
+            "timestamps".into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_INSTANCE_TYPE.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_INSTANCE.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            "tidb_cluster_id".into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            "keyspace_name".into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            "vm_account_id".into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            "vm_project_id".into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info
+    };    
+}
+
 #[derive(Default, Eq, PartialEq, Clone, Hash)]
 struct TiKVExecCountKey {
     sql_digest: String,
@@ -60,8 +250,8 @@ impl TopSQLDeltaLakeSink {
             write_config,
             storage_options,
             writers: Arc::new(Mutex::new(HashMap::new())),
-            sql_cache: Arc::new(Mutex::new(Cache::new(10000))), // TODO: Cache size can be adjusted
-            plan_cache: Arc::new(Mutex::new(Cache::new(10000))),
+            sql_cache: Arc::new(Mutex::new(Cache::new(100000))), // TODO: Cache size can be adjusted
+            plan_cache: Arc::new(Mutex::new(Cache::new(100000))),
             tikv_exec_count_cache: Arc::new(Mutex::new(Cache::new(5000))),
             tidb_event_cache: Arc::new(Mutex::new(Vec::new())),
             parallelism: AtomicUsize::new(0),
@@ -77,11 +267,13 @@ impl TopSQLDeltaLakeSink {
         tidb_event_cache: &mut MutexGuard<'a, Vec<Event>>,
     ) {
         let table_name = "tidb_topsql";
+        info!("tidb event cache size: {}", tidb_event_cache.len());
         for event in tidb_event_cache.iter_mut() {
             if let Event::Log(ref mut log_event) = event {
                 // Enrich SQL and Plan from cache
                 let mut tikv_exec_count_key = TiKVExecCountKey::default();
                 if let Some(sql_digest) = log_event.get(LABEL_SQL_DIGEST).and_then(|v| v.as_str()) {
+                    info!("tidb sql cache: {} ", sql_cache.len());
                     tikv_exec_count_key.sql_digest = sql_digest.to_string();
                     if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
                         log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
@@ -92,6 +284,7 @@ impl TopSQLDeltaLakeSink {
                 if let Some(plan_digest) = log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str())
                 {
                     tikv_exec_count_key.plan_digest = plan_digest.to_string();
+                    info!("tidb plan cache: {} ", plan_cache.len());
                     if let Some(plan) = plan_cache.get(&plan_digest.to_string()) {
                         log_event.insert(LABEL_NORMALIZED_PLAN, plan.clone());
                     }
@@ -121,7 +314,7 @@ impl TopSQLDeltaLakeSink {
                     }
                 }
                 table_events
-                    .entry(table_name.to_string())
+                    .entry("topsql_data".into())
                     .or_insert_with(Vec::new)
                     .push(Event::Log(log_event.clone()));
             }
@@ -131,17 +324,13 @@ impl TopSQLDeltaLakeSink {
     /// Process events and write to Delta Lake
     async fn process_events(
         &self,
-        events: Vec<Event>,
+        events_vec: Vec<Vec<Event>>,
         cache_tidb_events: bool,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if events.is_empty() {
+        if events_vec.is_empty() {
             return Ok(());
         }
-
-        // Log batch summary
-        info!("Sink processing batch: {} events", events.len());
-
-        // Group events by table (prefer dest_table, fallback to table)
+        // Group events by source_table
         let mut table_events: HashMap<String, Vec<Event>> = HashMap::new();
         let mut sql_cache = self.sql_cache.lock().await;
         let mut plan_cache = self.plan_cache.lock().await;
@@ -149,132 +338,140 @@ impl TopSQLDeltaLakeSink {
         let mut tidb_event_cache = self.tidb_event_cache.lock().await;
         let mut tidb_event_cache_cleared = false;
 
-        for event in events {
-            if let Event::Log(mut log_event) = event {
-                let table_name: String;
-                {
-                    let table_name_ref = log_event.get("dest_table").and_then(|v| v.as_str());
-                    if let Some(table_name_v2) = table_name_ref {
-                        table_name = table_name_v2.to_string();
-                    } else {
-                        continue;
-                    }
-                }
-                match table_name.as_str() {
-                    "tidb_sql_meta" => {
-                        log_event
-                            .get(LABEL_SQL_DIGEST)
-                            .and_then(|v| v.as_str())
-                            .map(|sql_digest| {
-                                let handle = sql_cache.get_mut(&sql_digest.to_string());
-                                if let Some(handle) = handle {
-                                    if let Some(sql) =
-                                        log_event.get(LABEL_NORMALIZED_SQL).and_then(|v| v.as_str())
-                                    {
-                                        *handle = sql.to_string();
-                                    }
-                                } else {
-                                    if let Some(sql) =
-                                        log_event.get(LABEL_NORMALIZED_SQL).and_then(|v| v.as_str())
-                                    {
-                                        sql_cache.insert(sql_digest.to_string(), sql.to_string());
-                                    }
-                                }
-                            });
-                    }
-                    "tidb_plan_meta" => {
-                        log_event
-                            .get(LABEL_PLAN_DIGEST)
-                            .and_then(|v| v.as_str())
-                            .map(|plan_digest| {
-                                let handle = plan_cache.get_mut(&plan_digest.to_string());
-                                if let Some(handle) = handle {
-                                    if let Some(plan) = log_event
-                                        .get(LABEL_NORMALIZED_PLAN)
-                                        .and_then(|v| v.as_str())
-                                    {
-                                        *handle = plan.to_string();
-                                    }
-                                } else {
-                                    if let Some(plan) = log_event
-                                        .get(LABEL_NORMALIZED_PLAN)
-                                        .and_then(|v| v.as_str())
-                                    {
-                                        plan_cache
-                                            .insert(plan_digest.to_string(), plan.to_string());
-                                    }
-                                }
-                            });
-                    }
-                    "tidb_topsql" => {
-                        if cache_tidb_events {
-                            tidb_event_cache.push(Event::Log(log_event.clone()));
+        for events in events_vec {
+            for event in events {
+                if let Event::Log(mut log_event) = event {
+                    let table_name: String;
+                    {
+                        let table_name_ref = log_event.get("source_table").and_then(|v| v.as_str());
+                        if let Some(table_name_v2) = table_name_ref {
+                            table_name = table_name_v2.to_string();
+                        } else {
                             continue;
                         }
                     }
-                    "tikv_topsql" => {
-                        // handle tidb events first, since tikv events may depend on tidb's tikv_exec_count info
-                        if !tidb_event_cache_cleared {
-                            self.process_tidb_records_events(
-                                &mut table_events,
-                                &mut sql_cache,
-                                &mut plan_cache,
-                                &mut tikv_exec_count_cache,
-                                &mut tidb_event_cache,
-                            );
-                            tidb_event_cache.clear();
-                            tidb_event_cache_cleared = true;
-                        }
-
-                        let mut tikv_exec_count_key = TiKVExecCountKey::default();
-                        // Enrich SQL and Plan from cache
-                        if let Some(sql_digest) =
-                            log_event.get(LABEL_SQL_DIGEST).and_then(|v| v.as_str())
-                        {
-                            tikv_exec_count_key.sql_digest = sql_digest.to_string();
-                            if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
-                                log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
-                            } else {
-                                info!("tikv sql_digest: {} not found in sql_cache", sql_digest);
-                            }
-                        }
-                        if let Some(plan_digest) =
-                            log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str())
-                        {
-                            tikv_exec_count_key.plan_digest = plan_digest.to_string();
-                            if let Some(plan) = plan_cache.get(&plan_digest.to_string()) {
-                                log_event.insert(LABEL_NORMALIZED_PLAN, plan.clone());
-                            }
-                        }
-                        if let Some(timestamps) =
-                            log_event.get("timestamps").and_then(|v| v.as_integer())
-                        {
-                            tikv_exec_count_key.timestamps = timestamps as u64;
-                        }
-                        if let Some(instance) = log_event.get("instance").and_then(|v| v.as_str()) {
-                            tikv_exec_count_key.instance = instance.to_string();
-                        }
-                        {
-                            let exec_count = tikv_exec_count_cache
-                                .get(&tikv_exec_count_key)
-                                .unwrap_or(&0);
+                    match table_name.as_str() {
+                        "tidb_sql_meta" => {
                             log_event
-                                .insert(METRIC_NAME_STMT_EXEC_COUNT, LogValue::from(*exec_count));
+                                .get(LABEL_SQL_DIGEST)
+                                .and_then(|v| v.as_str())
+                                .map(|sql_digest| {
+                                    let handle = sql_cache.get_mut(&sql_digest.to_string());
+                                    if let Some(handle) = handle {
+                                        if let Some(sql) =
+                                            log_event.get(LABEL_NORMALIZED_SQL).and_then(|v| v.as_str())
+                                        {
+                                            *handle = sql.to_string();
+                                        }
+                                    } else {
+                                        if let Some(sql) =
+                                            log_event.get(LABEL_NORMALIZED_SQL).and_then(|v| v.as_str())
+                                        {
+                                            sql_cache.insert(sql_digest.to_string(), sql.to_string());
+                                        }
+                                    }
+                                });
                         }
+                        "tidb_plan_meta" => {
+                            log_event
+                                .get(LABEL_PLAN_DIGEST)
+                                .and_then(|v| v.as_str())
+                                .map(|plan_digest| {
+                                    let handle = plan_cache.get_mut(&plan_digest.to_string());
+                                    if let Some(handle) = handle {
+                                        if let Some(plan) = log_event
+                                            .get(LABEL_NORMALIZED_PLAN)
+                                            .and_then(|v| v.as_str())
+                                        {
+                                            *handle = plan.to_string();
+                                        }
+                                    } else {
+                                        if let Some(plan) = log_event
+                                            .get(LABEL_NORMALIZED_PLAN)
+                                            .and_then(|v| v.as_str())
+                                        {
+                                            plan_cache
+                                                .insert(plan_digest.to_string(), plan.to_string());
+                                        }
+                                    }
+                                });
+                        }
+                        "tidb_topsql" => {
+                            if cache_tidb_events {
+                                tidb_event_cache.push(Event::Log(log_event.clone()));
+                                continue;
+                            }
+                        }
+                        "tikv_topsql" => {
+                            // handle tidb events first, since tikv events may depend on tidb's tikv_exec_count info
+                            if !tidb_event_cache_cleared {
+                                self.process_tidb_records_events(
+                                    &mut table_events,
+                                    &mut sql_cache,
+                                    &mut plan_cache,
+                                    &mut tikv_exec_count_cache,
+                                    &mut tidb_event_cache,
+                                );
+                                tidb_event_cache.clear();
+                                tidb_event_cache_cleared = true;
+                            }
 
-                        table_events
-                            .entry(table_name.to_string())
-                            .or_insert_with(Vec::new)
-                            .push(Event::Log(log_event));
-                    }
-                    "tikv_topregion" => {
-                        table_events
-                            .entry(table_name.to_string())
-                            .or_insert_with(Vec::new)
-                            .push(Event::Log(log_event));
-                    }
-                    _ => {
-                        // Ignore other tables
+                            let mut tikv_exec_count_key = TiKVExecCountKey::default();
+                            // Enrich SQL and Plan from cache
+                            if let Some(sql_digest) =
+                                log_event.get(LABEL_SQL_DIGEST).and_then(|v| v.as_str())
+                            {
+                                tikv_exec_count_key.sql_digest = sql_digest.to_string();
+                                if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
+                                    log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
+                                } else {
+                                    info!("tikv sql_digest: {} not found in sql_cache", sql_digest);
+                                }
+                            }
+                            if let Some(plan_digest) =
+                                log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str())
+                            {
+                                tikv_exec_count_key.plan_digest = plan_digest.to_string();
+                                if let Some(plan) = plan_cache.get(&plan_digest.to_string()) {
+                                    log_event.insert(LABEL_NORMALIZED_PLAN, plan.clone());
+                                }
+                            }
+                            if let Some(timestamps) =
+                                log_event.get("timestamps").and_then(|v| v.as_integer())
+                            {
+                                tikv_exec_count_key.timestamps = timestamps as u64;
+                            }
+                            if let Some(instance) = log_event.get("instance").and_then(|v| v.as_str()) {
+                                tikv_exec_count_key.instance = instance.to_string();
+                            }
+                            {
+                                let exec_count = tikv_exec_count_cache
+                                    .get(&tikv_exec_count_key)
+                                    .unwrap_or(&0);
+                                log_event
+                                    .insert(METRIC_NAME_STMT_EXEC_COUNT, LogValue::from(*exec_count));
+                            }
+
+                            table_events
+                                .entry("topsql_data".into())
+                                .or_insert_with(Vec::new)
+                                .push(Event::Log(log_event));
+                        }
+                        "tikv_topregion" => {
+                            table_events
+                                .entry("topsql_data".into())
+                                .or_insert_with(Vec::new)
+                                .push(Event::Log(log_event));
+                        }                        
+                        "instance" => {
+                            table_events
+                                .entry("topsql_instance".into())
+                                .or_insert_with(Vec::new)
+                                .push(Event::Log(log_event));
+                        }
+                        _ => {
+                            // Ignore other tables
+                        }
                     }
                 }
             }
@@ -304,310 +501,25 @@ impl TopSQLDeltaLakeSink {
     }
 
     /// Write events to a specific table
-    fn add_schema_info(&self, table_name: &str, events: &mut Vec<Event>) {
+    fn add_schema_info(&self, source_table_name: &str, events: &mut Vec<Event>) {
         if events.is_empty() {
             return;
         }
-
-        match table_name {
-            "tidb_topsql" => {
+        match source_table_name {
+            "topsql_data" => {
                 let first_event = &mut events[0];
-                let mut schema_info = serde_json::Map::new();
-                schema_info.insert(
-                    "timestamps".into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_INSTANCE_TYPE.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_INSTANCE.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_SQL_DIGEST.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_PLAN_DIGEST.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_NORMALIZED_SQL.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_NORMALIZED_PLAN.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_CPU_TIME_MS.into(),
-                    serde_json::json!({
-                        "mysql_type": "int",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_STMT_EXEC_COUNT.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_STMT_DURATION_SUM_NS.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_STMT_DURATION_COUNT.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_NETWORK_IN_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_NETWORK_OUT_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
                 let log = first_event.as_mut_log();
                 log.insert(
                     "_schema_metadata",
-                    serde_json::Value::Object(schema_info.clone()),
+                    serde_json::Value::Object(TOPSQL_SCHEMA.clone()),
                 );
             }
-            "tikv_topsql" => {
+            "topsql_instance" => {
                 let first_event = &mut events[0];
-                let mut schema_info = serde_json::Map::new();
-                schema_info.insert(
-                    "timestamps".into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_INSTANCE_TYPE.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_INSTANCE.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_SQL_DIGEST.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_PLAN_DIGEST.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_NORMALIZED_SQL.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_NORMALIZED_PLAN.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_CPU_TIME_MS.into(),
-                    serde_json::json!({
-                        "mysql_type": "int",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_READ_KEYS.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_WRITE_KEYS.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_STMT_EXEC_COUNT.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_NETWORK_IN_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_NETWORK_OUT_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_LOGICAL_READ_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_LOGICAL_WRITE_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
                 let log = first_event.as_mut_log();
                 log.insert(
                     "_schema_metadata",
-                    serde_json::Value::Object(schema_info.clone()),
-                );
-            }
-            "tikv_topregion" => {
-                let first_event = &mut events[0];
-                let mut schema_info = serde_json::Map::new();
-                schema_info.insert(
-                    "timestamps".into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_INSTANCE_TYPE.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_INSTANCE.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    LABEL_REGION_ID.into(),
-                    serde_json::json!({
-                        "mysql_type": "text",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_CPU_TIME_MS.into(),
-                    serde_json::json!({
-                        "mysql_type": "int",
-                        "is_nullable": false
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_READ_KEYS.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_WRITE_KEYS.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_NETWORK_IN_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_NETWORK_OUT_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_LOGICAL_READ_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                schema_info.insert(
-                    METRIC_NAME_LOGICAL_WRITE_BYTES.into(),
-                    serde_json::json!({
-                        "mysql_type": "bigint",
-                        "is_nullable": true
-                    }),
-                );
-                let log = first_event.as_mut_log();
-                log.insert(
-                    "_schema_metadata",
-                    serde_json::Value::Object(schema_info.clone()),
+                    serde_json::Value::Object(INSTANCE_SCHEMA.clone()),
                 );
             }
             _ => {}
@@ -674,11 +586,37 @@ impl StreamSink<Event> for TopSQLDeltaLakeSink {
         );
 
         let mut input = input.ready_chunks(self.write_config.batch_size);
-
+        let mut events_cache = vec![];
+        let mut cur_cache_size = 0;
+        let mut oldest_timestamp = 0;
+        let mut latest_timestamp = 0;
         while let Some(events) = input.next().await {
-            if let Err(e) = self.process_events(events, true).await {
+            let events_count = events.len();
+            if events_count > 0 {
+                if let Event::Log(ref log_event) = events[0] {
+                    if let Some(timestamps) =
+                    log_event.get("timestamps").and_then(|v| v.as_integer())
+                    {
+                        latest_timestamp = timestamps;
+                        if cur_cache_size == 0 {
+                            oldest_timestamp = timestamps;
+                        }
+                    }
+                }
+            } else {
+                continue;
+            }
+            cur_cache_size += events_count;
+            events_cache.push(events);
+            // Allow max delay to 3 minutes
+            if events_count + cur_cache_size < self.write_config.batch_size && latest_timestamp < oldest_timestamp + 180 {
+                continue;
+            }
+            if let Err(e) = self.process_events(events_cache, true).await {
                 error!("Failed to process events: {}", e);
             }
+            cur_cache_size = 0;
+            events_cache = vec![];
         }
         self.parallelism.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())

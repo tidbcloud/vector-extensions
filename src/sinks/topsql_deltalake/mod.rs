@@ -39,6 +39,10 @@ pub struct TopSQLDeltaLakeConfig {
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 
+    /// Max counter of row group in a single parquet file
+    #[serde(default = "default_max_row_group_size")]
+    pub max_row_group_size: usize,    
+
     /// Write timeout in seconds
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
@@ -96,6 +100,10 @@ pub const fn default_batch_size() -> usize {
     1000
 }
 
+pub const fn default_max_row_group_size() -> usize {
+    8192
+}
+
 pub const fn default_timeout_secs() -> u64 {
     30
 }
@@ -113,6 +121,7 @@ impl GenerateConfig for TopSQLDeltaLakeConfig {
         toml::Value::try_from(Self {
             base_path: "./delta-tables".to_owned(),
             batch_size: default_batch_size(),
+            max_row_group_size: default_max_row_group_size(),
             timeout_secs: default_timeout_secs(),
             compression: default_compression(),
             storage_options: None,
@@ -193,6 +202,7 @@ impl TopSQLDeltaLakeConfig {
 
         let write_config = WriteConfig {
             batch_size: self.batch_size,
+            max_row_group_size: self.max_row_group_size,
             timeout_secs: self.timeout_secs,
             compression: self.compression.clone(),
         };

@@ -22,7 +22,9 @@ use vector_lib::{
     },
     register,
     tls::TlsConfig,
+    event::{Event, LogEvent, Value as LogValue},
 };
+use chrono::Utc;
 
 use crate::common::topology::{Component, InstanceType};
 use crate::sources::topsql::{
@@ -64,6 +66,7 @@ trait TopSQLSourceBehavior {
         &self,
         instance: &str,
         instance_type: &str,
+        enable_row_format: bool,
         out: &mut SourceSender,
     );
 }
@@ -290,6 +293,7 @@ impl BaseTopSQLSource {
             .handle_instance_event(
                 &self.instance,
                 &self.instance_type.to_string(),
+                self.enable_row_format,
                 &mut self.out,
             )
             .await;
@@ -310,11 +314,27 @@ impl TopSQLSourceBehavior for LegacyTopSQLBehavior {
         &self,
         instance: &str,
         instance_type: &str,
+        enable_row_format: bool,
         out: &mut SourceSender,
     ) {
-        let event = instance_event(instance.to_string(), instance_type.to_string());
-        if out.send_event(event).await.is_err() {
-            StreamClosedError { count: 1 }.emit();
+        if !enable_row_format {
+            let event = instance_event(instance.to_string(), instance_type.to_string());
+            if out.send_event(event).await.is_err() {
+                StreamClosedError { count: 1 }.emit();
+            }            
+        } else {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
+
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert("source_table", "instance");
+            log.insert("timestamps", LogValue::from(Utc::now().timestamp()));
+            log.insert("instance_type", instance_type.to_string());
+            log.insert("instance", instance.to_string());
+
+            if out.send_event(event).await.is_err() {
+                StreamClosedError { count: 1 }.emit();
+            }
         }
     }
 }
@@ -365,24 +385,56 @@ impl TopSQLSourceBehavior for NextgenTopSQLBehavior {
         &self,
         instance: &str,
         instance_type: &str,
+        enable_row_format: bool,
         out: &mut SourceSender,
     ) {
         let mut batch = vec![];
-        let event = instance_event_metric(instance.to_string(), instance_type.to_string());
-        batch.push(event);
-        for (cluster_id, (vm_account_id, vm_project_id)) in &self.keyspace_to_vmtenants {
-            let event = instance_event_with_tags(
-                instance.to_string(),
-                instance_type.to_string(),
-                cluster_id.clone(),
-                vm_account_id.clone(),
-                vm_project_id.clone(),
-            );
+        if !enable_row_format {        
+            let event = instance_event_metric(instance.to_string(), instance_type.to_string());
             batch.push(event);
-        }
-        let count = batch.len();
-        if out.send_batch(batch).await.is_err() {
-            StreamClosedError { count }.emit()
+            for (cluster_id, (vm_account_id, vm_project_id)) in &self.keyspace_to_vmtenants {
+                let event = instance_event_with_tags(
+                    instance.to_string(),
+                    instance_type.to_string(),
+                    cluster_id.clone(),
+                    vm_account_id.clone(),
+                    vm_project_id.clone(),
+                );
+                batch.push(event);
+            }
+            let count = batch.len();
+            if out.send_batch(batch).await.is_err() {
+                StreamClosedError { count }.emit()
+            }
+        } else {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
+
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert("source_table", "instance");
+            log.insert("timestamps", LogValue::from(Utc::now().timestamp()));
+            log.insert("instance_type", instance_type.to_string());
+            log.insert("instance", instance.to_string());
+            batch.push(event);
+
+            for (cluster_id, (vm_account_id, vm_project_id)) in &self.keyspace_to_vmtenants {
+                let mut event = Event::Log(LogEvent::default());
+                let log = event.as_mut_log();
+                log.insert("source_table", "instance");
+                log.insert("timestamps", LogValue::from(Utc::now().timestamp()));
+                log.insert("instance_type", instance_type.to_string());
+                log.insert("instance", instance.to_string());
+                log.insert("tidb_cluster_id", cluster_id.clone());
+                log.insert("keyspace_name", cluster_id.clone());
+                log.insert("vm_account_id", vm_account_id.clone());
+                log.insert("vm_project_id", vm_project_id.clone());
+                batch.push(event);
+            }
+
+            let count = batch.len();
+            if out.send_batch(batch).await.is_err() {
+                StreamClosedError { count }.emit()
+            }
         }
     }
 }

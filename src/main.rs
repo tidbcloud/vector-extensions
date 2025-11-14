@@ -6,57 +6,51 @@ use std::process::ExitCode;
 use vector::{app::Application, extra_context::ExtraContext};
 use prometheus_exporter::{
     self,
-    prometheus::register_counter,
 };
 
 use prometheus::{
     IntCounter, IntGauge, Opts,
     core::{Collector, Desc},
     proto,
+    register,
 };
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 mod common;
 mod sinks;
 mod sources;
 mod utils;
 
+use std::{
+    fs,
+    io::{self, Error},
+    iter::FromIterator,
+};
+use libc::c_int;
+pub use libc::pid_t as Pid;
+pub use procinfo::pid::{self, Stat as FullStat};
 
-    use std::{
-        fs,
-        io::{self, Error},
-        iter::FromIterator,
+lazy_static::lazy_static! {
+    // getconf CLK_TCK
+    static ref CLOCK_TICK: i64 = {
+        unsafe {
+            libc::sysconf(libc::_SC_CLK_TCK)
+        }
     };
 
-    use libc::c_int;
-    pub use libc::pid_t as Pid;
-    pub use procinfo::pid::{self, Stat as FullStat};
+    static ref PROCESS_ID: Pid = unsafe { libc::getpid() };
+}
+/// Gets the ID of the current process.
+#[inline]
+pub fn process_id() -> Pid {
+    *PROCESS_ID
+}
+#[inline]
+pub fn ticks_per_second() -> i64 {
+    *CLOCK_TICK
+}
 
-    lazy_static::lazy_static! {
-        // getconf CLK_TCK
-        static ref CLOCK_TICK: i64 = {
-            unsafe {
-                libc::sysconf(libc::_SC_CLK_TCK)
-            }
-        };
-
-        static ref PROCESS_ID: Pid = unsafe { libc::getpid() };
-    }
-    /// Gets the ID of the current process.
-    #[inline]
-    pub fn process_id() -> Pid {
-        *PROCESS_ID
-    }
-
-    /// Gets the ID of the current thread.
-    #[inline]
-    pub fn thread_id() -> Pid {
-        thread_local! {
-            static TID: Pid = unsafe { libc::syscall(libc::SYS_gettid) as Pid };
-        }
-        TID.with(|t| *t)
-    }
 
 /// A collector to collect process metrics.
 pub struct ProcessCollector {
@@ -126,12 +120,12 @@ impl Collector for ProcessCollector {
         };
 
         // memory
-        self.vsize.set(p.stat.vsize as i64);
-        self.rss.set(p.stat.rss * *PAGESIZE);
+        self.vsize.set(p.stat().unwrap().vsize as i64);
+        self.rss.set((p.stat().unwrap().rss * (*PAGESIZE as u64)) as i64);
 
         // cpu
         let cpu_total_mfs = {
-            let total = (p.stat.utime + p.stat.stime) / ticks_per_second() as u64;
+            let total = (p.stat().unwrap().utime + p.stat().unwrap().stime) / ticks_per_second() as u64;
             let past = self.cpu_total.get();
             self.cpu_total.inc_by(total - past);
 
@@ -163,10 +157,10 @@ fn main() -> ExitCode {
     use vector::sinks::prometheus;
 
 
-    let binding = "127.0.0.1:9184".parse().unwrap();
+    let binding = "10.2.12.124:9184".parse().unwrap();
     let _exporter = prometheus_exporter::start(binding).unwrap();
     let pc = ProcessCollector::new();
-    let _ = prometheus::register(Box::new(pc)).map_err(|e| Error::other(e.to_string()));
+    let _ = register(Box::new(pc));
 
     // Install the default crypto provider for Rustls
     // This is required for Rustls 0.23+ to avoid the panic about crypto provider selection
