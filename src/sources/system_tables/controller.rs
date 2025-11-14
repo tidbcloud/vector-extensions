@@ -361,7 +361,8 @@ impl Controller {
                 let out_clone = self.out.clone();
                 let collection_config_clone = self.collection_config.clone();
                 let handle = tokio::spawn(async move {
-                    Self::run_collector_task(collector, tables, out_clone, collection_config_clone).await;
+                    Self::run_collector_task(collector, tables, out_clone, collection_config_clone)
+                        .await;
                 });
                 let task = CollectorTask {
                     handle,
@@ -397,7 +398,8 @@ impl Controller {
         let has_statements_summary = tables
             .iter()
             .any(|t| t.source_table.contains("STATEMENTS_SUMMARY"));
-        let auto_interval_secs = if is_copr && table_config.collection_interval.starts_with("auto(") {
+        let auto_interval_secs = if is_copr && table_config.collection_interval.starts_with("auto(")
+        {
             table_config
                 .collection_interval
                 .trim_start_matches("auto(")
@@ -431,13 +433,15 @@ impl Controller {
                 let sleep_secs = target.saturating_sub(now_secs);
                 info!(
                     "⏳ Waiting {}s until next aligned pull at t={} (rotate-20s)",
-                    sleep_secs,
-                    target
+                    sleep_secs, target
                 );
                 let wake_at = Instant::now() + Duration::from_secs(sleep_secs);
                 sleep_until(wake_at).await;
 
-                info!("🔄 AUTO collection cycle starting for tables: [{}]", table_names.join(", "));
+                info!(
+                    "🔄 AUTO collection cycle starting for tables: [{}]",
+                    table_names.join(", ")
+                );
 
                 // Collect with up to 5 retries to adapt around rotate jitter
                 for table in &tables {
@@ -520,10 +524,8 @@ impl Controller {
             }
         } else {
             // Default fixed-interval scheduling
-            let interval_seconds = parse_collection_interval(
-                &table_config.collection_interval,
-                &collection_config,
-            );
+            let interval_seconds =
+                parse_collection_interval(&table_config.collection_interval, &collection_config);
             let interval_duration = Duration::from_secs(interval_seconds);
 
             info!(
