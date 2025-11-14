@@ -320,7 +320,12 @@ impl DeltaLakeConfig {
             } else {
                 storage_options
                     .insert("AWS_S3_ADDRESSING_STYLE".to_string(), "virtual".to_string());
+                // Set virtual hosted style request when using virtual addressing
+                storage_options.insert("AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(), "true".to_string());
             }
+        } else {
+            // Default to virtual hosted style when force_path_style is not specified
+            storage_options.insert("AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(), "true".to_string());
         }
 
         // Configure AWS authentication for Delta Lake using storage_options
