@@ -6,6 +6,10 @@ mod tidb;
 mod tiproxy;
 mod utils;
 
+use crate::common::features::is_nextgen_mode;
+use crate::common::topology::fetch::tidb_nextgen::{TiDBNextGenTopologyFetcher, FetchError as TiDBNextGenFetchError};
+use crate::sources::conprof::topology::Component;
+
 #[cfg(test)]
 mod mock;
 
@@ -16,8 +20,6 @@ use snafu::{ResultExt, Snafu};
 use vector::config::ProxyConfig;
 use vector::http::HttpClient;
 use vector::tls::{MaybeTlsSettings, TlsConfig};
-
-use crate::sources::conprof::topology::Component;
 
 #[derive(Debug, Snafu)]
 pub enum FetchError {
@@ -37,10 +39,14 @@ pub enum FetchError {
     BuildHttpClient { source: vector::http::HttpError },
     #[snafu(display("Failed to build etcd client: {}", source))]
     BuildEtcdClient { source: etcd_client::Error },
+    #[snafu(display("Configuration error: {}", message))]
+    ConfigurationError { message: String },
     #[snafu(display("Failed to fetch pd topology: {}", source))]
     FetchPDTopology { source: pd::FetchError },
     #[snafu(display("Failed to fetch tidb topology: {}", source))]
     FetchTiDBTopology { source: tidb::FetchError },
+    #[snafu(display("Failed to fetch tidb nextgen topology: {}", source))]
+    FetchTiDBNextGenTopology { source: TiDBNextGenFetchError },
     #[snafu(display("Failed to fetch store topology: {}", source))]
     FetchStoreTopology { source: store::FetchError },
     #[snafu(display("Failed to fetch tiproxy topology: {}", source))]
@@ -83,10 +89,51 @@ impl TopologyFetcher {
             .get_up_pds(components)
             .await
             .context(FetchPDTopologySnafu)?;
-        tidb::TiDBTopologyFetcher::new(&mut self.etcd_client)
-            .get_up_tidbs(components)
+        if is_nextgen_mode() {
+            // Use nextgen topology fetcher
+            // Note: For conprof, we need to determine how to get tidb_group
+            // This might need to be passed in or configured differently
+            // For now, using a placeholder approach
+            let tidb_group = std::env::var("TIDB_GROUP").map_err(|_| FetchError::ConfigurationError {
+                message: "TIDB_GROUP environment variable is required in nextgen mode".to_string(),
+            })?;
+            
+            // Create temporary HashSet for common::topology::Component
+            let mut temp_components = std::collections::HashSet::new();
+            
+            TiDBNextGenTopologyFetcher::new(
+                self.kube_client.clone(),
+                tidb_group,
+            )
+            .get_up_tidbs(&mut temp_components)
             .await
-            .context(FetchTiDBTopologySnafu)?;
+            .context(FetchTiDBNextGenTopologySnafu)?;
+            
+            // Convert common::topology::Component to conprof::topology::Component
+            for common_comp in temp_components {
+                let instance_type = match common_comp.instance_type {
+                    crate::common::topology::InstanceType::PD => crate::sources::conprof::topology::InstanceType::PD,
+                    crate::common::topology::InstanceType::TiDB => crate::sources::conprof::topology::InstanceType::TiDB,
+                    crate::common::topology::InstanceType::TiKV => crate::sources::conprof::topology::InstanceType::TiKV,
+                    crate::common::topology::InstanceType::TiFlash => crate::sources::conprof::topology::InstanceType::TiFlash,
+                };
+                
+                let conprof_comp = crate::sources::conprof::topology::Component {
+                    instance_type,
+                    host: common_comp.host,
+                    primary_port: common_comp.primary_port,
+                    secondary_port: common_comp.secondary_port,
+                };
+                
+                components.insert(conprof_comp);
+            }
+        } else {
+            // Use legacy topology fetcher
+            tidb::TiDBTopologyFetcher::new(&mut self.etcd_client)
+                .get_up_tidbs(components)
+                .await
+                .context(FetchTiDBTopologySnafu)?;
+        }
         store::StoreTopologyFetcher::new(&self.pd_address, &self.http_client)
             .get_up_stores(components)
             .await
