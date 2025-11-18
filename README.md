@@ -107,6 +107,7 @@ make build-armv7-unknown-linux-musleabihf
 make target/x86_64-unknown-linux-gnu/release/vector
 JEMALLOC_SYS_WITH_LG_PAGE=16 make target/aarch64-unknown-linux-gnu/release/vector
 # JEMALLOC_SYS_WITH_LG_PAGE=16 make target/armv7-unknown-linux-gnueabihf/release/vector
+# if you are using macOS with apple Silicon, you need to set DOCKER_DEFAULT_PLATFORM=linux/amd64 make release-docker
 make release-docker
 
 # build with given version and repo
