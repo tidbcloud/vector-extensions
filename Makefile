@@ -72,6 +72,7 @@ build-armv7-unknown-linux-musleabihf: target/armv7-unknown-linux-musleabihf/rele
 cross-image-%: export TRIPLE =$($(strip @):cross-image-%=%)
 cross-image-%:
 	docker build \
+		--platform linux/amd64 \
 		--tag vector-cross-env:${TRIPLE} \
 		--file scripts/cross/${TRIPLE}.dockerfile \
 		scripts/cross
