@@ -15,6 +15,8 @@ use crate::sources::topsql::shutdown::{pair, ShutdownNotifier, ShutdownSubscribe
 use crate::sources::topsql::upstream::TopSQLSource;
 
 pub struct Controller {
+    sharedpool_id: Option<String>,
+
     topo_fetch_interval: Duration,
     topo_fetcher: TopologyFetcher,
 
@@ -44,6 +46,7 @@ struct ActiveSchemaManager {
 
 impl Controller {
     pub async fn new(
+        sharedpool_id: Option<String>,
         pd_address: Option<String>,
         topo_fetch_interval: Duration,
         init_retry_delay: Duration,
@@ -73,6 +76,7 @@ impl Controller {
         let schema_cache = Arc::new(SchemaCache::new());
 
         Ok(Self {
+            sharedpool_id,
             topo_fetch_interval,
             topo_fetcher,
             components: HashSet::new(),
@@ -252,6 +256,7 @@ impl Controller {
 
     fn start_component(&mut self, component: &Component) -> bool {
         let source = TopSQLSource::new(
+            self.sharedpool_id.clone(),
             component.clone(),
             self.tls.clone(),
             self.out.clone(),
