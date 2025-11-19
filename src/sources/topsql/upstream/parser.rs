@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use vector::event::{Event, Metric, MetricKind, MetricTags, MetricValue};
-use vector_lib::vrl::parser::ast::Op;
 
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{LABEL_VM_ACCOUNT_ID, LABEL_VM_PROJECT_ID};
