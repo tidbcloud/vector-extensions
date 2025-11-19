@@ -55,6 +55,7 @@ pub trait Upstream: Send {
 }
 
 pub struct TopSQLSource {
+    sharedpool_id: Option<String>,
     instance: String,
     instance_type: InstanceType,
     uri: String,
@@ -80,6 +81,7 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 
 impl TopSQLSource {
     pub fn new(
+        sharedpool_id: Option<String>,
         component: Component,
         tls: Option<TlsConfig>,
         out: SourceSender,
@@ -96,6 +98,7 @@ impl TopSQLSource {
         };
         match component.topsql_address() {
             Some(address) => Some(TopSQLSource {
+                sharedpool_id,
                 instance: address.clone(),
                 instance_type: component.instance_type,
                 uri: if tls.is_some() {
@@ -248,6 +251,7 @@ impl TopSQLSource {
                 response,
                 self.instance.clone(),
                 self.schema_cache.clone(),
+                self.sharedpool_id.clone(),
                 self.keyspace_to_vmtenants.clone(),
             );
             batch.append(&mut events);
@@ -262,12 +266,17 @@ impl TopSQLSource {
 
     async fn handle_instance(&mut self) {
         let mut batch = vec![];
-        let event = instance_event(self.instance.clone(), self.instance_type.to_string());
+        let event = instance_event(
+            self.instance.clone(),
+            self.instance_type.to_string(),
+            self.sharedpool_id.clone(),
+        );
         batch.push(event);
         for (cluster_id, (vm_account_id, vm_project_id)) in &self.keyspace_to_vmtenants {
             let event = instance_event_with_tags(
                 self.instance.clone(),
                 self.instance_type.to_string(),
+                self.sharedpool_id.clone(),
                 cluster_id.clone(),
                 vm_account_id.clone(),
                 vm_project_id.clone(),

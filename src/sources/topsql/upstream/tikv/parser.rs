@@ -25,12 +25,17 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         response: Self::UpstreamEvent,
         instance: String,
         schema_cache: Arc<SchemaCache>,
+        sharedpool_id: Option<String>,
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Vec<Event> {
         match response.record_oneof {
-            Some(RecordOneof::Record(record)) => {
-                Self::parse_tikv_record(record, instance, schema_cache, keyspace_to_vmtenants)
-            }
+            Some(RecordOneof::Record(record)) => Self::parse_tikv_record(
+                record,
+                instance,
+                schema_cache,
+                sharedpool_id,
+                keyspace_to_vmtenants,
+            ),
             None => vec![],
         }
     }
@@ -177,6 +182,7 @@ impl ResourceUsageRecordParser {
         record: GroupTagRecord,
         instance: String,
         schema_cache: Arc<SchemaCache>,
+        sharedpool_id: Option<String>,
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Vec<Event> {
         // Log schema cache info
@@ -224,6 +230,9 @@ impl ResourceUsageRecordParser {
             .table_name(table_name)
             .table_id(table_id_str)
             .keyspace_name(keyspace_name_str.clone());
+        if let Some(sharedpool_id) = sharedpool_id {
+            buf.sharedpool_id(sharedpool_id);
+        }
         if let Some((vm_account_id, vm_project_id)) = keyspace_to_vmtenants.get(&keyspace_name_str)
         {
             buf.vm_account_id(vm_account_id.clone())

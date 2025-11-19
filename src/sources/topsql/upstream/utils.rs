@@ -37,10 +37,13 @@ pub fn make_metric_like_log_event(
     log.into()
 }
 
-pub fn instance_event(instance: String, instance_type: String) -> Event {
+pub fn instance_event(instance: String, instance_type: String, sharedpool_id: Option<String>) -> Event {
     let mut tags = BTreeMap::new();
     tags.insert(LABEL_INSTANCE.to_owned(), instance);
     tags.insert(LABEL_INSTANCE_TYPE.to_owned(), instance_type);
+    if let Some(sharedpool_id) = sharedpool_id {
+        tags.insert("sharedpool_id".to_owned(), sharedpool_id);
+    }
     let metric = Metric::new(
         METRIC_NAME_INSTANCE,
         MetricKind::Absolute,
@@ -54,6 +57,7 @@ pub fn instance_event(instance: String, instance_type: String) -> Event {
 pub fn instance_event_with_tags(
     instance: String,
     instance_type: String,
+    sharedpool_id: Option<String>,
     cluster_id: String,
     vm_account_id: String,
     vm_project_id: String,
@@ -61,6 +65,9 @@ pub fn instance_event_with_tags(
     let mut tags = BTreeMap::new();
     tags.insert(LABEL_INSTANCE.to_owned(), instance);
     tags.insert(LABEL_INSTANCE_TYPE.to_owned(), instance_type);
+    if let Some(sharedpool_id) = sharedpool_id {
+        tags.insert("sharedpool_id".to_owned(), sharedpool_id);
+    }
     tags.insert("cluster_id".to_string(), cluster_id.clone());
     tags.insert("tidb_cluster_id".to_string(), cluster_id.clone());
     tags.insert("keyspace_name".to_string(), cluster_id.clone());

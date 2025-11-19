@@ -27,10 +27,13 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         response: Self::UpstreamEvent,
         instance: String,
         _schema_cache: Arc<SchemaCache>,
+        sharedpool_id: Option<String>,
         _keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Vec<Event> {
         match response.resp_oneof {
-            Some(RespOneof::Record(record)) => Self::parse_tidb_record(record, instance),
+            Some(RespOneof::Record(record)) => {
+                Self::parse_tidb_record(record, instance, sharedpool_id)
+            }
             Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
             Some(RespOneof::PlanMeta(plan_meta)) => Self::parse_tidb_plan_meta(plan_meta),
             None => vec![],
@@ -292,7 +295,11 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
 }
 
 impl TopSqlSubResponseParser {
-    fn parse_tidb_record(record: TopSqlRecord, instance: String) -> Vec<Event> {
+    fn parse_tidb_record(
+        record: TopSqlRecord,
+        instance: String,
+        sharedpool_id: Option<String>,
+    ) -> Vec<Event> {
         let mut events = vec![];
 
         let mut buf = Buf::default();
@@ -300,6 +307,9 @@ impl TopSqlSubResponseParser {
             .instance_type(INSTANCE_TYPE_TIDB)
             .sql_digest(hex::encode_upper(record.sql_digest))
             .plan_digest(hex::encode_upper(record.plan_digest));
+        if let Some(sharedpool_id) = sharedpool_id {
+            buf.sharedpool_id(sharedpool_id);
+        }
 
         macro_rules! append {
             ($( ($label_name:expr, $item_name:tt), )* ) => {
