@@ -767,7 +767,12 @@ impl DeltaLakeWriter {
                                 if let Ok(s) = std::str::from_utf8(bytes.as_ref()) {
                                     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
                                         Some(dt.timestamp_micros())
-                                    } else if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                    } else if let Ok(naive_dt) =
+                                        chrono::NaiveDateTime::parse_from_str(
+                                            s,
+                                            "%Y-%m-%d %H:%M:%S",
+                                        )
+                                    {
                                         Some(naive_dt.and_utc().timestamp_micros())
                                     } else {
                                         None
@@ -784,7 +789,8 @@ impl DeltaLakeWriter {
                     }
                 }
                 // tz is Arc<str>; clone to satisfy Into<Arc<str>>
-                let array = arrow::array::TimestampMicrosecondArray::from(values).with_timezone(tz.clone());
+                let array =
+                    arrow::array::TimestampMicrosecondArray::from(values).with_timezone(tz.clone());
                 Ok(Arc::new(array))
             }
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
@@ -900,7 +906,7 @@ impl DeltaLakeWriter {
 
         // Try to write directly first (avoid load() which can panic in deltalake-core 0.28.1)
         info!("Attempting to write to Delta table at {}", table_uri);
-        
+
         let mut write_builder = table_ops.write(vec![record_batch.clone()]);
         // Always pass partition columns on write; for new tables this applies partitioning,
         // for existing tables it validates consistency
@@ -908,11 +914,11 @@ impl DeltaLakeWriter {
             write_builder = write_builder.with_partition_columns(partitions.clone());
         }
         // Allow protocol/schema update so timestamp ntz writer feature can be enabled when needed
-        write_builder = write_builder
-            .with_schema_mode(deltalake::operations::write::SchemaMode::Merge);
+        write_builder =
+            write_builder.with_schema_mode(deltalake::operations::write::SchemaMode::Merge);
 
         let write_result = write_builder.await;
-        
+
         match write_result {
             Ok(table) => {
                 info!("✅ Successfully wrote to Delta table at {}", table_uri);
@@ -922,10 +928,14 @@ impl DeltaLakeWriter {
             Err(e) => {
                 // Check if error is due to table not existing
                 let error_str = e.to_string();
-                if error_str.contains("does not exist") 
-                    || error_str.contains("not found") 
-                    || error_str.contains("Not a Delta table") {
-                    info!("Table doesn't exist, will create it. Error was: {}", error_str);
+                if error_str.contains("does not exist")
+                    || error_str.contains("not found")
+                    || error_str.contains("Not a Delta table")
+                {
+                    info!(
+                        "Table doesn't exist, will create it. Error was: {}",
+                        error_str
+                    );
                     // Fall through to table creation below
                 } else {
                     // Other error, fail immediately
@@ -979,7 +989,7 @@ impl DeltaLakeWriter {
         } else {
             DeltaOps::try_from_uri(&table_uri).await?
         };
-        
+
         // Load the table first to ensure state is initialized
         match table_ops_for_feature.load().await {
             Ok((loaded_table, _stream)) => {
@@ -991,7 +1001,9 @@ impl DeltaLakeWriter {
                     .await
                 {
                     Ok(_) => {
-                        info!("✅ Successfully added TimestampWithoutTimezone feature to Delta table");
+                        info!(
+                            "✅ Successfully added TimestampWithoutTimezone feature to Delta table"
+                        );
                     }
                     Err(e) => {
                         warn!("Failed to add TimestampWithoutTimezone feature: {}. Continuing without it.", e);
@@ -1014,8 +1026,8 @@ impl DeltaLakeWriter {
         if let Some(partitions) = &self.table_config.partition_by {
             write_builder = write_builder.with_partition_columns(partitions.clone());
         }
-        write_builder = write_builder
-            .with_schema_mode(deltalake::operations::write::SchemaMode::Merge);
+        write_builder =
+            write_builder.with_schema_mode(deltalake::operations::write::SchemaMode::Merge);
         let write_result = write_builder.await?;
 
         info!(

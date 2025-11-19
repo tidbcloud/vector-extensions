@@ -23,6 +23,9 @@ pub mod upstream;
 #[derive(Debug, Clone)]
 pub struct TopSQLConfig {
     /// PLACEHOLDER
+    pub sharedpool_id: Option<String>,
+
+    /// PLACEHOLDER
     pub tidb_group: Option<String>,
 
     /// PLACEHOLDER
@@ -73,6 +76,7 @@ pub const fn default_downsampling_interval() -> u32 {
 impl GenerateConfig for TopSQLConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
+            sharedpool_id: None,
             tidb_group: None,
             label_k8s_instance: None,
             keyspace_to_vmtenants: None,
@@ -93,6 +97,7 @@ impl SourceConfig for TopSQLConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
         self.validate_tls()?;
 
+        let sharedpool_id = self.sharedpool_id.clone();
         let tidb_group = self.tidb_group.clone();
         let label_k8s_instance = self.label_k8s_instance.clone();
         let keyspace_to_vmtenants = self.keyspace_to_vmtenants.clone();
@@ -120,6 +125,7 @@ impl SourceConfig for TopSQLConfig {
 
         Ok(Box::pin(async move {
             let controller = Controller::new(
+                sharedpool_id,
                 pd_address,
                 topology_fetch_interval,
                 init_retry_delay,

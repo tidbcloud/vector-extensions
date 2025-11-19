@@ -314,6 +314,7 @@ impl DeltaLakeConfig {
         }
 
         // Set addressing style
+        // Aliyun OSS requires virtual hosted style, so default to virtual if not explicitly set to path
         if let Some(force_path_style) = self.force_path_style {
             if force_path_style {
                 storage_options.insert("AWS_S3_ADDRESSING_STYLE".to_string(), "path".to_string());
@@ -321,11 +322,25 @@ impl DeltaLakeConfig {
                 storage_options
                     .insert("AWS_S3_ADDRESSING_STYLE".to_string(), "virtual".to_string());
                 // Set virtual hosted style request when using virtual addressing
-                storage_options.insert("AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(), "true".to_string());
+                storage_options.insert(
+                    "AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(),
+                    "true".to_string(),
+                );
+                // Set copy-if-not-exists for Aliyun OSS compatibility
+                // This prevents overwriting existing objects and returns 409 Conflict if object exists
+                storage_options.insert(
+                    "AWS_COPY_IF_NOT_EXISTS".to_string(),
+                    "header-with-status:x-oss-forbid-overwrite:true:409".to_string(),
+                );
             }
         } else {
             // Default to virtual hosted style when force_path_style is not specified
-            storage_options.insert("AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(), "true".to_string());
+            // This is required for Aliyun OSS compatibility
+            storage_options.insert("AWS_S3_ADDRESSING_STYLE".to_string(), "virtual".to_string());
+            storage_options.insert(
+                "AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(),
+                "true".to_string(),
+            );
         }
 
         // Configure AWS authentication for Delta Lake using storage_options
@@ -337,52 +352,78 @@ impl DeltaLakeConfig {
         //
         // This matches aws_s3_upload_file behavior which uses the same AWS SDK credential chain
         info!("Configuring AWS authentication for Delta Lake (storage_options approach)");
-        
+
         // Check Vector's auth configuration and map to Delta Lake storage_options
         match &self.auth {
-            AwsAuthentication::Role { assume_role, external_id, .. } => {
+            AwsAuthentication::Role {
+                assume_role,
+                external_id,
+                ..
+            } => {
                 // Configure IAM Role ARN for AssumeRole
                 // Delta Lake's object_store will automatically call AssumeRole with these settings
                 info!("Configuring Delta Lake with IAM Role ARN: {}", assume_role);
                 storage_options.insert("AWS_IAM_ROLE_ARN".to_string(), assume_role.clone());
-                storage_options.insert("AWS_IAM_ROLE_SESSION_NAME".to_string(), "vector-deltalake".to_string());
-                
+                storage_options.insert(
+                    "AWS_IAM_ROLE_SESSION_NAME".to_string(),
+                    "vector-deltalake".to_string(),
+                );
+
                 if let Some(ext_id) = external_id {
                     storage_options.insert("AWS_IAM_ROLE_EXTERNAL_ID".to_string(), ext_id.clone());
                     info!("✓ Using external ID for role assumption");
                 }
-                
+
                 info!("✓ Delta Lake will use AssumeRole with IAM Role ARN");
             }
-            AwsAuthentication::AccessKey { access_key_id, secret_access_key, session_token, assume_role, .. } => {
+            AwsAuthentication::AccessKey {
+                access_key_id,
+                secret_access_key,
+                session_token,
+                assume_role,
+                ..
+            } => {
                 // Use static credentials
                 storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id.to_string());
-                storage_options.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_access_key.to_string());
-                
+                storage_options.insert(
+                    "AWS_SECRET_ACCESS_KEY".to_string(),
+                    secret_access_key.to_string(),
+                );
+
                 if let Some(token) = session_token {
                     storage_options.insert("AWS_SESSION_TOKEN".to_string(), token.to_string());
                 }
-                
+
                 if let Some(role_arn) = assume_role {
                     info!("Using access key with assume role: {}", role_arn);
                     // Can also configure AssumeRole with base credentials
                     storage_options.insert("AWS_IAM_ROLE_ARN".to_string(), role_arn.clone());
-                    storage_options.insert("AWS_IAM_ROLE_SESSION_NAME".to_string(), "vector-deltalake".to_string());
+                    storage_options.insert(
+                        "AWS_IAM_ROLE_SESSION_NAME".to_string(),
+                        "vector-deltalake".to_string(),
+                    );
                 }
-                
+
                 info!("✓ Delta Lake using static AWS credentials");
             }
-            AwsAuthentication::File { credentials_file, profile, .. } => {
+            AwsAuthentication::File {
+                credentials_file,
+                profile,
+                ..
+            } => {
                 // Use AWS profile
                 storage_options.insert("AWS_PROFILE".to_string(), profile.clone());
-                storage_options.insert("AWS_SHARED_CREDENTIALS_FILE".to_string(), credentials_file.clone());
+                storage_options.insert(
+                    "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+                    credentials_file.clone(),
+                );
                 info!("✓ Delta Lake using AWS profile: {}", profile);
             }
             AwsAuthentication::Default { .. } => {
                 // Use default AWS credential chain (environment variables, instance roles, etc.)
                 // Check environment variables and pass them to Delta Lake
                 info!("Using default AWS credential chain");
-                
+
                 if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
                     storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
                 }
@@ -395,19 +436,22 @@ impl DeltaLakeConfig {
                 if let Ok(profile) = std::env::var("AWS_PROFILE") {
                     storage_options.insert("AWS_PROFILE".to_string(), profile);
                 }
-                
+
                 // Set default credentials file path if it exists
                 if let Ok(home) = std::env::var("HOME") {
                     let default_creds_file = format!("{}/.aws/credentials", home);
                     if std::path::Path::new(&default_creds_file).exists() {
-                        storage_options.insert("AWS_SHARED_CREDENTIALS_FILE".to_string(), default_creds_file);
+                        storage_options.insert(
+                            "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+                            default_creds_file,
+                        );
                     }
                 }
-                
+
                 info!("✓ Delta Lake will use AWS SDK's default credential chain");
             }
         }
-        
+
         info!("✓ AWS authentication configured for Delta Lake via storage_options");
 
         debug!("=== Completed apply_s3_storage_options ===");

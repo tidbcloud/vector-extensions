@@ -2,13 +2,15 @@ use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use vector::event::{Event, Metric, MetricKind, MetricTags, MetricValue};
+use vector_lib::vrl::parser::ast::Op;
 
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{LABEL_VM_ACCOUNT_ID, LABEL_VM_PROJECT_ID};
 use crate::sources::topsql::upstream::{
     consts::{
         LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_KEYSPACE_NAME, LABEL_NAME,
-        LABEL_PLAN_DIGEST, LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TAG_LABEL,
+        LABEL_PLAN_DIGEST, LABEL_SHAREDPOOL_ID, LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME,
+        LABEL_TAG_LABEL,
     },
     utils::make_metric_like_log_event,
 };
@@ -34,6 +36,7 @@ pub trait UpstreamEventParser {
         event: Self::UpstreamEvent,
         instance: String,
         schema_cache: Arc<SchemaCache>,
+        sharedpool_id: Option<String>,
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
     ) -> Vec<Event>;
 
@@ -64,6 +67,7 @@ impl Default for Buf {
                 (LABEL_KEYSPACE_NAME, String::new()),
                 (LABEL_VM_ACCOUNT_ID, String::new()),
                 (LABEL_VM_PROJECT_ID, String::new()),
+                (LABEL_SHAREDPOOL_ID, String::new()),
             ],
             timestamps: vec![],
             values: vec![],
@@ -129,6 +133,11 @@ impl Buf {
 
     pub fn vm_project_id(&mut self, vm_project_id: impl Into<String>) -> &mut Self {
         self.labels[11].1 = vm_project_id.into();
+        self
+    }
+
+    pub fn sharedpool_id(&mut self, sharedpool_id: impl Into<String>) -> &mut Self {
+        self.labels[12].1 = sharedpool_id.into();
         self
     }
 

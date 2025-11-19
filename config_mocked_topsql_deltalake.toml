@@ -1,0 +1,47 @@
+# Vector Configuration File - Mocked TopSQL Source with Delta Lake Sink
+# This configuration runs mocked_topsql source and writes to local Delta Lake tables
+
+[sources.mocked_topsql]
+type = "mocked_topsql"
+
+# Top N queries to collect (0 means all)
+top_n = 0
+
+# Downsampling interval in seconds (0 means no downsampling)
+downsampling_interval = 0
+
+# Number of TiDB nodes to simulate
+tidb_number = 5
+
+# Number of TiKV nodes to simulate
+tikv_number = 5
+
+# Extra column number
+extra_column_number = 0
+
+# Output to Delta Lake (local storage)
+[sinks.deltalake]
+type = "deltalake"
+inputs = ["mocked_topsql"]
+
+# Base path for Delta Lake tables (local directory)
+base_path = "./local-delta-tables"
+
+# Write configuration
+batch_size = 1000
+timeout_secs = 30
+compression = "snappy"
+
+# Local storage options
+[sinks.deltalake.storage_options]
+"file.enable_move" = "true"
+
+# Acknowledgments
+[sinks.deltalake.acknowledgements]
+enabled = false
+
+# Global configuration
+data_dir = "/tmp/vector"
+log_schema.source_type = "log"
+log_schema.timestamp = "timestamp"
+
