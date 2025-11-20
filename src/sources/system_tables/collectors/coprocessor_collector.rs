@@ -124,7 +124,12 @@ where
     <T::ResponseBody as tonic::codegen::Body>::Error: Into<tonic::codegen::StdError> + Send,
 {
     pub fn new(inner: T) -> Self {
-        let inner = tonic::client::Grpc::new(inner);
+        // Set max message size to 150MB to handle large coprocessor responses
+        // Default is 4MB which is too small for CLUSTER_STATEMENTS_SUMMARY with many rows
+        const MAX_MESSAGE_SIZE: usize = 150 * 1024 * 1024; //150MB
+        let inner = tonic::client::Grpc::new(inner)
+            .max_decoding_message_size(MAX_MESSAGE_SIZE)
+            .max_encoding_message_size(MAX_MESSAGE_SIZE);
         Self { inner }
     }
 
