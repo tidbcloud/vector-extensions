@@ -94,9 +94,7 @@ impl TopologyFetcher {
             // Note: For conprof, we need to determine how to get tidb_group
             // This might need to be passed in or configured differently
             // For now, using a placeholder approach
-            let tidb_group = std::env::var("TIDB_GROUP").map_err(|_| FetchError::ConfigurationError {
-                message: "TIDB_GROUP environment variable is required in nextgen mode".to_string(),
-            })?;
+            let tidb_group = std::env::var("TIDB_GROUP").unwrap_or_default();
             
             // Create temporary HashSet for common::topology::Component
             let mut temp_components = std::collections::HashSet::new();

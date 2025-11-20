@@ -36,10 +36,16 @@ impl TiDBNextGenTopologyFetcher {
             tokio::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
                 .await
                 .context(GetNamespaceSnafu)?;
-        let label_selector = format!(
-            "app.kubernetes.io/component=tidb,tags.tidbcloud.com/tidb-group={}",
-            self.tidb_group
-        );
+        
+        let label_selector = if self.tidb_group.is_empty() {
+            "app.kubernetes.io/component=tidb".to_string()
+        } else {
+            format!(
+                "app.kubernetes.io/component=tidb,tags.tidbcloud.com/tidb-group={}",
+                self.tidb_group
+            )
+        };
+        
         let pod_list = Api::<Pod>::namespaced(self.client.clone(), &namespace)
             .list(&ListParams::default().labels(&label_selector))
             .await
