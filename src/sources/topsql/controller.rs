@@ -224,27 +224,28 @@ impl Controller {
 
             if is_nextgen_mode() {
                 // Schema manager is not supported in nextgen mode
-                info!(message = "Schema manager is not supported in nextgen mode");
+                debug!(message = "Schema manager is not supported in nextgen mode");
+                return;
+            }
+
+            // Clone the etcd client for the schema manager
+            if let Some(etcd_client) = self.topo_fetcher.etcd_client() {
+                let etcd_client = etcd_client.clone();
+
+                // Spawn the schema manager task
+                let task_handle = tokio::spawn(
+                    schema_manager
+                        .run_update_loop_with_etcd(shutdown, etcd_client.clone())
+                        .instrument(tracing::info_span!("topsql_schema_manager")),
+                );
+
+                // Store the reference to the active schema manager
+                self.active_schema_manager = Some(ActiveSchemaManager {
+                    tidb: tidb.clone(),
+                    task_handle,
+                });
             } else {
-                // Clone the etcd client for the schema manager
-                if let Some(etcd_client) = self.topo_fetcher.etcd_client() {
-                    let etcd_client = etcd_client.clone();
-
-                    // Spawn the schema manager task
-                    let task_handle = tokio::spawn(
-                        schema_manager
-                            .run_update_loop_with_etcd(shutdown, etcd_client.clone())
-                            .instrument(tracing::info_span!("topsql_schema_manager")),
-                    );
-
-                    // Store the reference to the active schema manager
-                    self.active_schema_manager = Some(ActiveSchemaManager {
-                        tidb: tidb.clone(),
-                        task_handle,
-                    });
-                } else {
-                    error!(message = "Etcd client not available for schema manager");
-                }
+                error!(message = "Etcd client not available for schema manager");
             }
 
             info!(

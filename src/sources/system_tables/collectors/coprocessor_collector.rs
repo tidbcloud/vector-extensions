@@ -922,15 +922,15 @@ impl CoprocessorCollector {
             .map(|b| format!("{:02x}", b))
             .collect::<Vec<_>>()
             .join(" ");
-        info!(
-            "RUST: First {} bytes of raw data: {}",
+        debug!(
+            "DECODE:: First {} bytes of raw data: {}",
             preview_len, hex_preview
         );
 
         // Parse all available rows
         while offset < data.len() {
             debug!(
-                "RUST: Starting row {} at offset {} (remaining bytes: {})",
+                "DECODE:: Starting row {} at offset {} (remaining bytes: {})",
                 row_index,
                 offset,
                 data.len() - offset
@@ -961,7 +961,7 @@ impl CoprocessorCollector {
                     Ok((value, new_offset)) => {
                         // Only log first few columns and rows to avoid spam
                         if row_index < 3 && col_idx < 30 {
-                            info!(
+                            debug!(
                                 "Row {} Column {} ({}): value={:?}, offset {}->{}",
                                 row_index, col_idx, column_name, value, offset, new_offset
                             );
@@ -1028,8 +1028,8 @@ impl CoprocessorCollector {
             row_index += 1;
         }
 
-        info!(
-            "RUST: parse_row_format completed: decoded {} rows, final offset {}/{}",
+        debug!(
+            "DECODE:: parse_row_format completed: decoded {} rows, final offset {}/{}",
             rows.len(),
             offset,
             data.len()
@@ -1397,7 +1397,7 @@ impl CoprocessorCollector {
                     .map(|b| format!("{:02x}", b))
                     .collect::<Vec<_>>()
                     .join(" ");
-                info!("RUST decode_compact_bytes: offset={}, length={}, bytes_consumed={}, data_preview=[{}]", 
+                debug!("DECODE: decode_compact_bytes: offset={}, length={}, bytes_consumed={}, data_preview=[{}]", 
                        offset, length, bytes_consumed, data_preview);
             }
         }
