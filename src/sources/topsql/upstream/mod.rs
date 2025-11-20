@@ -54,7 +54,15 @@ pub trait Upstream: Send {
     ) -> Result<tonic::codec::Streaming<Self::UpstreamEvent>, tonic::Status>;
 }
 
-pub struct TopSQLSource {
+enum State {
+    RetryNow,
+    RetryDelay,
+}
+
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+
+// Base TopSQL source with common functionality
+struct BaseTopSQLSource {
     sharedpool_id: Option<String>,
     instance: String,
     instance_type: InstanceType,
@@ -72,15 +80,8 @@ pub struct TopSQLSource {
     keyspace_to_vmtenants: HashMap<String, (String, String)>,
 }
 
-enum State {
-    RetryNow,
-    RetryDelay,
-}
-
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
-
-impl TopSQLSource {
-    pub fn new(
+impl BaseTopSQLSource {
+    fn new(
         sharedpool_id: Option<String>,
         component: Component,
         tls: Option<TlsConfig>,
@@ -97,7 +98,7 @@ impl TopSQLSource {
             "https".into()
         };
         match component.topsql_address() {
-            Some(address) => Some(TopSQLSource {
+            Some(address) => Some(BaseTopSQLSource {
                 sharedpool_id,
                 instance: address.clone(),
                 instance_type: component.instance_type,
@@ -121,20 +122,16 @@ impl TopSQLSource {
         }
     }
 
-    pub async fn run(mut self, mut shutdown: ShutdownSubscriber) {
-        let shutdown_subscriber = shutdown.clone();
-        tokio::select! {
-            _ = self.run_loop(shutdown_subscriber) => {}
-            _ = shutdown.done() => {}
-        }
-    }
-
-    async fn run_loop(&mut self, shutdown_subscriber: ShutdownSubscriber) {
+    async fn run_loop<H: InstanceEventHandler>(
+        &mut self,
+        shutdown_subscriber: ShutdownSubscriber,
+        handler: &H,
+    ) {
         loop {
             let shutdown_subscriber = shutdown_subscriber.clone();
             let state = match self.instance_type {
-                InstanceType::TiDB => self.run_once::<TiDBUpstream>(shutdown_subscriber).await,
-                InstanceType::TiKV => self.run_once::<TiKVUpstream>(shutdown_subscriber).await,
+                InstanceType::TiDB => self.run_once::<TiDBUpstream, H>(shutdown_subscriber, handler).await,
+                InstanceType::TiKV => self.run_once::<TiKVUpstream, H>(shutdown_subscriber, handler).await,
                 _ => unreachable!(),
             };
 
@@ -155,7 +152,11 @@ impl TopSQLSource {
         }
     }
 
-    async fn run_once<U: Upstream>(&mut self, shutdown_subscriber: ShutdownSubscriber) -> State {
+    async fn run_once<U: Upstream, H: InstanceEventHandler>(
+        &mut self,
+        shutdown_subscriber: ShutdownSubscriber,
+        handler: &H,
+    ) -> State {
         let response_stream = self.build_stream::<U>(shutdown_subscriber).await;
         let mut response_stream = match response_stream {
             Ok(stream) => stream,
@@ -194,7 +195,7 @@ impl TopSQLSource {
                         }
                     }
                 }
-                _ = instance_stream.next() => self.handle_instance().await,
+                _ = instance_stream.next() => handler.handle_instance_event(self).await,
             }
         }
     }
@@ -265,33 +266,106 @@ impl TopSQLSource {
         }
     }
 
-    async fn handle_instance(&mut self) {
-        let mut batch = vec![];
-        let event = instance_event(
-            self.instance.clone(),
-            self.instance_type.to_string(),
-            self.sharedpool_id.clone(),
-        );
-        batch.push(event);
-        for (cluster_id, (vm_account_id, vm_project_id)) in &self.keyspace_to_vmtenants {
-            let event = instance_event_with_tags(
-                self.instance.clone(),
-                self.instance_type.to_string(),
-                self.sharedpool_id.clone(),
-                cluster_id.clone(),
-                vm_account_id.clone(),
-                vm_project_id.clone(),
-            );
-            batch.push(event);
-        }
-        let count = batch.len();
-        if self.out.send_batch(batch).await.is_err() {
-            StreamClosedError { count }.emit()
-        }
-    }
-
     fn on_connected(&mut self) {
         self.retry_delay = self.init_retry_delay;
         info!("Connected to the upstream.");
+    }
+}
+
+use crate::common::features::is_nextgen_mode;
+
+// Trait for handling instance events - different behavior for legacy vs nextgen
+#[async_trait::async_trait]
+trait InstanceEventHandler: Send + Sync {
+    async fn handle_instance_event(&self, base: &mut BaseTopSQLSource);
+}
+
+// Unified implementation - uses is_nextgen_mode() for compile-time branching
+struct UnifiedInstanceEventHandler;
+
+#[async_trait::async_trait]
+impl InstanceEventHandler for UnifiedInstanceEventHandler {
+    async fn handle_instance_event(&self, base: &mut BaseTopSQLSource) {
+        if is_nextgen_mode() {
+            // Nextgen: emit basic + tenant-specific events
+            let mut batch = vec![];
+            let event = instance_event(
+                base.instance.clone(),
+                base.instance_type.to_string(),
+                base.sharedpool_id.clone(),
+            );
+            batch.push(event);
+
+            for (cluster_id, (vm_account_id, vm_project_id)) in &base.keyspace_to_vmtenants {
+                let event = instance_event_with_tags(
+                    base.instance.clone(),
+                    base.instance_type.to_string(),
+                    base.sharedpool_id.clone(),
+                    cluster_id.clone(),
+                    vm_account_id.clone(),
+                    vm_project_id.clone(),
+                );
+                batch.push(event);
+            }
+
+            let count = batch.len();
+            if base.out.send_batch(batch).await.is_err() {
+                StreamClosedError { count }.emit()
+            }
+        } else {
+            // Legacy: only emit basic instance event
+            let event = instance_event(
+                base.instance.clone(),
+                base.instance_type.to_string(),
+                base.sharedpool_id.clone(),
+            );
+            if base.out.send_event(event).await.is_err() {
+                StreamClosedError { count: 1 }.emit();
+            }
+        }
+    }
+}
+
+// TopSQL source - uses unified handler with compile-time branching
+pub struct TopSQLSource {
+    base: BaseTopSQLSource,
+    handler: UnifiedInstanceEventHandler,
+}
+
+impl TopSQLSource {
+    pub fn new(
+        sharedpool_id: Option<String>,
+        component: Component,
+        tls: Option<TlsConfig>,
+        out: SourceSender,
+        init_retry_delay: Duration,
+        top_n: usize,
+        downsampling_interval: u32,
+        schema_cache: Arc<SchemaCache>,
+        keyspace_to_vmtenants: HashMap<String, (String, String)>,
+    ) -> Option<Self> {
+        let base = BaseTopSQLSource::new(
+            sharedpool_id,
+            component,
+            tls,
+            out,
+            init_retry_delay,
+            top_n,
+            downsampling_interval,
+            schema_cache,
+            keyspace_to_vmtenants,
+        )?;
+        Some(TopSQLSource {
+            base,
+            handler: UnifiedInstanceEventHandler,
+        })
+    }
+
+    pub async fn run(mut self, mut shutdown: ShutdownSubscriber) {
+        let shutdown_subscriber = shutdown.clone();
+        tokio::select! {
+            _ = self.base.run_loop(shutdown_subscriber, &self.handler) => {}
+            _ = shutdown.done() => {}
+        }
     }
 }

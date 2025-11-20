@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -8,9 +8,10 @@ use vector::event::{
 };
 
 use crate::sources::topsql::upstream::consts::{
-    LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, METRIC_NAME_INSTANCE,
+    LABEL_INSTANCE, LABEL_INSTANCE_TYPE, METRIC_NAME_INSTANCE,
 };
 
+#[allow(dead_code)]
 pub fn make_metric_like_log_event(
     labels: &[(&'static str, String)],
     timestamps: &[DateTime<Utc>],

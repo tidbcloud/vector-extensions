@@ -1,15 +1,12 @@
 use crate::sources::mocked_topsql::shutdown::{pair, ShutdownNotifier, ShutdownSubscriber};
 use futures::StreamExt;
-use ordered_float::NotNan;
-use rand::distr::{Alphanumeric, StandardUniform, Uniform};
+use rand::distr::Alphanumeric;
 use rand::Rng;
-use serde_json::Value;
 use std::time::Duration;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tracing::instrument::Instrument;
 use vector::shutdown::ShutdownSignal;
-use vector::{internal_events::StreamClosedError, SourceSender};
+use vector::SourceSender;
 use vector_lib::event::{Event, LogEvent, Value as LogValue};
 
 const SQL_CONSTANT: &str = "SELECT
@@ -107,7 +104,7 @@ fn generate_random_bigint() -> Vec<i64> {
 fn generate_random_string(num_strings: i32, string_length: usize) -> Vec<String> {
     let random_strings: Vec<String> = (0..num_strings)
         .map(|_| {
-            rand::thread_rng() // 获取线程局部的随机数生成器
+            rand::rng() // 获取线程局部的随机数生成器
                 .sample_iter(&Alphanumeric) // 从 Alphanumeric 分布中创建迭代器
                 .take(string_length) // 取指定长度的字符
                 .map(char::from) // 将 u8 转换为 char
@@ -120,7 +117,7 @@ fn generate_random_digest() -> Vec<String> {
     generate_random_string(100, 64)
 }
 /// Create a Vector event from table data
-fn create_event_for_tidb_sql(index: usize, timestamp: String) -> (Vec<Event>, Vec<Event>) {
+fn create_event_for_tidb_sql(_index: usize, timestamp: String) -> (Vec<Event>, Vec<Event>) {
     let mut events = vec![];
     let mut tikv_events = vec![];
     let mut schema_info = serde_json::Map::new();
@@ -219,7 +216,7 @@ fn create_event_for_tidb_sql(index: usize, timestamp: String) -> (Vec<Event>, Ve
     let sql_digest_vec = generate_random_digest();
     let plan_digest_vec = generate_random_digest();
     let sql_random_vec = generate_random_string(100, 10);
-    let plan_random_vec = generate_random_string(100, 10);
+    let _plan_random_vec = generate_random_string(100, 10);
     let cpu_time_vec = generate_random_int();
     let stmt_exec_count_vec = generate_random_bigint();
     let stmt_duration_sum_vec = generate_random_bigint();
@@ -316,7 +313,7 @@ fn create_event_for_tidb_sql(index: usize, timestamp: String) -> (Vec<Event>, Ve
 }
 
 /// Create a Vector event from table data
-fn create_event_for_tikv_sql(index: usize, timestamp: String) -> Vec<Event> {
+fn create_event_for_tikv_sql(_index: usize, timestamp: String) -> Vec<Event> {
     let mut events = vec![];
     let mut schema_info = serde_json::Map::new();
     schema_info.insert(
@@ -396,10 +393,10 @@ fn create_event_for_tikv_sql(index: usize, timestamp: String) -> Vec<Event> {
             "is_nullable": true
         }),
     );
-    let sql_digest_vec = generate_random_digest();
-    let plan_digest_vec = generate_random_digest();
+    let _sql_digest_vec = generate_random_digest();
+    let _plan_digest_vec = generate_random_digest();
     let sql_random_vec = generate_random_string(100, 10);
-    let plan_random_vec = generate_random_string(100, 10);
+    let _plan_random_vec = generate_random_string(100, 10);
     let cpu_time_vec = generate_random_int();
     let read_keys_vec = generate_random_int();
     let network_in_vec = generate_random_bigint();
@@ -457,7 +454,7 @@ fn create_event_for_tikv_sql(index: usize, timestamp: String) -> Vec<Event> {
 }
 
 /// Create a Vector event from table data
-fn create_event_for_tikv_region(index: usize, timestamp: String) -> Vec<Event> {
+fn create_event_for_tikv_region(_index: usize, timestamp: String) -> Vec<Event> {
     let mut events = vec![];
     let mut schema_info = serde_json::Map::new();
     schema_info.insert(
@@ -558,12 +555,12 @@ fn create_event_for_tikv_region(index: usize, timestamp: String) -> Vec<Event> {
 
 pub struct Controller {
     shutdown_notifier: ShutdownNotifier,
-    shutdown_subscriber: ShutdownSubscriber,
-    top_n: usize,
+    _shutdown_subscriber: ShutdownSubscriber,
+    _top_n: usize,
     downsampling_interval: u32,
     tidb_number: usize,
     tikv_number: usize,
-    extra_column_number: u32,
+    _extra_column_number: u32,
     out: SourceSender,
 }
 
@@ -579,12 +576,12 @@ impl Controller {
         let (shutdown_notifier, shutdown_subscriber) = pair();
         Ok(Self {
             shutdown_notifier,
-            shutdown_subscriber,
-            top_n,
+            _shutdown_subscriber: shutdown_subscriber,
+            _top_n: top_n,
             downsampling_interval,
             tidb_number,
             tikv_number,
-            extra_column_number,
+            _extra_column_number: extra_column_number,
             out,
         })
     }
@@ -612,7 +609,7 @@ impl Controller {
                     }
                     let mut current_time = chrono::Utc::now();
                     for _ in 0..loop_count {
-                        let mut current_time_str = current_time.to_rfc3339();
+                        let current_time_str = current_time.to_rfc3339();
                         for index in 0..self.tikv_number {
                             let mut batch = vec![];
                             batch.append(create_event_for_tikv_sql(index, current_time_str.clone()).as_mut());
@@ -637,7 +634,9 @@ impl Controller {
                                 break;
                             }
                         }
-                        current_time.checked_add_signed(chrono::Duration::seconds(self.downsampling_interval.into()));
+                        if let Some(new_time) = current_time.checked_add_signed(chrono::Duration::seconds(self.downsampling_interval.into())) {
+                            current_time = new_time;
+                        }
                     }
                     info!(message = "Mocked TopSQL source sent data.");
                 }
@@ -646,7 +645,7 @@ impl Controller {
         }
     }
 
-    async fn shutdown_all_components(mut self) {
+    async fn shutdown_all_components(self) {
         self.shutdown_notifier.shutdown();
         self.shutdown_notifier.wait_for_exit().await;
         info!(message = "All TopSQL sources have been shut down.");

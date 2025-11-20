@@ -5,13 +5,10 @@ use vector::event::{Event, Metric, MetricKind, MetricTags, MetricValue};
 
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{LABEL_VM_ACCOUNT_ID, LABEL_VM_PROJECT_ID};
-use crate::sources::topsql::upstream::{
-    consts::{
-        LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_KEYSPACE_NAME, LABEL_NAME,
-        LABEL_PLAN_DIGEST, LABEL_SHAREDPOOL_ID, LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME,
-        LABEL_TAG_LABEL,
-    },
-    utils::make_metric_like_log_event,
+use crate::sources::topsql::upstream::consts::{
+    LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_KEYSPACE_NAME, LABEL_NAME,
+    LABEL_PLAN_DIGEST, LABEL_SHAREDPOOL_ID, LABEL_SQL_DIGEST, LABEL_TABLE_ID, LABEL_TABLE_NAME,
+    LABEL_TAG_LABEL,
 };
 
 pub fn truncate_label_value(s: String) -> String {
