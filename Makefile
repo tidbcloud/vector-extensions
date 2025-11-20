@@ -86,7 +86,7 @@ target/%/vector: cargo-install-cross
 		$(if $(findstring release,$(PROFILE)),--release,) \
 		--target ${TRIPLE} \
 		--no-default-features \
-		--features default
+		--features default,nextgen
 
 .PHONY: cargo-install-%
 cargo-install-%: override TOOL = $(@:cargo-install-%=%)
