@@ -894,9 +894,20 @@ impl DeltaLakeWriter {
 
         // Use DeltaOps for improved S3 support, following the successful test pattern
         let table_ops = if let Some(storage_options) = &self.storage_options {
+            // Create redacted version for logging
+            let mut redacted_options = storage_options.clone();
+            if let Some(access_key) = redacted_options.get_mut("AWS_ACCESS_KEY_ID") {
+                    *access_key = "***".to_string();
+            }
+            if let Some(secret_key) = redacted_options.get_mut("AWS_SECRET_ACCESS_KEY") {
+                *secret_key = "***REDACTED***".to_string();
+            }
+            if let Some(session_token) = redacted_options.get_mut("AWS_SESSION_TOKEN") {
+                *session_token = "***REDACTED***".to_string();
+            }
             info!(
                 "Using storage options for S3 authentication: {:?}",
-                storage_options
+                redacted_options
             );
             DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
         } else {

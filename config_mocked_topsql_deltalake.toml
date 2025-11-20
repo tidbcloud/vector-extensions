@@ -45,3 +45,5 @@ data_dir = "/tmp/vector"
 log_schema.source_type = "log"
 log_schema.timestamp = "timestamp"
 
+
+
