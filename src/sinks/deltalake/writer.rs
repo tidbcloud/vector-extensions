@@ -897,7 +897,7 @@ impl DeltaLakeWriter {
             // Create redacted version for logging
             let mut redacted_options = storage_options.clone();
             if let Some(access_key) = redacted_options.get_mut("AWS_ACCESS_KEY_ID") {
-                    *access_key = "***".to_string();
+                *access_key = "***".to_string();
             }
             if let Some(secret_key) = redacted_options.get_mut("AWS_SECRET_ACCESS_KEY") {
                 *secret_key = "***REDACTED***".to_string();

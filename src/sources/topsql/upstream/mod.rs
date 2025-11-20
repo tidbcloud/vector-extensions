@@ -130,8 +130,14 @@ impl BaseTopSQLSource {
         loop {
             let shutdown_subscriber = shutdown_subscriber.clone();
             let state = match self.instance_type {
-                InstanceType::TiDB => self.run_once::<TiDBUpstream, H>(shutdown_subscriber, handler).await,
-                InstanceType::TiKV => self.run_once::<TiKVUpstream, H>(shutdown_subscriber, handler).await,
+                InstanceType::TiDB => {
+                    self.run_once::<TiDBUpstream, H>(shutdown_subscriber, handler)
+                        .await
+                }
+                InstanceType::TiKV => {
+                    self.run_once::<TiKVUpstream, H>(shutdown_subscriber, handler)
+                        .await
+                }
                 _ => unreachable!(),
             };
 

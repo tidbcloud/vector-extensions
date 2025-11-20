@@ -23,7 +23,7 @@ use crate::sinks::deltalake::processor::DeltaLakeSink;
 
 use reqwest::Client;
 use serde_json::Value;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 mod processor;
 mod writer;
@@ -145,30 +145,34 @@ async fn get_aliyun_sts_credentials(
     region: Option<String>,
 ) -> vector::Result<(String, String, String)> {
     use url::form_urlencoded;
-    
+
     // Read OIDC token from file
-    let oidc_token = tokio::fs::read_to_string(token_file).await
+    let oidc_token = tokio::fs::read_to_string(token_file)
+        .await
         .map_err(|e| vector::Error::from(format!("Failed to read OIDC token file: {}", e)))?;
     let oidc_token = oidc_token.trim();
-    
+
     // Extract account ID and role name from ARN: acs:ram::123456789012:role/role-name
     let parts: Vec<&str> = role_arn.split(':').collect();
     if parts.len() < 5 || !parts[0].eq("acs") || !parts[1].eq("ram") {
-        return Err(vector::Error::from(format!("Invalid Aliyun role ARN format: {}", role_arn)));
+        return Err(vector::Error::from(format!(
+            "Invalid Aliyun role ARN format: {}",
+            role_arn
+        )));
     }
-    
+
     // Get OIDC provider ARN from environment (usually set by RRSA)
     let oidc_provider_arn = std::env::var("ALIBABA_CLOUD_OIDC_PROVIDER_ARN")
         .map_err(|_| vector::Error::from("ALIBABA_CLOUD_OIDC_PROVIDER_ARN not set"))?;
-    
+
     // Determine STS endpoint region
     let sts_region = region.as_deref().unwrap_or("cn-hangzhou");
     let sts_endpoint = format!("https://sts.{}.aliyuncs.com", sts_region);
-    
+
     // Build request parameters for Aliyun STS AssumeRoleWithOIDC
     // Aliyun STS requires ISO 8601 format timestamp (e.g., 2023-11-18T23:15:01Z)
     let timestamp_utc = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    
+
     let mut params = HashMap::new();
     params.insert("Action", "AssumeRoleWithOIDC");
     params.insert("RoleArn", role_arn);
@@ -178,33 +182,33 @@ async fn get_aliyun_sts_credentials(
     params.insert("Format", "JSON");
     params.insert("Version", "2015-04-01");
     params.insert("Timestamp", &timestamp_utc);
-    
+
     // Note: In production, you should sign the request properly using Aliyun signature algorithm
     // For now, we'll use a simplified approach - you may need to implement proper signing
     // or use an Aliyun SDK
-    
+
     // Create HTTP client
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| vector::Error::from(format!("Failed to create HTTP client: {}", e)))?;
-    
+
     // Build query string
     let query: String = form_urlencoded::Serializer::new(String::new())
         .extend_pairs(params.iter())
         .finish();
-    
+
     let url = format!("{}?{}", sts_endpoint, query);
-    
+
     info!("Calling Aliyun STS AssumeRoleWithOIDC: {}", sts_endpoint);
-    
+
     // Make request
     let response = client
         .get(&url)
         .send()
         .await
         .map_err(|e| vector::Error::from(format!("Failed to call Aliyun STS: {}", e)))?;
-    
+
     if !response.status().is_success() {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
@@ -213,35 +217,37 @@ async fn get_aliyun_sts_credentials(
             status, text
         )));
     }
-    
-    let json: Value = response.json().await
+
+    let json: Value = response
+        .json()
+        .await
         .map_err(|e| vector::Error::from(format!("Failed to parse STS response: {}", e)))?;
-    
+
     // Extract credentials from response
     let credentials = json
         .get("Credentials")
         .ok_or_else(|| vector::Error::from("No Credentials in STS response"))?;
-    
+
     let access_key_id = credentials
         .get("AccessKeyId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| vector::Error::from("No AccessKeyId in response"))?
         .to_string();
-    
+
     let access_key_secret = credentials
         .get("AccessKeySecret")
         .and_then(|v| v.as_str())
         .ok_or_else(|| vector::Error::from("No AccessKeySecret in response"))?
         .to_string();
-    
+
     let security_token = credentials
         .get("SecurityToken")
         .and_then(|v| v.as_str())
         .ok_or_else(|| vector::Error::from("No SecurityToken in response"))?
         .to_string();
-    
+
     info!("Successfully obtained temporary credentials from Aliyun STS");
-    
+
     Ok((access_key_id, access_key_secret, security_token))
 }
 
@@ -331,7 +337,10 @@ impl DeltaLakeConfig {
             if self.base_path.starts_with("s3://") {
                 // Extract bucket from base_path if it's in the correct format
                 // Format: s3://bucket-name/path
-                let path_without_s3 = self.base_path.strip_prefix("s3://").unwrap_or(&self.base_path);
+                let path_without_s3 = self
+                    .base_path
+                    .strip_prefix("s3://")
+                    .unwrap_or(&self.base_path);
                 if let Some((bucket, path)) = path_without_s3.split_once('/') {
                     // Verify bucket matches configured bucket
                     if let Some(configured_bucket) = &self.bucket {
@@ -453,16 +462,17 @@ impl DeltaLakeConfig {
             // Set endpoint if using custom endpoint
             if let Some(endpoint) = region.endpoint() {
                 // Ensure endpoint URL has a protocol scheme
-                let endpoint_url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-                    endpoint.clone()
-                } else {
-                    // For OSS internal endpoints, use http://; for others, use https://
-                    if endpoint.contains("-internal") {
-                        format!("http://{}", endpoint)
+                let endpoint_url =
+                    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+                        endpoint.clone()
                     } else {
-                        format!("https://{}", endpoint)
-                    }
-                };
+                        // For OSS internal endpoints, use http://; for others, use https://
+                        if endpoint.contains("-internal") {
+                            format!("http://{}", endpoint)
+                        } else {
+                            format!("https://{}", endpoint)
+                        }
+                    };
                 info!("Setting OSS endpoint URL: {}", endpoint_url);
                 storage_options.insert("AWS_ENDPOINT_URL".to_string(), endpoint_url);
             }
@@ -473,15 +483,22 @@ impl DeltaLakeConfig {
             if force_path_style {
                 storage_options.insert("AWS_S3_ADDRESSING_STYLE".to_string(), "path".to_string());
             } else {
-                storage_options.insert("AWS_S3_ADDRESSING_STYLE".to_string(), "virtual".to_string());
-                storage_options.insert("AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(), "true".to_string());
+                storage_options
+                    .insert("AWS_S3_ADDRESSING_STYLE".to_string(), "virtual".to_string());
+                storage_options.insert(
+                    "AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(),
+                    "true".to_string(),
+                );
             }
         } else {
             // Default to virtual hosted style (required for OSS)
             storage_options.insert("AWS_S3_ADDRESSING_STYLE".to_string(), "virtual".to_string());
-            storage_options.insert("AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(), "true".to_string());
+            storage_options.insert(
+                "AWS_VIRTUAL_HOSTED_STYLE_REQUEST".to_string(),
+                "true".to_string(),
+            );
         }
-        
+
         // Add OSS-specific options when using virtual hosted style
         if storage_options.get("AWS_S3_ADDRESSING_STYLE") == Some(&"virtual".to_string()) {
             storage_options.insert(
@@ -513,10 +530,10 @@ impl DeltaLakeConfig {
                     info!("Using Web Identity Token authentication (RRSA)");
                     info!("Token file: {}", token_file);
                     info!("Role ARN: {}", assume_role);
-                    
+
                     storage_options.insert("AWS_WEB_IDENTITY_TOKEN_FILE".to_string(), token_file);
                     storage_options.insert("AWS_ROLE_ARN".to_string(), assume_role.clone());
-                    
+
                     if let Ok(session_name) = std::env::var("AWS_ROLE_SESSION_NAME") {
                         storage_options.insert("AWS_ROLE_SESSION_NAME".to_string(), session_name);
                     } else {
@@ -525,7 +542,7 @@ impl DeltaLakeConfig {
                             "vector-deltalake".to_string(),
                         );
                     }
-                    
+
                     info!("✓ Delta Lake will use Web Identity Token (RRSA) authentication");
                 } else {
                     // Use traditional AssumeRole (requires base credentials)
@@ -537,7 +554,8 @@ impl DeltaLakeConfig {
                     );
 
                     if let Some(ext_id) = external_id {
-                        storage_options.insert("AWS_IAM_ROLE_EXTERNAL_ID".to_string(), ext_id.clone());
+                        storage_options
+                            .insert("AWS_IAM_ROLE_EXTERNAL_ID".to_string(), ext_id.clone());
                         info!("✓ Using external ID for role assumption");
                     }
 
@@ -556,7 +574,7 @@ impl DeltaLakeConfig {
                 // Display trait returns "**REDACTED**", so we must use inner() instead of to_string()
                 let access_key_id_str = access_key_id.inner();
                 let secret_access_key_str = secret_access_key.inner();
-                
+
                 // Log access key ID (first few chars only for security)
                 let access_key_preview = if access_key_id_str.len() > 8 {
                     format!("{}...", &access_key_id_str[..8])
@@ -564,15 +582,19 @@ impl DeltaLakeConfig {
                     "***".to_string()
                 };
                 info!("Using AccessKey ID: {}", access_key_preview);
-                
-                storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id_str.to_string());
+
+                storage_options.insert(
+                    "AWS_ACCESS_KEY_ID".to_string(),
+                    access_key_id_str.to_string(),
+                );
                 storage_options.insert(
                     "AWS_SECRET_ACCESS_KEY".to_string(),
                     secret_access_key_str.to_string(),
                 );
 
                 if let Some(token) = session_token {
-                    storage_options.insert("AWS_SESSION_TOKEN".to_string(), token.inner().to_string());
+                    storage_options
+                        .insert("AWS_SESSION_TOKEN".to_string(), token.inner().to_string());
                 }
 
                 if let Some(role_arn) = assume_role {
@@ -617,33 +639,46 @@ impl DeltaLakeConfig {
                         // For Aliyun RRSA, call Aliyun STS to get temporary credentials
                         warn!("Detected Aliyun RRSA (acs:ram:: ARN format)");
                         info!("Attempting to get temporary credentials from Aliyun STS...");
-                        
+
                         // Get region from endpoint or use default
-                        let region = self.region.as_ref()
+                        let region = self
+                            .region
+                            .as_ref()
                             .and_then(|r| r.region())
                             .map(|s| s.to_string());
-                        
+
                         match get_aliyun_sts_credentials(&token_file, &role_arn, region).await {
                             Ok((access_key_id, access_key_secret, security_token)) => {
-                                info!("✓ Successfully obtained temporary credentials from Aliyun STS");
-                                storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id);
-                                storage_options.insert("AWS_SECRET_ACCESS_KEY".to_string(), access_key_secret);
-                                storage_options.insert("AWS_SESSION_TOKEN".to_string(), security_token);
+                                info!(
+                                    "✓ Successfully obtained temporary credentials from Aliyun STS"
+                                );
+                                storage_options
+                                    .insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id);
+                                storage_options
+                                    .insert("AWS_SECRET_ACCESS_KEY".to_string(), access_key_secret);
+                                storage_options
+                                    .insert("AWS_SESSION_TOKEN".to_string(), security_token);
                                 info!("✓ Using temporary credentials for OSS authentication");
                             }
                             Err(e) => {
-                                error!("Failed to get temporary credentials from Aliyun STS: {}", e);
+                                error!(
+                                    "Failed to get temporary credentials from Aliyun STS: {}",
+                                    e
+                                );
                                 warn!("Falling back to environment variable credentials");
-                                
+
                                 // Fall back to environment variables
                                 if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
-                                    storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
+                                    storage_options
+                                        .insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
                                 }
                                 if let Ok(secret_key) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-                                    storage_options.insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key);
+                                    storage_options
+                                        .insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key);
                                 }
                                 if let Ok(session_token) = std::env::var("AWS_SESSION_TOKEN") {
-                                    storage_options.insert("AWS_SESSION_TOKEN".to_string(), session_token);
+                                    storage_options
+                                        .insert("AWS_SESSION_TOKEN".to_string(), session_token);
                                 }
                             }
                         }
@@ -652,21 +687,23 @@ impl DeltaLakeConfig {
                         info!("Using Web Identity Token authentication (AWS RRSA)");
                         info!("Token file: {}", token_file);
                         info!("Role ARN: {}", role_arn);
-                        
-                        storage_options.insert("AWS_WEB_IDENTITY_TOKEN_FILE".to_string(), token_file);
+
+                        storage_options
+                            .insert("AWS_WEB_IDENTITY_TOKEN_FILE".to_string(), token_file);
                         storage_options.insert("AWS_ROLE_ARN".to_string(), role_arn);
-                        
+
                         if let Ok(session_name) = std::env::var("AWS_ROLE_SESSION_NAME")
                             .or_else(|_| std::env::var("ALIBABA_CLOUD_ROLE_SESSION_NAME"))
                         {
-                            storage_options.insert("AWS_ROLE_SESSION_NAME".to_string(), session_name);
+                            storage_options
+                                .insert("AWS_ROLE_SESSION_NAME".to_string(), session_name);
                         } else {
                             storage_options.insert(
                                 "AWS_ROLE_SESSION_NAME".to_string(),
                                 "vector-deltalake".to_string(),
                             );
                         }
-                        
+
                         info!("✓ Delta Lake will use Web Identity Token (RRSA) authentication");
                     }
                 } else {
@@ -705,7 +742,7 @@ impl DeltaLakeConfig {
         debug!("=== Completed apply_s3_storage_options ===");
         debug!("Final storage_options: {:?}", storage_options);
         info!("✓ S3 storage options applied successfully");
-        
+
         // Log final storage options for debugging (redact sensitive values)
         let mut debug_options = storage_options.clone();
         if let Some(access_key) = debug_options.get_mut("AWS_ACCESS_KEY_ID") {

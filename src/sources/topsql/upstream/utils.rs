@@ -38,7 +38,11 @@ pub fn make_metric_like_log_event(
     log.into()
 }
 
-pub fn instance_event(instance: String, instance_type: String, sharedpool_id: Option<String>) -> Event {
+pub fn instance_event(
+    instance: String,
+    instance_type: String,
+    sharedpool_id: Option<String>,
+) -> Event {
     let mut tags = BTreeMap::new();
     tags.insert(LABEL_INSTANCE.to_owned(), instance);
     tags.insert(LABEL_INSTANCE_TYPE.to_owned(), instance_type);
