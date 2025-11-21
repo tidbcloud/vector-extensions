@@ -4,7 +4,7 @@ mod store;
 mod tidb;
 mod utils;
 
-mod tidb_nextgen;
+pub mod tidb_nextgen;
 mod tikv_nextgen;
 
 #[cfg(test)]
