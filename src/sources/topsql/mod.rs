@@ -16,7 +16,6 @@ pub use upstream::parser;
 mod controller;
 mod schema_cache;
 pub mod shutdown;
-pub mod topology;
 pub mod upstream;
 
 /// PLACEHOLDER
