@@ -1165,18 +1165,9 @@ mod tests {
         assert_eq!(writer.mysql_type_to_arrow_type("text"), DataType::Utf8);
         assert_eq!(writer.mysql_type_to_arrow_type("int"), DataType::Int32);
         assert_eq!(writer.mysql_type_to_arrow_type("bigint"), DataType::Int64);
-        assert_eq!(
-            writer.mysql_type_to_arrow_type("tinyint"),
-            DataType::Int8
-        );
-        assert_eq!(
-            writer.mysql_type_to_arrow_type("smallint"),
-            DataType::Int16
-        );
-        assert_eq!(
-            writer.mysql_type_to_arrow_type("double"),
-            DataType::Float64
-        );
+        assert_eq!(writer.mysql_type_to_arrow_type("tinyint"), DataType::Int8);
+        assert_eq!(writer.mysql_type_to_arrow_type("smallint"), DataType::Int16);
+        assert_eq!(writer.mysql_type_to_arrow_type("double"), DataType::Float64);
         assert_eq!(
             writer.mysql_type_to_arrow_type("decimal(10,2)"),
             DataType::Float64

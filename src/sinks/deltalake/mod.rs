@@ -888,7 +888,6 @@ mod tests {
         assert_eq!(cloned.compression, "snappy");
     }
 
-
     #[test]
     fn test_base_path_validation() {
         // Test local path
