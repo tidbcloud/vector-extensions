@@ -17,7 +17,9 @@ use tonic::transport::{Channel, Endpoint};
 use vector::{internal_events::StreamClosedError, SourceSender};
 use vector_lib::{
     byte_size_of::ByteSizeOf,
-    internal_event::{ByteSize, BytesReceived, CountByteSize, EventsReceived, InternalEvent, InternalEventHandle},
+    internal_event::{
+        ByteSize, BytesReceived, CountByteSize, EventsReceived, InternalEvent, InternalEventHandle,
+    },
     register,
     tls::TlsConfig,
 };
@@ -56,7 +58,12 @@ pub trait Upstream: Send {
 // Common trait for TopSQL source behavior
 #[async_trait::async_trait]
 trait TopSQLSourceBehavior {
-    async fn handle_instance_event(&self, instance: &str, instance_type: &str, out: &mut SourceSender);
+    async fn handle_instance_event(
+        &self,
+        instance: &str,
+        instance_type: &str,
+        out: &mut SourceSender,
+    );
 }
 
 // Base TopSQL source with common functionality
@@ -119,12 +126,22 @@ impl BaseTopSQLSource {
         }
     }
 
-    async fn run_loop<B: TopSQLSourceBehavior>(&mut self, shutdown_subscriber: ShutdownSubscriber, behavior: &B) {
+    async fn run_loop<B: TopSQLSourceBehavior>(
+        &mut self,
+        shutdown_subscriber: ShutdownSubscriber,
+        behavior: &B,
+    ) {
         loop {
             let shutdown_subscriber = shutdown_subscriber.clone();
             let state = match self.instance_type {
-                InstanceType::TiDB => self.run_once::<TiDBUpstream, B>(shutdown_subscriber, behavior).await,
-                InstanceType::TiKV => self.run_once::<TiKVUpstream, B>(shutdown_subscriber, behavior).await,
+                InstanceType::TiDB => {
+                    self.run_once::<TiDBUpstream, B>(shutdown_subscriber, behavior)
+                        .await
+                }
+                InstanceType::TiKV => {
+                    self.run_once::<TiKVUpstream, B>(shutdown_subscriber, behavior)
+                        .await
+                }
                 _ => unreachable!(),
             };
 
@@ -145,7 +162,11 @@ impl BaseTopSQLSource {
         }
     }
 
-    async fn run_once<U: Upstream, B: TopSQLSourceBehavior>(&mut self, shutdown_subscriber: ShutdownSubscriber, behavior: &B) -> State {
+    async fn run_once<U: Upstream, B: TopSQLSourceBehavior>(
+        &mut self,
+        shutdown_subscriber: ShutdownSubscriber,
+        behavior: &B,
+    ) -> State {
         let response_stream = self.build_stream::<U>(shutdown_subscriber).await;
         let mut response_stream = match response_stream {
             Ok(stream) => stream,
@@ -254,7 +275,13 @@ impl BaseTopSQLSource {
     }
 
     async fn handle_instance<B: TopSQLSourceBehavior>(&mut self, behavior: &B) {
-        behavior.handle_instance_event(&self.instance, &self.instance_type.to_string(), &mut self.out).await;
+        behavior
+            .handle_instance_event(
+                &self.instance,
+                &self.instance_type.to_string(),
+                &mut self.out,
+            )
+            .await;
     }
 
     fn on_connected(&mut self) {
@@ -268,7 +295,12 @@ struct LegacyTopSQLBehavior;
 
 #[async_trait::async_trait]
 impl TopSQLSourceBehavior for LegacyTopSQLBehavior {
-    async fn handle_instance_event(&self, instance: &str, instance_type: &str, out: &mut SourceSender) {
+    async fn handle_instance_event(
+        &self,
+        instance: &str,
+        instance_type: &str,
+        out: &mut SourceSender,
+    ) {
         let event = instance_event(instance.to_string(), instance_type.to_string());
         if out.send_event(event).await.is_err() {
             StreamClosedError { count: 1 }.emit();
@@ -316,7 +348,12 @@ struct NextgenTopSQLBehavior {
 
 #[async_trait::async_trait]
 impl TopSQLSourceBehavior for NextgenTopSQLBehavior {
-    async fn handle_instance_event(&self, instance: &str, instance_type: &str, out: &mut SourceSender) {
+    async fn handle_instance_event(
+        &self,
+        instance: &str,
+        instance_type: &str,
+        out: &mut SourceSender,
+    ) {
         let mut batch = vec![];
         let event = instance_event_metric(instance.to_string(), instance_type.to_string());
         batch.push(event);
@@ -363,7 +400,9 @@ impl NextgenTopSQLSource {
             downsampling_interval,
             schema_cache,
         )?;
-        let behavior = NextgenTopSQLBehavior { keyspace_to_vmtenants };
+        let behavior = NextgenTopSQLBehavior {
+            keyspace_to_vmtenants,
+        };
         Some(NextgenTopSQLSource { base, behavior })
     }
 
