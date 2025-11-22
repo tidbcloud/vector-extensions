@@ -97,21 +97,41 @@ impl VMImportSinkEventEncoder {
 
 #[cfg(test)]
 mod tests {
-    use crate::sources::topsql::parser::Buf;
+    use bytes::Bytes;
+    use chrono::DateTime;
+    use std::collections::BTreeMap;
+    use vector::event::{KeyString, LogEvent, Value as EventValue};
+    use ordered_float::NotNan;
 
     use super::*;
 
     #[test]
     fn topsql_event() {
-        let event = Buf::default()
-            .label_name("topsql_cpu_time_ms")
-            .instance("db:10080")
-            .instance_type("tidb")
-            .sql_digest("DEAD")
-            .plan_digest("BEEF")
-            .points([(1661396787, 80.0), (1661396788, 443.0)].into_iter())
-            .build_event()
-            .unwrap();
+        // Manually create a LogEvent with labels, timestamps, and values
+        let mut labels_map = BTreeMap::<KeyString, EventValue>::new();
+        labels_map.insert("__name__".into(), EventValue::Bytes(Bytes::from("topsql_cpu_time_ms")));
+        labels_map.insert("instance".into(), EventValue::Bytes(Bytes::from("db:10080")));
+        labels_map.insert("instance_type".into(), EventValue::Bytes(Bytes::from("tidb")));
+        labels_map.insert("sql_digest".into(), EventValue::Bytes(Bytes::from("DEAD")));
+        labels_map.insert("plan_digest".into(), EventValue::Bytes(Bytes::from("BEEF")));
+        labels_map.insert("tag_label".into(), EventValue::Bytes(Bytes::from("")));
+
+        let timestamps = vec![
+            EventValue::Timestamp(DateTime::from_timestamp(1661396787, 0).unwrap()),
+            EventValue::Timestamp(DateTime::from_timestamp(1661396788, 0).unwrap()),
+        ];
+        let values = vec![
+            EventValue::Float(NotNan::new(80.0).unwrap()),
+            EventValue::Float(NotNan::new(443.0).unwrap()),
+        ];
+
+        let mut log = BTreeMap::<KeyString, EventValue>::new();
+        log.insert("labels".into(), EventValue::Object(labels_map));
+        log.insert("timestamps".into(), EventValue::Array(timestamps));
+        log.insert("values".into(), EventValue::Array(values));
+        
+        let log_event: LogEvent = log.into();
+        let event = Event::Log(log_event);
 
         let value = VMImportSinkEventEncoder::encode_log(event.into()).unwrap();
 
@@ -132,24 +152,36 @@ mod tests {
 
     #[test]
     fn partition_by_cluster_id() {
-        use bytes::Bytes;
-        use vector::event::Value;
-
         let routine = |tmp_str: &str| {
             let tmp = tmp_str.try_into().unwrap();
             let mut encoder = VMImportSinkEventEncoder::new(tmp);
 
-            let mut event = Buf::default()
-                .label_name("topsql_cpu_time_ms")
-                .instance("db:10080")
-                .instance_type("tidb")
-                .sql_digest("DEAD")
-                .plan_digest("BEEF")
-                .points([(1661396787, 80.0), (1661396788, 443.0)].into_iter())
-                .build_event()
-                .unwrap();
-            let labels = event.get_mut("labels").unwrap();
-            labels.insert("cluster_id", Value::Bytes(Bytes::from("10086")));
+            // Manually create a LogEvent with labels, timestamps, and values
+            let mut labels_map = BTreeMap::<KeyString, EventValue>::new();
+            labels_map.insert("__name__".into(), EventValue::Bytes(Bytes::from("topsql_cpu_time_ms")));
+            labels_map.insert("instance".into(), EventValue::Bytes(Bytes::from("db:10080")));
+            labels_map.insert("instance_type".into(), EventValue::Bytes(Bytes::from("tidb")));
+            labels_map.insert("sql_digest".into(), EventValue::Bytes(Bytes::from("DEAD")));
+            labels_map.insert("plan_digest".into(), EventValue::Bytes(Bytes::from("BEEF")));
+            labels_map.insert("tag_label".into(), EventValue::Bytes(Bytes::from("")));
+            labels_map.insert("cluster_id".into(), EventValue::Bytes(Bytes::from("10086")));
+
+            let timestamps = vec![
+                EventValue::Timestamp(DateTime::from_timestamp(1661396787, 0).unwrap()),
+                EventValue::Timestamp(DateTime::from_timestamp(1661396788, 0).unwrap()),
+            ];
+            let values = vec![
+                EventValue::Float(NotNan::new(80.0).unwrap()),
+                EventValue::Float(NotNan::new(443.0).unwrap()),
+            ];
+
+            let mut log = BTreeMap::<KeyString, EventValue>::new();
+            log.insert("labels".into(), EventValue::Object(labels_map));
+            log.insert("timestamps".into(), EventValue::Array(timestamps));
+            log.insert("values".into(), EventValue::Array(values));
+            
+            let log_event: LogEvent = log.into();
+            let event = Event::Log(log_event);
 
             let value = encoder.encode_event(event.into()).unwrap();
             let (json, key) = value.into_parts();
