@@ -52,4 +52,34 @@ mod tests {
         let err = parse_host_port("!@#").unwrap_err();
         assert!(matches!(err, ParseError::ParseAddress { .. }));
     }
+
+    #[test]
+    fn parse_address_with_ip() {
+        let (addr, port) = parse_host_port("127.0.0.1:4000").unwrap();
+        assert_eq!(addr, "127.0.0.1");
+        assert_eq!(port, 4000);
+
+        let (addr, port) = parse_host_port("192.168.1.1:8080").unwrap();
+        assert_eq!(addr, "192.168.1.1");
+        assert_eq!(port, 8080);
+    }
+
+    #[test]
+    fn parse_address_with_domain() {
+        let (addr, port) = parse_host_port("example.com:443").unwrap();
+        assert_eq!(addr, "example.com");
+        assert_eq!(port, 443);
+    }
+
+    #[test]
+    fn parse_address_empty_host() {
+        let err = parse_host_port("http://:8080").unwrap_err();
+        assert!(matches!(err, ParseError::MissingHost { .. }));
+    }
+
+    #[test]
+    fn parse_address_invalid_uri() {
+        let err = parse_host_port("").unwrap_err();
+        assert!(matches!(err, ParseError::ParseAddress { .. }));
+    }
 }

@@ -90,11 +90,138 @@ impl<'a> StoreTopologyFetcher<'a> {
         if store
             .labels
             .iter()
-            .any(|models::LabelItem { key, value }| key == "engine" && value == "tiflash")
+            .any(|models::LabelItem { key, value }| key == "engine" && value.to_lowercase().contains("tiflash"))
         {
             InstanceType::TiFlash
         } else {
             InstanceType::TiKV
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_up() {
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "Up".to_string(),
+            labels: vec![],
+        };
+        assert!(StoreTopologyFetcher::is_up(&store));
+
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "up".to_string(),
+            labels: vec![],
+        };
+        assert!(StoreTopologyFetcher::is_up(&store));
+
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "DOWN".to_string(),
+            labels: vec![],
+        };
+        assert!(!StoreTopologyFetcher::is_up(&store));
+
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "Offline".to_string(),
+            labels: vec![],
+        };
+        assert!(!StoreTopologyFetcher::is_up(&store));
+    }
+
+    #[test]
+    fn test_parse_instance_type_tikv() {
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "Up".to_string(),
+            labels: vec![],
+        };
+        assert_eq!(
+            StoreTopologyFetcher::parse_instance_type(&store),
+            InstanceType::TiKV
+        );
+
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "Up".to_string(),
+            labels: vec![models::LabelItem {
+                key: "engine".to_string(),
+                value: "tikv".to_string(),
+            }],
+        };
+        assert_eq!(
+            StoreTopologyFetcher::parse_instance_type(&store),
+            InstanceType::TiKV
+        );
+    }
+
+    #[test]
+    fn test_parse_instance_type_tiflash() {
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "Up".to_string(),
+            labels: vec![models::LabelItem {
+                key: "engine".to_string(),
+                value: "tiflash".to_string(),
+            }],
+        };
+        assert_eq!(
+            StoreTopologyFetcher::parse_instance_type(&store),
+            InstanceType::TiFlash
+        );
+
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "Up".to_string(),
+            labels: vec![models::LabelItem {
+                key: "engine".to_string(),
+                value: "TiFlash".to_string(),
+            }],
+        };
+        assert_eq!(
+            StoreTopologyFetcher::parse_instance_type(&store),
+            InstanceType::TiFlash
+        );
+
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "Up".to_string(),
+            labels: vec![models::LabelItem {
+                key: "engine".to_string(),
+                value: "TIFLASH".to_string(),
+            }],
+        };
+        assert_eq!(
+            StoreTopologyFetcher::parse_instance_type(&store),
+            InstanceType::TiFlash
+        );
+
+        let store = models::StoreInfo {
+            address: "127.0.0.1:20160".to_string(),
+            status_address: "127.0.0.1:20180".to_string(),
+            state_name: "Up".to_string(),
+            labels: vec![models::LabelItem {
+                key: "engine".to_string(),
+                value: "tiflash-cluster".to_string(),
+            }],
+        };
+        assert_eq!(
+            StoreTopologyFetcher::parse_instance_type(&store),
+            InstanceType::TiFlash
+        );
     }
 }
