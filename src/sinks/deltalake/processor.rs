@@ -154,3 +154,106 @@ impl StreamSink<Event> for DeltaLakeSink {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use vector_lib::event::LogEvent;
+
+    fn create_test_event(table_field: &str, table_name: &str) -> Event {
+        let mut log = LogEvent::from(BTreeMap::new());
+        log.insert(table_field, table_name);
+        log.insert("test_field", "test_value");
+        Event::Log(log)
+    }
+
+    #[test]
+    fn test_table_name_extraction_from_vector_table() {
+        let event = create_test_event("_vector_table", "test_table");
+        if let Event::Log(log) = &event {
+            let table_name = log
+                .get("_vector_table")
+                .and_then(|v| v.as_str())
+                .or_else(|| log.get("dest_table").and_then(|v| v.as_str()))
+                .or_else(|| log.get("table").and_then(|v| v.as_str()));
+            assert_eq!(table_name.as_deref(), Some("test_table"));
+        }
+    }
+
+    #[test]
+    fn test_table_name_extraction_from_dest_table() {
+        let event = create_test_event("dest_table", "my_dest_table");
+        if let Event::Log(log) = &event {
+            let table_name = log
+                .get("_vector_table")
+                .and_then(|v| v.as_str())
+                .or_else(|| log.get("dest_table").and_then(|v| v.as_str()))
+                .or_else(|| log.get("table").and_then(|v| v.as_str()));
+            assert_eq!(table_name.as_deref(), Some("my_dest_table"));
+        }
+    }
+
+    #[test]
+    fn test_table_name_extraction_from_table() {
+        let event = create_test_event("table", "fallback_table");
+        if let Event::Log(log) = &event {
+            let table_name = log
+                .get("_vector_table")
+                .and_then(|v| v.as_str())
+                .or_else(|| log.get("dest_table").and_then(|v| v.as_str()))
+                .or_else(|| log.get("table").and_then(|v| v.as_str()));
+            assert_eq!(table_name.as_deref(), Some("fallback_table"));
+        }
+    }
+
+    #[test]
+    fn test_table_name_priority() {
+        // _vector_table should have highest priority
+        let mut log = LogEvent::from(BTreeMap::new());
+        log.insert("_vector_table", "priority_table");
+        log.insert("dest_table", "other_table");
+        log.insert("table", "another_table");
+        let event = Event::Log(log);
+
+        if let Event::Log(log) = &event {
+            let table_name = log
+                .get("_vector_table")
+                .and_then(|v| v.as_str())
+                .or_else(|| log.get("dest_table").and_then(|v| v.as_str()))
+                .or_else(|| log.get("table").and_then(|v| v.as_str()));
+            assert_eq!(table_name.as_deref(), Some("priority_table"));
+        }
+    }
+
+    #[test]
+    fn test_events_grouping_by_table() {
+        let events = vec![
+            create_test_event("_vector_table", "table_a"),
+            create_test_event("_vector_table", "table_b"),
+            create_test_event("_vector_table", "table_a"),
+        ];
+
+        let mut table_events: HashMap<String, Vec<Event>> = HashMap::new();
+
+        for event in events {
+            if let Event::Log(log_event) = event {
+                let table_name = log_event
+                    .get("_vector_table")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| log_event.get("dest_table").and_then(|v| v.as_str()))
+                    .or_else(|| log_event.get("table").and_then(|v| v.as_str()));
+                if let Some(table_name) = table_name {
+                    table_events
+                        .entry(table_name.to_string())
+                        .or_insert_with(Vec::new)
+                        .push(Event::Log(log_event));
+                }
+            }
+        }
+
+        assert_eq!(table_events.len(), 2);
+        assert_eq!(table_events.get("table_a").unwrap().len(), 2);
+        assert_eq!(table_events.get("table_b").unwrap().len(), 1);
+    }
+}

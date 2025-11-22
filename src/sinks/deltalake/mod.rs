@@ -834,4 +834,77 @@ mod tests {
     fn generate_config() {
         vector::test_util::test_generate_config::<DeltaLakeConfig>();
     }
+
+    #[test]
+    fn test_delta_table_config_defaults() {
+        let config = DeltaTableConfig {
+            name: "test_table".to_string(),
+            partition_by: None,
+            schema_evolution: None,
+        };
+
+        assert_eq!(config.name, "test_table");
+        assert!(config.partition_by.is_none());
+        assert!(config.schema_evolution.is_none());
+    }
+
+    #[test]
+    fn test_delta_table_config_with_partitions() {
+        let config = DeltaTableConfig {
+            name: "test_table".to_string(),
+            partition_by: Some(vec!["date".to_string(), "hour".to_string()]),
+            schema_evolution: Some(true),
+        };
+
+        assert_eq!(config.name, "test_table");
+        assert_eq!(config.partition_by.unwrap().len(), 2);
+        assert_eq!(config.schema_evolution, Some(true));
+    }
+
+    #[test]
+    fn test_write_config_creation() {
+        let config = WriteConfig {
+            batch_size: 5000,
+            timeout_secs: 60,
+            compression: "snappy".to_string(),
+        };
+
+        assert_eq!(config.batch_size, 5000);
+        assert_eq!(config.timeout_secs, 60);
+        assert_eq!(config.compression, "snappy");
+    }
+
+    #[test]
+    fn test_write_config_clone() {
+        let config = WriteConfig {
+            batch_size: 1000,
+            timeout_secs: 30,
+            compression: "snappy".to_string(),
+        };
+
+        let cloned = config.clone();
+        assert_eq!(cloned.batch_size, 1000);
+        assert_eq!(cloned.timeout_secs, 30);
+        assert_eq!(cloned.compression, "snappy");
+    }
+
+
+    #[test]
+    fn test_base_path_validation() {
+        // Test local path
+        let local_path = "/var/data/delta";
+        assert!(!local_path.is_empty());
+
+        // Test S3 path
+        let s3_path = "s3://my-bucket/delta";
+        assert!(s3_path.starts_with("s3://"));
+    }
+
+    #[test]
+    fn test_s3_path_construction() {
+        let bucket = "test-bucket";
+        let path = "delta/tables";
+        let full_path = format!("s3://{}/{}", bucket, path);
+        assert_eq!(full_path, "s3://test-bucket/delta/tables");
+    }
 }

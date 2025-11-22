@@ -1102,3 +1102,151 @@ impl DeltaLakeWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use vector_lib::event::LogEvent;
+
+    fn create_test_log_event() -> LogEvent {
+        let mut log = LogEvent::from(BTreeMap::new());
+        log.insert("_vector_table", "test_table");
+        log.insert("_vector_instance", "test_instance");
+        log.insert("_vector_timestamp", "2024-01-01T00:00:00Z");
+        log.insert("string_field", "test_value");
+        log.insert("int_field", 42);
+        log.insert("float_field", 3.14);
+        log.insert("bool_field", true);
+        log
+    }
+
+    #[test]
+    fn test_writer_creation() {
+        let table_path = PathBuf::from("/tmp/test_table");
+        let table_config = DeltaTableConfig {
+            name: "test_table".to_string(),
+            partition_by: Some(vec!["date".to_string()]),
+            schema_evolution: Some(true),
+        };
+        let write_config = WriteConfig {
+            batch_size: 1000,
+            timeout_secs: 30,
+            compression: "snappy".to_string(),
+        };
+
+        let writer = DeltaLakeWriter::new(table_path, table_config, write_config, None);
+        assert!(writer.schema.is_none());
+        assert!(writer.fixed_arrow_schema.is_none());
+    }
+
+    #[test]
+    fn test_mysql_type_to_arrow_type_conversions() {
+        let writer = DeltaLakeWriter::new(
+            PathBuf::from("/tmp/test"),
+            DeltaTableConfig {
+                name: "test".to_string(),
+                partition_by: None,
+                schema_evolution: None,
+            },
+            WriteConfig {
+                batch_size: 1000,
+                timeout_secs: 30,
+                compression: "snappy".to_string(),
+            },
+            None,
+        );
+
+        // Test various MySQL type conversions
+        assert_eq!(
+            writer.mysql_type_to_arrow_type("varchar(255)"),
+            DataType::Utf8
+        );
+        assert_eq!(writer.mysql_type_to_arrow_type("text"), DataType::Utf8);
+        assert_eq!(writer.mysql_type_to_arrow_type("int"), DataType::Int32);
+        assert_eq!(writer.mysql_type_to_arrow_type("bigint"), DataType::Int64);
+        assert_eq!(
+            writer.mysql_type_to_arrow_type("tinyint"),
+            DataType::Int8
+        );
+        assert_eq!(
+            writer.mysql_type_to_arrow_type("smallint"),
+            DataType::Int16
+        );
+        assert_eq!(
+            writer.mysql_type_to_arrow_type("double"),
+            DataType::Float64
+        );
+        assert_eq!(
+            writer.mysql_type_to_arrow_type("decimal(10,2)"),
+            DataType::Float64
+        );
+        assert_eq!(
+            writer.mysql_type_to_arrow_type("datetime"),
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+        assert_eq!(
+            writer.mysql_type_to_arrow_type("timestamp"),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string().into()))
+        );
+    }
+
+    #[test]
+    fn test_infer_data_type_from_value() {
+        let writer = DeltaLakeWriter::new(
+            PathBuf::from("/tmp/test"),
+            DeltaTableConfig {
+                name: "test".to_string(),
+                partition_by: None,
+                schema_evolution: None,
+            },
+            WriteConfig {
+                batch_size: 1000,
+                timeout_secs: 30,
+                compression: "snappy".to_string(),
+            },
+            None,
+        );
+
+        // Test value type inference
+        assert_eq!(
+            writer.infer_arrow_type("test_field", &LogValue::from("test")),
+            DataType::Utf8
+        );
+        assert_eq!(
+            writer.infer_arrow_type("test_field", &LogValue::from(42i64)),
+            DataType::Int64
+        );
+        assert_eq!(
+            writer.infer_arrow_type("test_field", &LogValue::from(3.14f64)),
+            DataType::Float64
+        );
+        assert_eq!(
+            writer.infer_arrow_type("test_field", &LogValue::from(true)),
+            DataType::Boolean
+        );
+    }
+
+    #[test]
+    fn test_empty_events_handling() {
+        let events: Vec<Event> = vec![];
+        let mut writer = DeltaLakeWriter::new(
+            PathBuf::from("/tmp/test"),
+            DeltaTableConfig {
+                name: "test".to_string(),
+                partition_by: None,
+                schema_evolution: None,
+            },
+            WriteConfig {
+                batch_size: 1000,
+                timeout_secs: 30,
+                compression: "snappy".to_string(),
+            },
+            None,
+        );
+
+        let result = writer.events_to_record_batch(events);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "No events to convert");
+    }
+}
