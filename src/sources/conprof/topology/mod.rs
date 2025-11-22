@@ -57,3 +57,143 @@ impl fmt::Display for Component {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_instance_type_display() {
+        assert_eq!(InstanceType::PD.to_string(), "pd");
+        assert_eq!(InstanceType::TiDB.to_string(), "tidb");
+        assert_eq!(InstanceType::TiKV.to_string(), "tikv");
+        assert_eq!(InstanceType::TiFlash.to_string(), "tiflash");
+        assert_eq!(InstanceType::TiProxy.to_string(), "tiproxy");
+        assert_eq!(InstanceType::Lightning.to_string(), "lightning");
+    }
+
+    #[test]
+    fn test_component_display() {
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        assert_eq!(
+            component.to_string(),
+            "tidb(127.0.0.1:4000, 127.0.0.1:10080)"
+        );
+    }
+
+    #[test]
+    fn test_component_conprof_address_pd() {
+        let component = Component {
+            instance_type: InstanceType::PD,
+            host: "127.0.0.1".to_string(),
+            primary_port: 2379,
+            secondary_port: 10080,
+        };
+        assert_eq!(component.conprof_address(), Some("127.0.0.1:2379".to_string()));
+    }
+
+    #[test]
+    fn test_component_conprof_address_tidb() {
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        assert_eq!(component.conprof_address(), Some("127.0.0.1:10080".to_string()));
+    }
+
+    #[test]
+    fn test_component_conprof_address_tikv() {
+        let component = Component {
+            instance_type: InstanceType::TiKV,
+            host: "127.0.0.1".to_string(),
+            primary_port: 20160,
+            secondary_port: 20180,
+        };
+        assert_eq!(component.conprof_address(), Some("127.0.0.1:20180".to_string()));
+    }
+
+    #[test]
+    fn test_component_conprof_address_tiflash() {
+        let component = Component {
+            instance_type: InstanceType::TiFlash,
+            host: "127.0.0.1".to_string(),
+            primary_port: 9000,
+            secondary_port: 8123,
+        };
+        assert_eq!(component.conprof_address(), Some("127.0.0.1:8123".to_string()));
+    }
+
+    #[test]
+    fn test_component_conprof_address_tiproxy() {
+        let component = Component {
+            instance_type: InstanceType::TiProxy,
+            host: "127.0.0.1".to_string(),
+            primary_port: 6000,
+            secondary_port: 10080,
+        };
+        assert_eq!(component.conprof_address(), Some("127.0.0.1:10080".to_string()));
+    }
+
+    #[test]
+    fn test_component_conprof_address_lightning() {
+        let component = Component {
+            instance_type: InstanceType::Lightning,
+            host: "127.0.0.1".to_string(),
+            primary_port: 8287,
+            secondary_port: 8286,
+        };
+        assert_eq!(component.conprof_address(), Some("127.0.0.1:8286".to_string()));
+    }
+
+    #[test]
+    fn test_component_equality() {
+        let component1 = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let component2 = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let component3 = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4001,
+            secondary_port: 10080,
+        };
+        assert_eq!(component1, component2);
+        assert_ne!(component1, component3);
+    }
+
+    #[test]
+    fn test_component_hash() {
+        use std::collections::HashSet;
+        let component1 = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let component2 = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let mut set = HashSet::new();
+        set.insert(component1.clone());
+        set.insert(component2.clone());
+        assert_eq!(set.len(), 1);
+    }
+}
