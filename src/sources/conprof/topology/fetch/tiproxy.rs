@@ -31,6 +31,7 @@ pub enum FetchError {
 }
 
 #[allow(clippy::upper_case_acronyms)]
+#[derive(Debug)]
 enum EtcdTopology {
     TTL {
         address: String,
@@ -166,5 +167,66 @@ impl<'a> TiProxyTopologyFetcher<'a> {
         let value = kv.value_str().context(ReadEtcdValueSnafu)?;
 
         Ok((key, value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_up() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        
+        // TTL that is still valid (within 45 seconds)
+        let valid_ttl = now - Duration::from_secs(30).as_nanos();
+        assert!(TiProxyTopologyFetcher::is_up(valid_ttl).unwrap());
+
+        // TTL that is expired (more than 45 seconds ago)
+        let expired_ttl = now - Duration::from_secs(60).as_nanos();
+        assert!(!TiProxyTopologyFetcher::is_up(expired_ttl).unwrap());
+    }
+
+    #[test]
+    fn test_parse_info() {
+        let value = r#"{"status_port": "6000"}"#;
+        let result = TiProxyTopologyFetcher::parse_info("127.0.0.1:6000", value).unwrap();
+        match result {
+            EtcdTopology::Info { address, value } => {
+                assert_eq!(address, "127.0.0.1:6000");
+                assert_eq!(value.status_port, "6000");
+            }
+            _ => panic!("Expected Info variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_info_invalid_json() {
+        let value = "invalid json";
+        let result = TiProxyTopologyFetcher::parse_info("127.0.0.1:6000", value);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FetchError::TopologyValueJsonFromStr { .. }));
+    }
+
+    #[test]
+    fn test_parse_ttl() {
+        let result = TiProxyTopologyFetcher::parse_ttl("127.0.0.1:6000", "1234567890").unwrap();
+        match result {
+            EtcdTopology::TTL { address, ttl } => {
+                assert_eq!(address, "127.0.0.1:6000");
+                assert_eq!(ttl, 1234567890);
+            }
+            _ => panic!("Expected TTL variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ttl_invalid_number() {
+        let result = TiProxyTopologyFetcher::parse_ttl("127.0.0.1:6000", "invalid");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), FetchError::ParseTTL { .. }));
     }
 }

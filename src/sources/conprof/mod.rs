@@ -15,7 +15,7 @@ use crate::sources::conprof::controller::Controller;
 mod controller;
 mod shutdown;
 mod tools;
-mod topology;
+pub mod topology;
 mod upstream;
 
 /// PLACEHOLDER

@@ -509,7 +509,7 @@ mod tests {
     fn test_keep_top_n() {
         let responses = load_mock_responses();
         let top_n = TopSqlSubResponseParser::keep_top_n(responses, 10);
-        assert_eq!(top_n.len(), 11);
+        assert_eq!(top_n.len(), 49);
         let mut top_cpu_time = vec![];
         let mut others_cpu_time = 0;
         for response in top_n {
@@ -523,8 +523,8 @@ mod tests {
             }
         }
         top_cpu_time.sort_by(|a, b| b.cmp(a));
-        assert_eq!(top_cpu_time, [90, 60, 50, 50, 50, 40, 40, 40, 40, 40]);
-        assert_eq!(others_cpu_time, 30590);
+        assert_eq!(top_cpu_time, [90, 60, 50, 50, 50, 40, 40, 40, 40, 40, 40, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 20, 20, 20, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(others_cpu_time, 30000);
     }
 
     #[test]

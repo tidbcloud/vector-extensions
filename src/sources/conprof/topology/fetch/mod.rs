@@ -251,3 +251,16 @@ impl TopologyFetcher {
 //         // println!("{:#?}", components);
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_fetch_error_display() {
+        let error = FetchError::ConfigurationError {
+            message: "test error".to_string(),
+        };
+        assert_eq!(format!("{}", error), "Configuration error: test error");
+    }
+}
