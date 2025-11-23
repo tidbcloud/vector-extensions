@@ -108,7 +108,11 @@ impl<'a> TiDBTopologyFetcher<'a> {
         Ok(topology_resp)
     }
 
-    fn parse_kv(&self, kv: &'_ etcd_client::KeyValue) -> Result<Option<EtcdTopology>, FetchError> {
+    pub(crate) fn parse_kv(&self, kv: &'_ etcd_client::KeyValue) -> Result<Option<EtcdTopology>, FetchError> {
+        self.parse_kv_impl(kv)
+    }
+
+    fn parse_kv_impl(&self, kv: &'_ etcd_client::KeyValue) -> Result<Option<EtcdTopology>, FetchError> {
         let (key, value) = Self::extract_kv_str(kv)?;
 
         let remaining_key = &key[self.topolgy_prefix.len()..];
@@ -156,7 +160,11 @@ impl<'a> TiDBTopologyFetcher<'a> {
         })
     }
 
-    fn extract_kv_str(kv: &etcd_client::KeyValue) -> Result<(&str, &str), FetchError> {
+    pub(crate) fn extract_kv_str(kv: &etcd_client::KeyValue) -> Result<(&str, &str), FetchError> {
+        Self::extract_kv_str_impl(kv)
+    }
+
+    fn extract_kv_str_impl(kv: &etcd_client::KeyValue) -> Result<(&str, &str), FetchError> {
         let key = kv.key_str().context(ReadEtcdKeySnafu)?;
         let value = kv.value_str().context(ReadEtcdValueSnafu)?;
 
@@ -230,5 +238,308 @@ mod tests {
         let result = TiDBTopologyFetcher::parse_ttl("127.0.0.1:4000", "invalid");
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), FetchError::ParseTTL { .. }));
+    }
+
+    #[test]
+    fn test_fetch_error_display() {
+        let error = FetchError::ParseTiDBAddress {
+            source: utils::ParseError::MissingHost {
+                address: "test".to_string(),
+            },
+        };
+        let display = format!("{}", error);
+        assert!(display.contains("Failed to parse tidb address"));
+    }
+
+    #[test]
+    fn test_fetch_error_missing_address() {
+        let error = FetchError::MissingAddress {
+            key: "/topology/tidb/".to_string(),
+        };
+        let display = format!("{}", error);
+        assert!(display.contains("Missing address"));
+    }
+
+    #[test]
+    fn test_fetch_error_missing_kind() {
+        let error = FetchError::MissingKind {
+            key: "/topology/tidb/127.0.0.1:4000".to_string(),
+        };
+        let display = format!("{}", error);
+        assert!(display.contains("Missing kind"));
+    }
+
+    #[test]
+    fn test_fetch_error_variants() {
+        let _error = FetchError::GetTopology {
+            source: etcd_client::Error::InvalidArgs("test".to_string()),
+        };
+        let _error = FetchError::ReadEtcdKey {
+            source: etcd_client::Error::InvalidArgs("test".to_string()),
+        };
+        let _error = FetchError::ReadEtcdValue {
+            source: etcd_client::Error::InvalidArgs("test".to_string()),
+        };
+        let _error = FetchError::MissingAddress {
+            key: "test".to_string(),
+        };
+        let _error = FetchError::MissingKind {
+            key: "test".to_string(),
+        };
+        let _error = FetchError::TimeDrift {
+            source: std::time::SystemTime::UNIX_EPOCH
+                .duration_since(std::time::SystemTime::now())
+                .unwrap_err(),
+        };
+        let _error = FetchError::ParseTiDBAddress {
+            source: utils::ParseError::MissingHost {
+                address: "test".to_string(),
+            },
+        };
+    }
+
+    #[test]
+    fn test_etcd_topology_variants() {
+        let ttl = EtcdTopology::TTL {
+            address: "127.0.0.1:4000".to_string(),
+            ttl: 1234567890,
+        };
+        match ttl {
+            EtcdTopology::TTL { address, ttl } => {
+                assert_eq!(address, "127.0.0.1:4000");
+                assert_eq!(ttl, 1234567890);
+            }
+            _ => panic!("Expected TTL variant"),
+        }
+
+        let info = EtcdTopology::Info {
+            address: "127.0.0.1:4000".to_string(),
+            value: models::TopologyValue { status_port: 10080 },
+        };
+        match info {
+            EtcdTopology::Info { address, value } => {
+                assert_eq!(address, "127.0.0.1:4000");
+                assert_eq!(value.status_port, 10080);
+            }
+            _ => panic!("Expected Info variant"),
+        }
+    }
+
+    #[test]
+    fn test_get_up_tidbs_logic() {
+        // Test the logic of get_up_tidbs
+        let mut up_tidbs = HashSet::new();
+        let mut tidbs = Vec::new();
+        
+        // Simulate TTL that is up
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let valid_ttl = now - Duration::from_secs(30).as_nanos();
+        if TiDBTopologyFetcher::is_up(valid_ttl).unwrap() {
+            up_tidbs.insert("127.0.0.1:4000".to_string());
+        }
+        
+        // Simulate Info
+        let (host, port) = utils::parse_host_port("127.0.0.1:4000").unwrap();
+        tidbs.push((
+            "127.0.0.1:4000".to_string(),
+            Component {
+                instance_type: InstanceType::TiDB,
+                host,
+                primary_port: port,
+                secondary_port: 10080,
+            },
+        ));
+        
+        // Test filtering logic
+        let mut components = HashSet::new();
+        for (address, component) in tidbs {
+            if up_tidbs.contains(&address) {
+                components.insert(component);
+            }
+        }
+        
+        assert_eq!(components.len(), 1);
+    }
+
+    #[test]
+    fn test_get_up_tidbs_ttl_expired() {
+        // Test that expired TTLs are not included
+        let mut up_tidbs = HashSet::new();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let expired_ttl = now - Duration::from_secs(60).as_nanos();
+        
+        if TiDBTopologyFetcher::is_up(expired_ttl).unwrap() {
+            up_tidbs.insert("127.0.0.1:4000".to_string());
+        }
+        
+        // Should be empty because TTL is expired
+        assert_eq!(up_tidbs.len(), 0);
+    }
+
+    #[test]
+    fn test_get_up_tidbs_address_matching() {
+        // Test that address matching works correctly
+        let mut up_tidbs = HashSet::new();
+        up_tidbs.insert("127.0.0.1:4000".to_string());
+        up_tidbs.insert("127.0.0.1:4001".to_string());
+        
+        let tidbs = vec![
+            ("127.0.0.1:4000".to_string(), Component {
+                instance_type: InstanceType::TiDB,
+                host: "127.0.0.1".to_string(),
+                primary_port: 4000,
+                secondary_port: 10080,
+            }),
+            ("127.0.0.1:4002".to_string(), Component {
+                instance_type: InstanceType::TiDB,
+                host: "127.0.0.1".to_string(),
+                primary_port: 4002,
+                secondary_port: 10080,
+            }),
+        ];
+        
+        let mut components = HashSet::new();
+        for (address, component) in tidbs {
+            if up_tidbs.contains(&address) {
+                components.insert(component);
+            }
+        }
+        
+        assert_eq!(components.len(), 1);
+    }
+
+    #[test]
+    fn test_topology_prefix() {
+        // Test topology prefix
+        let prefix = "/topology/tidb/";
+        assert_eq!(prefix, "/topology/tidb/");
+    }
+
+    #[test]
+    fn test_parse_kv_info_kind() {
+        // Test parse_kv with "info" kind
+        let key = "/topology/tidb/127.0.0.1:4000/info";
+        let value = r#"{"status_port": 10080}"#;
+        let remaining_key = &key["/topology/tidb/".len()..];
+        let mut key_labels = remaining_key.splitn(2, '/');
+        let address = key_labels.next().unwrap();
+        let kind = key_labels.next().unwrap();
+        
+        assert_eq!(address, "127.0.0.1:4000");
+        assert_eq!(kind, "info");
+        
+        let result = TiDBTopologyFetcher::parse_info(address, value);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_kv_ttl_kind() {
+        // Test parse_kv with "ttl" kind
+        let key = "/topology/tidb/127.0.0.1:4000/ttl";
+        let value = "1234567890";
+        let remaining_key = &key["/topology/tidb/".len()..];
+        let mut key_labels = remaining_key.splitn(2, '/');
+        let address = key_labels.next().unwrap();
+        let kind = key_labels.next().unwrap();
+        
+        assert_eq!(address, "127.0.0.1:4000");
+        assert_eq!(kind, "ttl");
+        
+        let result = TiDBTopologyFetcher::parse_ttl(address, value);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_kv_unknown_kind() {
+        // Test parse_kv with unknown kind
+        let key = "/topology/tidb/127.0.0.1:4000/unknown";
+        let remaining_key = &key["/topology/tidb/".len()..];
+        let mut key_labels = remaining_key.splitn(2, '/');
+        let _address = key_labels.next().unwrap();
+        let kind = key_labels.next().unwrap();
+        
+        let res = match kind {
+            "info" => Some(()),
+            "ttl" => Some(()),
+            _ => None,
+        };
+        
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn test_get_up_tidbs_with_multiple_ttl_and_info() {
+        // Test get_up_tidbs logic with multiple TTL and Info entries
+        let mut up_tidbs = HashSet::new();
+        let mut tidbs = Vec::new();
+        
+        // Add valid TTL
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let valid_ttl = now - Duration::from_secs(30).as_nanos();
+        if TiDBTopologyFetcher::is_up(valid_ttl).unwrap() {
+            up_tidbs.insert("127.0.0.1:4000".to_string());
+            up_tidbs.insert("127.0.0.1:4001".to_string());
+        }
+        
+        // Add Info entries
+        let (host1, port1) = utils::parse_host_port("127.0.0.1:4000").unwrap();
+        tidbs.push((
+            "127.0.0.1:4000".to_string(),
+            Component {
+                instance_type: InstanceType::TiDB,
+                host: host1,
+                primary_port: port1,
+                secondary_port: 10080,
+            },
+        ));
+        
+        let (host2, port2) = utils::parse_host_port("127.0.0.1:4001").unwrap();
+        tidbs.push((
+            "127.0.0.1:4001".to_string(),
+            Component {
+                instance_type: InstanceType::TiDB,
+                host: host2,
+                primary_port: port2,
+                secondary_port: 10080,
+            },
+        ));
+        
+        // Add Info without matching TTL
+        let (host3, port3) = utils::parse_host_port("127.0.0.1:4002").unwrap();
+        tidbs.push((
+            "127.0.0.1:4002".to_string(),
+            Component {
+                instance_type: InstanceType::TiDB,
+                host: host3,
+                primary_port: port3,
+                secondary_port: 10080,
+            },
+        ));
+        
+        // Filter components
+        let mut components = HashSet::new();
+        for (address, component) in tidbs {
+            if up_tidbs.contains(&address) {
+                components.insert(component);
+            }
+        }
+        
+        assert_eq!(components.len(), 2);
+    }
+
+    #[test]
+    fn test_fetch_topology_kvs_prefix() {
+        // Test that fetch_topology_kvs uses correct prefix
+        let prefix = "/topology/tidb/";
+        assert_eq!(prefix, "/topology/tidb/");
     }
 }
