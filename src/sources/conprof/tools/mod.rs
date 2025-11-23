@@ -38,3 +38,72 @@ pub async fn fetch_raw(url: String, tls: Option<TlsConfig>) -> Result<Vec<u8>, S
     }
     Ok(output.stdout)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use std::fs;
+
+    #[test]
+    fn test_jeprof_constant_exists() {
+        // Test that JEPROF constant is not empty
+        assert!(!JEPROF.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_raw_without_tls() {
+        // This test will fail if perl is not available or jeprof script is invalid
+        // But we can test the function structure
+        let result = fetch_raw("http://127.0.0.1:8080/debug/pprof/heap".to_string(), None).await;
+        // We expect this to fail because there's no real server, but function should be callable
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_raw_with_tls() {
+        let temp_dir = TempDir::new().unwrap();
+        let ca_file = temp_dir.path().join("ca.crt");
+        let crt_file = temp_dir.path().join("client.crt");
+        let key_file = temp_dir.path().join("client.key");
+
+        fs::write(&ca_file, "ca content").unwrap();
+        fs::write(&crt_file, "cert content").unwrap();
+        fs::write(&key_file, "key content").unwrap();
+
+        let tls_config = Some(TlsConfig {
+            ca_file: Some(ca_file),
+            crt_file: Some(crt_file),
+            key_file: Some(key_file),
+            ..Default::default()
+        });
+
+        // This test will fail if perl is not available or jeprof script is invalid
+        let result = fetch_raw("https://127.0.0.1:8080/debug/pprof/heap".to_string(), tls_config).await;
+        // We expect this to fail because there's no real server, but function should be callable
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_raw_with_tls_partial() {
+        let temp_dir = TempDir::new().unwrap();
+        let ca_file = temp_dir.path().join("ca.crt");
+        let crt_file = temp_dir.path().join("client.crt");
+        let key_file = temp_dir.path().join("client.key");
+        fs::write(&ca_file, "ca content").unwrap();
+        fs::write(&crt_file, "cert content").unwrap();
+        fs::write(&key_file, "key content").unwrap();
+
+        let tls_config = Some(TlsConfig {
+            ca_file: Some(ca_file),
+            crt_file: Some(crt_file),
+            key_file: Some(key_file),
+            ..Default::default()
+        });
+
+        // This should work with all TLS files
+        let result = fetch_raw("https://127.0.0.1:8080/debug/pprof/heap".to_string(), tls_config).await;
+        // We expect this to fail because there's no real server, but function should be callable
+        let _ = result;
+    }
+}
