@@ -289,10 +289,209 @@ impl ConprofSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::conprof::shutdown::pair;
+    use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Body, Request, Response, Server, StatusCode};
+    use std::convert::Infallible;
+    use std::net::SocketAddr;
+    use tokio::net::TcpListener;
+
     #[test]
     fn test_conprof_source_structure() {
         // Test that ConprofSource can be instantiated conceptually
         let _ = std::mem::size_of::<ConprofSource>();
+    }
+
+    fn create_test_source_sender() -> SourceSender {
+        // Create SourceSender using builder pattern
+        // We need to add a source output first, then build
+        use vector_lib::config::{DataType, SourceOutput};
+        use vector::config::ComponentKey;
+        
+        let mut builder = SourceSender::builder().with_buffer(1000);
+        let source_output = SourceOutput {
+            port: None,
+            ty: DataType::Log,
+            schema_definition: None,
+        };
+        let component_key = ComponentKey::from("test");
+        let _receiver = builder.add_source_output(source_output, component_key);
+        builder.build()
+    }
+
+    async fn mock_pprof_server(port: u16) -> String {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        
+        tokio::spawn(async move {
+            let make_svc = make_service_fn(move |_conn| {
+                async move {
+                    Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
+                        async move {
+                            let path = req.uri().path();
+                            let resp = if path.starts_with("/debug/pprof/") {
+                                // Return mock pprof data
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .header("Content-Type", "application/protobuf")
+                                    .body(Body::from(b"mock pprof data" as &[u8]))
+                                    .unwrap()
+                            } else {
+                                Response::builder()
+                                    .status(StatusCode::NOT_FOUND)
+                                    .body(Body::from("Not Found"))
+                                    .unwrap()
+                            };
+                            Ok::<_, Infallible>(resp)
+                        }
+                    }))
+                }
+            });
+            
+            let server = Server::bind(&addr).serve(make_svc);
+            server.await.unwrap();
+        });
+        
+        format!("http://127.0.0.1:{}", port)
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_new_with_valid_component() {
+        // Test ConprofSource::new with a valid component
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let result = ConprofSource::new(component, None, out, false).await;
+        // Should succeed
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_new_with_tiflash() {
+        // Test ConprofSource::new with TiFlash
+        // TiFlash does have a conprof address (secondary_port), but run_loop does nothing for it
+        let component = Component {
+            instance_type: InstanceType::TiFlash,
+            host: "127.0.0.1".to_string(),
+            primary_port: 9000,
+            secondary_port: 8123,
+        };
+        let out = create_test_source_sender();
+        let result = ConprofSource::new(component, None, out, false).await;
+        // TiFlash has conprof address, so it should succeed
+        assert!(result.is_some());
+        let source = result.unwrap();
+        // Verify it's TiFlash type
+        assert_eq!(source.instance_type, InstanceType::TiFlash);
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_fetch_cpu_with_mock_server() {
+        // Test fetch_cpu with mock HTTP server
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        // Update URI to point to mock server
+        source.uri = mock_pprof_server(port).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-cpu".to_string();
+        
+        // This will execute the fetch_cpu code path
+        source.fetch_cpu(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_fetch_heap_with_mock_server() {
+        // Test fetch_heap with mock HTTP server
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-heap".to_string();
+        
+        source.fetch_heap(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_fetch_mutex_with_mock_server() {
+        // Test fetch_mutex with mock HTTP server
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-mutex".to_string();
+        
+        source.fetch_mutex(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_fetch_goroutine_with_mock_server() {
+        // Test fetch_goroutine with mock HTTP server
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-goroutine".to_string();
+        
+        source.fetch_goroutine(filename, shutdown.clone()).await;
     }
 
     #[test]
