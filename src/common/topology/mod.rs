@@ -1,4 +1,4 @@
-mod fetch;
+pub mod fetch;
 
 use std::fmt;
 

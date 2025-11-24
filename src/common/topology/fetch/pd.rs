@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use snafu::{ResultExt, Snafu};
 use vector::http::HttpClient;
 
-use crate::sources::topsql::topology::fetch::{models, utils};
-use crate::sources::topsql::topology::{Component, InstanceType};
+use crate::common::topology::fetch::{models, utils};
+use crate::common::topology::{Component, InstanceType};
 
 #[derive(Debug, Snafu)]
 pub enum FetchError {
@@ -56,7 +56,7 @@ impl<'a> PDTopologyFetcher<'a> {
             .collect::<HashSet<_>>();
         for member in members_resp.members {
             if health_members.contains(&member.member_id) {
-                if let Some(url) = member.client_urls.get(0) {
+                if let Some(url) = member.client_urls.first() {
                     let (host, port) = utils::parse_host_port(url).context(ParsePDAddressSnafu)?;
                     components.insert(Component {
                         instance_type: InstanceType::PD,

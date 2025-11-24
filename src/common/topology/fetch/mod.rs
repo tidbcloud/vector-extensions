@@ -4,13 +4,13 @@ mod store;
 mod tidb;
 mod utils;
 
-mod tidb_nextgen;
+pub mod tidb_nextgen;
 mod tikv_nextgen;
 
 #[cfg(test)]
 mod mock;
 
-use crate::sources::topsql::topology::Component;
+use crate::common::topology::Component;
 use snafu::{ResultExt, Snafu};
 use std::collections::HashSet;
 
@@ -103,9 +103,9 @@ impl LegacyTopologyFetcher {
         let uri: hyper::Uri = address.parse().context(ParseAddressSnafu)?;
         if uri.scheme().is_none() {
             address = if tls_config.is_some() {
-                format!("https://{}", address)
+                format!("https://{address}")
             } else {
-                format!("http://{}", address)
+                format!("http://{address}")
             };
         }
         if address.ends_with('/') {
@@ -226,7 +226,7 @@ pub struct TopologyFetcher {
 
 // Internal enum to handle different implementations
 enum TopologyFetcherImpl {
-    Legacy(LegacyTopologyFetcher),
+    Legacy(Box<LegacyTopologyFetcher>),
     Nextgen(NextgenTopologyFetcher),
 }
 
@@ -254,7 +254,7 @@ impl TopologyFetcher {
             })?;
             let fetcher = LegacyTopologyFetcher::new(pd_address, tls_config, proxy_config).await?;
             Ok(Self {
-                inner: TopologyFetcherImpl::Legacy(fetcher),
+                inner: TopologyFetcherImpl::Legacy(Box::new(fetcher)),
             })
         }
     }
