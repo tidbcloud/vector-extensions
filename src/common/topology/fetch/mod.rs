@@ -4,13 +4,13 @@ mod store;
 mod tidb;
 mod utils;
 
-mod tidb_nextgen;
+pub mod tidb_nextgen;
 mod tikv_nextgen;
 
 #[cfg(test)]
 mod mock;
 
-use crate::sources::topsql::topology::Component;
+use crate::common::topology::Component;
 use snafu::{ResultExt, Snafu};
 use std::collections::HashSet;
 
@@ -103,9 +103,9 @@ impl LegacyTopologyFetcher {
         let uri: hyper::Uri = address.parse().context(ParseAddressSnafu)?;
         if uri.scheme().is_none() {
             address = if tls_config.is_some() {
-                format!("https://{}", address)
+                format!("https://{address}")
             } else {
-                format!("http://{}", address)
+                format!("http://{address}")
             };
         }
         if address.ends_with('/') {
@@ -131,9 +131,10 @@ impl LegacyTopologyFetcher {
         tls_config: &Option<TlsConfig>,
     ) -> Result<etcd_client::Client, FetchError> {
         let etcd_connect_opt = Self::build_etcd_connect_opt(tls_config)?;
-        let etcd_client: etcd_client::Client = etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
-            .await
-            .context(BuildEtcdClientSnafu)?;
+        let etcd_client: etcd_client::Client =
+            etcd_client::Client::connect(&[pd_address], etcd_connect_opt)
+                .await
+                .context(BuildEtcdClientSnafu)?;
         Ok(etcd_client)
     }
 
@@ -225,7 +226,7 @@ pub struct TopologyFetcher {
 
 // Internal enum to handle different implementations
 enum TopologyFetcherImpl {
-    Legacy(LegacyTopologyFetcher),
+    Legacy(Box<LegacyTopologyFetcher>),
     Nextgen(NextgenTopologyFetcher),
 }
 
@@ -248,12 +249,12 @@ impl TopologyFetcher {
             })
         } else {
             // In legacy mode, pd_address is required
-            let pd_address = pd_address.ok_or_else(|| FetchError::ConfigurationError { 
-                message: "PD address is required in legacy mode".to_string()
+            let pd_address = pd_address.ok_or_else(|| FetchError::ConfigurationError {
+                message: "PD address is required in legacy mode".to_string(),
             })?;
             let fetcher = LegacyTopologyFetcher::new(pd_address, tls_config, proxy_config).await?;
             Ok(Self {
-                inner: TopologyFetcherImpl::Legacy(fetcher),
+                inner: TopologyFetcherImpl::Legacy(Box::new(fetcher)),
             })
         }
     }
