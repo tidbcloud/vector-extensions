@@ -133,8 +133,8 @@ impl<'a> TiProxyTopologyFetcher<'a> {
         })?;
 
         let res = match kind {
-            "info" => Some(Self::parse_info(address, value)?),
-            "ttl" => Some(Self::parse_ttl(address, value)?),
+            "info" => Some(Self::parse_info_impl(address, value)?),
+            "ttl" => Some(Self::parse_ttl_impl(address, value)?),
             _ => None,
         };
 
@@ -149,7 +149,12 @@ impl<'a> TiProxyTopologyFetcher<'a> {
         Ok(ttl + Duration::from_secs(45).as_nanos() >= now)
     }
 
-    fn parse_info(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
+    #[cfg(test)]
+    pub(crate) fn parse_info(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
+        Self::parse_info_impl(address, value)
+    }
+
+    fn parse_info_impl(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
         let info = serde_json::from_str::<models::TiProxyTopologyValue>(value)
             .context(TopologyValueJsonFromStrSnafu)?;
         Ok(EtcdTopology::Info {
@@ -158,7 +163,12 @@ impl<'a> TiProxyTopologyFetcher<'a> {
         })
     }
 
-    fn parse_ttl(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
+    #[cfg(test)]
+    pub(crate) fn parse_ttl(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
+        Self::parse_ttl_impl(address, value)
+    }
+
+    fn parse_ttl_impl(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
         let ttl = value.parse::<u128>().context(ParseTTLSnafu)?;
         Ok(EtcdTopology::TTL {
             address: address.to_owned(),
@@ -201,7 +211,7 @@ mod tests {
     #[test]
     fn test_parse_info() {
         let value = r#"{"status_port": "6000"}"#;
-        let result = TiProxyTopologyFetcher::parse_info("127.0.0.1:6000", value).unwrap();
+        let result = TiProxyTopologyFetcher::parse_info_impl("127.0.0.1:6000", value).unwrap();
         match result {
             EtcdTopology::Info { address, value } => {
                 assert_eq!(address, "127.0.0.1:6000");
@@ -214,14 +224,14 @@ mod tests {
     #[test]
     fn test_parse_info_invalid_json() {
         let value = "invalid json";
-        let result = TiProxyTopologyFetcher::parse_info("127.0.0.1:6000", value);
+        let result = TiProxyTopologyFetcher::parse_info_impl("127.0.0.1:6000", value);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), FetchError::TopologyValueJsonFromStr { .. }));
     }
 
     #[test]
     fn test_parse_ttl() {
-        let result = TiProxyTopologyFetcher::parse_ttl("127.0.0.1:6000", "1234567890").unwrap();
+        let result = TiProxyTopologyFetcher::parse_ttl_impl("127.0.0.1:6000", "1234567890").unwrap();
         match result {
             EtcdTopology::TTL { address, ttl } => {
                 assert_eq!(address, "127.0.0.1:6000");
@@ -233,7 +243,7 @@ mod tests {
 
     #[test]
     fn test_parse_ttl_invalid_number() {
-        let result = TiProxyTopologyFetcher::parse_ttl("127.0.0.1:6000", "invalid");
+        let result = TiProxyTopologyFetcher::parse_ttl_impl("127.0.0.1:6000", "invalid");
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), FetchError::ParseTTL { .. }));
     }
@@ -241,7 +251,7 @@ mod tests {
     #[test]
     fn test_parse_status_port_invalid() {
         let value = r#"{"status_port": "invalid"}"#;
-        let result = TiProxyTopologyFetcher::parse_info("127.0.0.1:6000", value);
+        let result = TiProxyTopologyFetcher::parse_info_impl("127.0.0.1:6000", value);
         // This should succeed in parsing JSON, but status_port parsing happens later
         assert!(result.is_ok());
     }
@@ -376,7 +386,7 @@ mod tests {
         assert_eq!(address, "127.0.0.1:6000");
         assert_eq!(kind, "info");
         
-        let result = TiProxyTopologyFetcher::parse_info(address, value);
+        let result = TiProxyTopologyFetcher::parse_info_impl(address, value);
         assert!(result.is_ok());
     }
 
@@ -393,7 +403,7 @@ mod tests {
         assert_eq!(address, "127.0.0.1:6000");
         assert_eq!(kind, "ttl");
         
-        let result = TiProxyTopologyFetcher::parse_ttl(address, value);
+        let result = TiProxyTopologyFetcher::parse_ttl_impl(address, value);
         assert!(result.is_ok());
     }
 

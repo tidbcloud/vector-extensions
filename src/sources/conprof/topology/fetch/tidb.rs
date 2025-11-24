@@ -65,7 +65,7 @@ impl<'a> TiDBTopologyFetcher<'a> {
         for kv in topology_kvs.kvs() {
             match self.parse_kv(kv)? {
                 Some(EtcdTopology::TTL { address, ttl }) => {
-                    if Self::is_up(ttl)? {
+                    if Self::is_up_impl(ttl)? {
                         up_tidbs.insert(address);
                     }
                 }
@@ -127,15 +127,20 @@ impl<'a> TiDBTopologyFetcher<'a> {
         })?;
 
         let res = match kind {
-            "info" => Some(Self::parse_info(address, value)?),
-            "ttl" => Some(Self::parse_ttl(address, value)?),
+            "info" => Some(Self::parse_info_impl(address, value)?),
+            "ttl" => Some(Self::parse_ttl_impl(address, value)?),
             _ => None,
         };
 
         Ok(res)
     }
 
-    fn is_up(ttl: u128) -> Result<bool, FetchError> {
+    #[cfg(test)]
+    pub(crate) fn is_up(ttl: u128) -> Result<bool, FetchError> {
+        Self::is_up_impl(ttl)
+    }
+
+    fn is_up_impl(ttl: u128) -> Result<bool, FetchError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context(TimeDriftSnafu)?
@@ -143,7 +148,12 @@ impl<'a> TiDBTopologyFetcher<'a> {
         Ok(ttl + Duration::from_secs(45).as_nanos() >= now)
     }
 
-    fn parse_info(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
+    #[cfg(test)]
+    pub(crate) fn parse_info(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
+        Self::parse_info_impl(address, value)
+    }
+
+    fn parse_info_impl(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
         let info = serde_json::from_str::<models::TopologyValue>(value)
             .context(TopologyValueJsonFromStrSnafu)?;
         Ok(EtcdTopology::Info {
@@ -152,7 +162,12 @@ impl<'a> TiDBTopologyFetcher<'a> {
         })
     }
 
-    fn parse_ttl(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
+    #[cfg(test)]
+    pub(crate) fn parse_ttl(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
+        Self::parse_ttl_impl(address, value)
+    }
+
+    fn parse_ttl_impl(address: &str, value: &str) -> Result<EtcdTopology, FetchError> {
         let ttl = value.parse::<u128>().context(ParseTTLSnafu)?;
         Ok(EtcdTopology::TTL {
             address: address.to_owned(),
@@ -203,7 +218,7 @@ mod tests {
     #[test]
     fn test_parse_info() {
         let value = r#"{"status_port": 10080}"#;
-        let result = TiDBTopologyFetcher::parse_info("127.0.0.1:4000", value).unwrap();
+        let result = TiDBTopologyFetcher::parse_info_impl("127.0.0.1:4000", value).unwrap();
         match result {
             EtcdTopology::Info { address, value } => {
                 assert_eq!(address, "127.0.0.1:4000");
@@ -216,14 +231,14 @@ mod tests {
     #[test]
     fn test_parse_info_invalid_json() {
         let value = "invalid json";
-        let result = TiDBTopologyFetcher::parse_info("127.0.0.1:4000", value);
+        let result = TiDBTopologyFetcher::parse_info_impl("127.0.0.1:4000", value);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), FetchError::TopologyValueJsonFromStr { .. }));
     }
 
     #[test]
     fn test_parse_ttl() {
-        let result = TiDBTopologyFetcher::parse_ttl("127.0.0.1:4000", "1234567890").unwrap();
+        let result = TiDBTopologyFetcher::parse_ttl_impl("127.0.0.1:4000", "1234567890").unwrap();
         match result {
             EtcdTopology::TTL { address, ttl } => {
                 assert_eq!(address, "127.0.0.1:4000");
@@ -235,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_parse_ttl_invalid_number() {
-        let result = TiDBTopologyFetcher::parse_ttl("127.0.0.1:4000", "invalid");
+        let result = TiDBTopologyFetcher::parse_ttl_impl("127.0.0.1:4000", "invalid");
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), FetchError::ParseTTL { .. }));
     }
@@ -434,7 +449,7 @@ mod tests {
         assert_eq!(address, "127.0.0.1:4000");
         assert_eq!(kind, "info");
         
-        let result = TiDBTopologyFetcher::parse_info(address, value);
+        let result = TiDBTopologyFetcher::parse_info_impl(address, value);
         assert!(result.is_ok());
     }
 
@@ -451,7 +466,7 @@ mod tests {
         assert_eq!(address, "127.0.0.1:4000");
         assert_eq!(kind, "ttl");
         
-        let result = TiDBTopologyFetcher::parse_ttl(address, value);
+        let result = TiDBTopologyFetcher::parse_ttl_impl(address, value);
         assert!(result.is_ok());
     }
 
