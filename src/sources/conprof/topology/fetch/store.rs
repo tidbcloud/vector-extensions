@@ -90,7 +90,7 @@ impl<'a> StoreTopologyFetcher<'a> {
         if store
             .labels
             .iter()
-            .any(|models::LabelItem { key, value }| key == "engine" && value == "tiflash")
+            .any(|models::LabelItem { key, value }| key == "engine" && value.to_lowercase().contains("tiflash"))
         {
             InstanceType::TiFlash
         } else {

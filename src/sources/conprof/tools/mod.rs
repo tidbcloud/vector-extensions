@@ -6,6 +6,8 @@ const JEPROF: &[u8] = include_bytes!("jeprof");
 
 pub async fn fetch_raw(url: String, tls: Option<TlsConfig>) -> Result<Vec<u8>, String> {
     let mut jeprof = Command::new("perl");
+    // Set JEPROF_TMPDIR to /data to work with pod security restrictions
+    jeprof.env("JEPROF_TMPDIR", "/data");
     if let Some(tls) = tls {
         let url_fetcher = format!(
             "curl -s --cert {} --key {} --cacert {}",
