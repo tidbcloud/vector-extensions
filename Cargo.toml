@@ -72,6 +72,7 @@ vector-lib = { git = "https://github.com/vectordotdev/vector", tag = "v0.49.0", 
 
 [dev-dependencies]
 lazy_static = "1.4.0"
+mockall = "0.13"
 regex = "1.10.3"
 tempfile = "3.8.0"
 

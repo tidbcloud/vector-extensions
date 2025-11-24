@@ -83,7 +83,7 @@ impl ConprofSource {
                 | InstanceType::PD
                 | InstanceType::TiProxy
                 | InstanceType::Lightning => {
-                    self.fetch_goroutine(
+                    self.fetch_goroutine_impl(
                         format!(
                             "{}-{}-goroutine-{}",
                             ts, self.instance_type, self.instance_b64
@@ -91,30 +91,30 @@ impl ConprofSource {
                         shutdown.clone(),
                     )
                     .await;
-                    self.fetch_mutex(
+                    self.fetch_mutex_impl(
                         format!("{}-{}-mutex-{}", ts, self.instance_type, self.instance_b64),
                         shutdown.clone(),
                     )
                     .await;
-                    self.fetch_heap(
+                    self.fetch_heap_impl(
                         format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
                         shutdown.clone(),
                     )
                     .await;
-                    self.fetch_cpu(
+                    self.fetch_cpu_impl(
                         format!("{}-{}-cpu-{}", ts, self.instance_type, self.instance_b64),
                         shutdown.clone(),
                     )
                     .await;
                 }
                 InstanceType::TiKV => {
-                    self.fetch_cpu(
+                    self.fetch_cpu_impl(
                         format!("{}-{}-cpu-{}", ts, self.instance_type, self.instance_b64),
                         shutdown.clone(),
                     )
                     .await;
                     if self.enable_tikv_heap_profile {
-                        self.fetch_heap_with_jeprof(
+                        self.fetch_heap_with_jeprof_impl(
                             format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
                             shutdown.clone(),
                         )
@@ -135,7 +135,12 @@ impl ConprofSource {
         }
     }
 
-    async fn fetch_cpu(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+    #[cfg(test)]
+    pub(crate) async fn fetch_cpu(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+        self.fetch_cpu_impl(filename, shutdown).await
+    }
+
+    async fn fetch_cpu_impl(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
         tokio::select! {
             _ = shutdown.done() => {}
             resp = self.client.get(format!("{}/debug/pprof/profile?seconds=10", self.uri))
@@ -169,7 +174,12 @@ impl ConprofSource {
         }
     }
 
-    async fn fetch_heap(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+    #[cfg(test)]
+    pub(crate) async fn fetch_heap(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+        self.fetch_heap_impl(filename, shutdown).await
+    }
+
+    async fn fetch_heap_impl(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
         tokio::select! {
             _ = shutdown.done() => {}
             resp = self.client.get(format!("{}/debug/pprof/heap", self.uri)).send() => {
@@ -201,7 +211,12 @@ impl ConprofSource {
         }
     }
 
-    async fn fetch_mutex(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+    #[cfg(test)]
+    pub(crate) async fn fetch_mutex(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+        self.fetch_mutex_impl(filename, shutdown).await
+    }
+
+    async fn fetch_mutex_impl(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
         tokio::select! {
             _ = shutdown.done() => {}
             resp = self.client.get(format!("{}/debug/pprof/mutex", self.uri)).send() => {
@@ -233,7 +248,12 @@ impl ConprofSource {
         }
     }
 
-    async fn fetch_goroutine(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+    #[cfg(test)]
+    pub(crate) async fn fetch_goroutine(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+        self.fetch_goroutine_impl(filename, shutdown).await
+    }
+
+    async fn fetch_goroutine_impl(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
         tokio::select! {
             _ = shutdown.done() => {}
             resp = self.client.get(format!("{}/debug/pprof/goroutine", self.uri)).send() => {
@@ -265,7 +285,12 @@ impl ConprofSource {
         }
     }
 
-    async fn fetch_heap_with_jeprof(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+    #[cfg(test)]
+    pub(crate) async fn fetch_heap_with_jeprof(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+        self.fetch_heap_with_jeprof_impl(filename, shutdown).await
+    }
+
+    async fn fetch_heap_with_jeprof_impl(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
         tokio::select! {
             _ = shutdown.done() => {}
             resp = fetch_raw(format!("{}/debug/pprof/heap", self.uri), self.tls.clone()) => {
@@ -289,10 +314,658 @@ impl ConprofSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::conprof::shutdown::pair;
+    use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Body, Request, Response, Server, StatusCode};
+    use std::convert::Infallible;
+    use std::net::SocketAddr;
+    use tokio::net::TcpListener;
+
     #[test]
     fn test_conprof_source_structure() {
         // Test that ConprofSource can be instantiated conceptually
         let _ = std::mem::size_of::<ConprofSource>();
+    }
+
+    fn create_test_source_sender() -> SourceSender {
+        // Create SourceSender using builder pattern
+        // We need to add a source output first, then build
+        use vector_lib::config::{DataType, SourceOutput};
+        use vector::config::ComponentKey;
+        
+        let mut builder = SourceSender::builder().with_buffer(1000);
+        let source_output = SourceOutput {
+            port: None,
+            ty: DataType::Log,
+            schema_definition: None,
+        };
+        let component_key = ComponentKey::from("test");
+        let _receiver = builder.add_source_output(source_output, component_key);
+        builder.build()
+    }
+
+    async fn mock_pprof_server(port: u16) -> String {
+        mock_pprof_server_with_status(port, StatusCode::OK).await
+    }
+
+    async fn mock_pprof_server_with_status(port: u16, status: StatusCode) -> String {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        
+        tokio::spawn(async move {
+            let make_svc = make_service_fn(move |_conn| {
+                let status = status.clone();
+                async move {
+                    Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
+                        let status = status.clone();
+                        async move {
+                            let path = req.uri().path();
+                            let resp = if path.starts_with("/debug/pprof/") {
+                                // Return mock pprof data with specified status
+                                Response::builder()
+                                    .status(status)
+                                    .header("Content-Type", "application/protobuf")
+                                    .body(Body::from(b"mock pprof data" as &[u8]))
+                                    .unwrap()
+                            } else {
+                                Response::builder()
+                                    .status(StatusCode::NOT_FOUND)
+                                    .body(Body::from("Not Found"))
+                                    .unwrap()
+                            };
+                            Ok::<_, Infallible>(resp)
+                        }
+                    }))
+                }
+            });
+            
+            let server = Server::bind(&addr).serve(make_svc);
+            server.await.unwrap();
+        });
+        
+        format!("http://127.0.0.1:{}", port)
+    }
+
+    async fn mock_pprof_server_with_error(port: u16) -> String {
+        // Server that will cause connection errors
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        
+        tokio::spawn(async move {
+            // Start server and immediately close it to cause connection errors
+            let listener = TcpListener::bind(&addr).await.unwrap();
+            drop(listener);
+        });
+        
+        format!("http://127.0.0.1:{}", port)
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_new_with_valid_component() {
+        // Test ConprofSource::new with a valid component
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let result = ConprofSource::new(component, None, out, false).await;
+        // Should succeed
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_new_with_tiflash() {
+        // Test ConprofSource::new with TiFlash
+        // TiFlash does have a conprof address (secondary_port), but run_loop does nothing for it
+        let component = Component {
+            instance_type: InstanceType::TiFlash,
+            host: "127.0.0.1".to_string(),
+            primary_port: 9000,
+            secondary_port: 8123,
+        };
+        let out = create_test_source_sender();
+        let result = ConprofSource::new(component, None, out, false).await;
+        // TiFlash has conprof address, so it should succeed
+        assert!(result.is_some());
+        let source = result.unwrap();
+        // Verify it's TiFlash type
+        assert_eq!(source.instance_type, InstanceType::TiFlash);
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_fetch_cpu_with_mock_server() {
+        // Test fetch_cpu with mock HTTP server
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        // Update URI to point to mock server
+        source.uri = mock_pprof_server(port).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-cpu".to_string();
+        
+        // This will execute the fetch_cpu code path
+        source.fetch_cpu(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_fetch_heap_with_mock_server() {
+        // Test fetch_heap with mock HTTP server
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-heap".to_string();
+        
+        source.fetch_heap(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_fetch_mutex_with_mock_server() {
+        // Test fetch_mutex with mock HTTP server
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-mutex".to_string();
+        
+        source.fetch_mutex(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_fetch_goroutine_with_mock_server() {
+        // Test fetch_goroutine with mock HTTP server
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-goroutine".to_string();
+        
+        source.fetch_goroutine(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_cpu_http_error() {
+        // Test fetch_cpu with HTTP error (connection refused)
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        // Use invalid port to cause connection error
+        source.uri = "http://127.0.0.1:65535".to_string();
+        
+        let (_, shutdown) = pair();
+        let filename = "test-cpu-error".to_string();
+        
+        // Should handle error gracefully
+        source.fetch_cpu(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_cpu_status_error() {
+        // Test fetch_cpu with non-200 status code
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server_with_status(port, StatusCode::INTERNAL_SERVER_ERROR).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-cpu-status-error".to_string();
+        
+        source.fetch_cpu(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_heap_status_error() {
+        // Test fetch_heap with non-200 status code
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server_with_status(port, StatusCode::NOT_FOUND).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-heap-status-error".to_string();
+        
+        source.fetch_heap(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_mutex_status_error() {
+        // Test fetch_mutex with non-200 status code
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server_with_status(port, StatusCode::BAD_REQUEST).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-mutex-status-error".to_string();
+        
+        source.fetch_mutex(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_goroutine_status_error() {
+        // Test fetch_goroutine with non-200 status code
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server_with_status(port, StatusCode::SERVICE_UNAVAILABLE).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-goroutine-status-error".to_string();
+        
+        source.fetch_goroutine(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_new_with_pd() {
+        // Test ConprofSource::new with PD
+        let component = Component {
+            instance_type: InstanceType::PD,
+            host: "127.0.0.1".to_string(),
+            primary_port: 2379,
+            secondary_port: 2379,
+        };
+        let out = create_test_source_sender();
+        let result = ConprofSource::new(component, None, out, false).await;
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_new_with_tiproxy() {
+        // Test ConprofSource::new with TiProxy
+        let component = Component {
+            instance_type: InstanceType::TiProxy,
+            host: "127.0.0.1".to_string(),
+            primary_port: 6000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let result = ConprofSource::new(component, None, out, false).await;
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_new_with_lightning() {
+        // Test ConprofSource::new with Lightning
+        let component = Component {
+            instance_type: InstanceType::Lightning,
+            host: "127.0.0.1".to_string(),
+            primary_port: 8287,
+            secondary_port: 8286,
+        };
+        let out = create_test_source_sender();
+        let result = ConprofSource::new(component, None, out, false).await;
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_conprof_source_new_with_tikv_heap_profile_enabled() {
+        // Test ConprofSource::new with TiKV and heap profile enabled
+        let component = Component {
+            instance_type: InstanceType::TiKV,
+            host: "127.0.0.1".to_string(),
+            primary_port: 20160,
+            secondary_port: 20180,
+        };
+        let out = create_test_source_sender();
+        let result = ConprofSource::new(component, None, out, true).await;
+        assert!(result.is_some());
+        let source = result.unwrap();
+        assert_eq!(source.instance_type, InstanceType::TiKV);
+        assert!(source.enable_tikv_heap_profile);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_heap_with_jeprof_success() {
+        // Test fetch_heap_with_jeprof with mock server
+        let component = Component {
+            instance_type: InstanceType::TiKV,
+            host: "127.0.0.1".to_string(),
+            primary_port: 20160,
+            secondary_port: 20180,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, true).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (_, shutdown) = pair();
+        let filename = "test-heap-jeprof".to_string();
+        
+        // Note: fetch_heap_with_jeprof uses fetch_raw which calls perl
+        // This will fail in test environment, but we can test the code path
+        source.fetch_heap_with_jeprof(filename, shutdown.clone()).await;
+    }
+
+    #[tokio::test]
+    async fn test_run_loop_pd_branch() {
+        // Test run_loop with PD instance type - should fetch goroutine, mutex, heap, cpu
+        let component = Component {
+            instance_type: InstanceType::PD,
+            host: "127.0.0.1".to_string(),
+            primary_port: 2379,
+            secondary_port: 2379,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (notifier, mut shutdown) = pair();
+        
+        // Start run_loop in background and immediately shutdown
+        let handle = tokio::spawn(async move {
+            source.run_loop(shutdown.clone()).await;
+        });
+        
+        // Give it a moment to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        
+        // Shutdown to stop the loop
+        notifier.shutdown();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        // Cancel the task
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_run_loop_tiproxy_branch() {
+        // Test run_loop with TiProxy instance type
+        let component = Component {
+            instance_type: InstanceType::TiProxy,
+            host: "127.0.0.1".to_string(),
+            primary_port: 6000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (notifier, mut shutdown) = pair();
+        
+        let handle = tokio::spawn(async move {
+            source.run_loop(shutdown.clone()).await;
+        });
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        notifier.shutdown();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_run_loop_lightning_branch() {
+        // Test run_loop with Lightning instance type
+        let component = Component {
+            instance_type: InstanceType::Lightning,
+            host: "127.0.0.1".to_string(),
+            primary_port: 8287,
+            secondary_port: 8286,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (notifier, mut shutdown) = pair();
+        
+        let handle = tokio::spawn(async move {
+            source.run_loop(shutdown.clone()).await;
+        });
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        notifier.shutdown();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_run_loop_tikv_branch() {
+        // Test run_loop with TiKV instance type - should only fetch cpu
+        let component = Component {
+            instance_type: InstanceType::TiKV,
+            host: "127.0.0.1".to_string(),
+            primary_port: 20160,
+            secondary_port: 20180,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (notifier, mut shutdown) = pair();
+        
+        let handle = tokio::spawn(async move {
+            source.run_loop(shutdown.clone()).await;
+        });
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        notifier.shutdown();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_run_loop_tikv_with_heap_profile() {
+        // Test run_loop with TiKV and heap profile enabled
+        let component = Component {
+            instance_type: InstanceType::TiKV,
+            host: "127.0.0.1".to_string(),
+            primary_port: 20160,
+            secondary_port: 20180,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, true).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (notifier, mut shutdown) = pair();
+        
+        let handle = tokio::spawn(async move {
+            source.run_loop(shutdown.clone()).await;
+        });
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        notifier.shutdown();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_run_loop_tiflash_branch() {
+        // Test run_loop with TiFlash instance type - should do nothing
+        let component = Component {
+            instance_type: InstanceType::TiFlash,
+            host: "127.0.0.1".to_string(),
+            primary_port: 9000,
+            secondary_port: 8123,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let (notifier, mut shutdown) = pair();
+        
+        let handle = tokio::spawn(async move {
+            source.run_loop(shutdown.clone()).await;
+        });
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        notifier.shutdown();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_run_loop_sleep_path() {
+        // Test run_loop sleep path when now < next_minute_ts
+        let component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        let out = create_test_source_sender();
+        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
+        
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        
+        source.uri = mock_pprof_server(port).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        let (notifier, mut shutdown) = pair();
+        
+        // This will test the sleep path in run_loop
+        let handle = tokio::spawn(async move {
+            source.run_loop(shutdown.clone()).await;
+        });
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        notifier.shutdown();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        handle.abort();
     }
 
     #[test]
