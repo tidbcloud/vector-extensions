@@ -877,6 +877,50 @@ impl DeltaLakeWriter {
         }
     }
 
+    /// Create DeltaOps from URI with optional storage options
+    async fn create_delta_ops(
+        &self,
+        table_uri: &str,
+    ) -> Result<DeltaOps, Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(storage_options) = &self.storage_options {
+            // Create redacted version for logging
+            let mut redacted_options = storage_options.clone();
+            if let Some(access_key) = redacted_options.get_mut("AWS_ACCESS_KEY_ID") {
+                *access_key = "***".to_string();
+            }
+            if let Some(secret_key) = redacted_options.get_mut("AWS_SECRET_ACCESS_KEY") {
+                *secret_key = "***REDACTED***".to_string();
+            }
+            if let Some(session_token) = redacted_options.get_mut("AWS_SESSION_TOKEN") {
+                *session_token = "***REDACTED***".to_string();
+            }
+            info!(
+                "Using storage options for S3 authentication: {:?}",
+                redacted_options
+            );
+            Ok(DeltaOps::try_from_uri_with_storage_options(table_uri, storage_options.clone()).await?)
+        } else {
+            info!("No storage options provided, using default credential chain");
+            Ok(DeltaOps::try_from_uri(table_uri).await?)
+        }
+    }
+
+    /// Create and configure write builder with partition columns and schema mode
+    fn configure_write_builder(
+        &self,
+        table_ops: DeltaOps,
+        record_batch: RecordBatch,
+    ) -> deltalake::operations::write::WriteBuilder {
+        let mut write_builder = table_ops.write(vec![record_batch]);
+        // Always pass partition columns on write; for new tables this applies partitioning,
+        // for existing tables it validates consistency
+        if let Some(partitions) = &self.table_config.partition_by {
+            write_builder = write_builder.with_partition_columns(partitions.clone());
+        }
+        // Allow protocol/schema update so timestamp ntz writer feature can be enabled when needed
+        write_builder.with_schema_mode(deltalake::operations::write::SchemaMode::Merge)
+    }
+
     /// Write record batch to Delta Lake
     async fn write_to_delta_lake(
         &self,
@@ -893,41 +937,12 @@ impl DeltaLakeWriter {
         info!("Writing to Delta Lake table at: {}", table_uri);
 
         // Use DeltaOps for improved S3 support, following the successful test pattern
-        let table_ops = if let Some(storage_options) = &self.storage_options {
-            // Create redacted version for logging
-            let mut redacted_options = storage_options.clone();
-            if let Some(access_key) = redacted_options.get_mut("AWS_ACCESS_KEY_ID") {
-                *access_key = "***".to_string();
-            }
-            if let Some(secret_key) = redacted_options.get_mut("AWS_SECRET_ACCESS_KEY") {
-                *secret_key = "***REDACTED***".to_string();
-            }
-            if let Some(session_token) = redacted_options.get_mut("AWS_SESSION_TOKEN") {
-                *session_token = "***REDACTED***".to_string();
-            }
-            info!(
-                "Using storage options for S3 authentication: {:?}",
-                redacted_options
-            );
-            DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
-        } else {
-            info!("No storage options provided, using default credential chain");
-            DeltaOps::try_from_uri(&table_uri).await?
-        };
+        let table_ops = self.create_delta_ops(&table_uri).await?;
 
         // Try to write directly first (avoid load() which can panic in deltalake-core 0.28.1)
         info!("Attempting to write to Delta table at {}", table_uri);
 
-        let mut write_builder = table_ops.write(vec![record_batch.clone()]);
-        // Always pass partition columns on write; for new tables this applies partitioning,
-        // for existing tables it validates consistency
-        if let Some(partitions) = &self.table_config.partition_by {
-            write_builder = write_builder.with_partition_columns(partitions.clone());
-        }
-        // Allow protocol/schema update so timestamp ntz writer feature can be enabled when needed
-        write_builder =
-            write_builder.with_schema_mode(deltalake::operations::write::SchemaMode::Merge);
-
+        let write_builder = self.configure_write_builder(table_ops, record_batch.clone());
         let write_result = write_builder.await;
 
         match write_result {
@@ -995,11 +1010,7 @@ impl DeltaLakeWriter {
 
         // Add TimestampWithoutTimezone feature to support Timestamp columns
         info!("Adding TimestampWithoutTimezone feature to Delta table");
-        let table_ops_for_feature = if let Some(storage_options) = &self.storage_options {
-            DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
-        } else {
-            DeltaOps::try_from_uri(&table_uri).await?
-        };
+        let table_ops_for_feature = self.create_delta_ops(&table_uri).await?;
 
         // Load the table first to ensure state is initialized
         match table_ops_for_feature.load().await {
@@ -1027,18 +1038,8 @@ impl DeltaLakeWriter {
         }
 
         // Now write the data using DeltaOps - reload the table_ops to get the created table
-        let table_ops = if let Some(storage_options) = &self.storage_options {
-            DeltaOps::try_from_uri_with_storage_options(&table_uri, storage_options.clone()).await?
-        } else {
-            DeltaOps::try_from_uri(&table_uri).await?
-        };
-
-        let mut write_builder = table_ops.write(vec![record_batch]);
-        if let Some(partitions) = &self.table_config.partition_by {
-            write_builder = write_builder.with_partition_columns(partitions.clone());
-        }
-        write_builder =
-            write_builder.with_schema_mode(deltalake::operations::write::SchemaMode::Merge);
+        let table_ops = self.create_delta_ops(&table_uri).await?;
+        let write_builder = self.configure_write_builder(table_ops, record_batch);
         let write_result = write_builder.await?;
 
         info!(

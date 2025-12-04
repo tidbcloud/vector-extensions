@@ -60,7 +60,7 @@ impl DeltaLakeSink {
                 if let Some(table_name) = table_name {
                     table_events
                         .entry(table_name.to_string())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(Event::Log(log_event));
                 }
             }
@@ -88,12 +88,65 @@ impl DeltaLakeSink {
         Ok(())
     }
 
+    /// Extract partition_by from event metadata
+    fn extract_partition_by(&self, events: &[Event]) -> Option<Vec<String>> {
+        // Try to extract partition_by from the first event
+        // Look for _partition_by or _partition_columns field
+        if let Some(Event::Log(log_event)) = events.first() {
+            // Try _partition_by field (as comma-separated string or array)
+            if let Some(partition_value) = log_event.get("_partition_by") {
+                if let Some(partition_str) = partition_value.as_str() {
+                    // Parse comma-separated string
+                    let partitions: Vec<String> = partition_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !partitions.is_empty() {
+                        info!("Extracted partition_by from event: {:?}", partitions);
+                        return Some(partitions);
+                    }
+                } else if let Some(array) = partition_value.as_array() {
+                    // Parse array of strings
+                    let partitions: Vec<String> = array
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                    if !partitions.is_empty() {
+                        info!("Extracted partition_by from event array: {:?}", partitions);
+                        return Some(partitions);
+                    }
+                }
+            }
+
+            // Try _partition_columns field
+            if let Some(partition_value) = log_event.get("_partition_columns") {
+                if let Some(partition_str) = partition_value.as_str() {
+                    let partitions: Vec<String> = partition_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !partitions.is_empty() {
+                        info!("Extracted partition_columns from event: {:?}", partitions);
+                        return Some(partitions);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Write events to a specific table
     async fn write_table_events(
         &self,
         table_name: &str,
         events: Vec<Event>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Extract partition_by from events
+        let partition_by = self.extract_partition_by(&events);
+
         // Get or create writer for this table
         let mut writers = self.writers.lock().await;
         let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
@@ -109,15 +162,22 @@ impl DeltaLakeSink {
                 self.base_path.join(table_name)
             };
 
+            // Use partition_by from event metadata, or None if not present
             let table_config = self
                 .tables
                 .iter()
                 .find(|t| t.name == table_name)
                 .cloned()
-                .unwrap_or_else(|| DeltaTableConfig {
-                    name: table_name.to_string(),
-                    partition_by: Some(vec!["date".to_string()]),
-                    schema_evolution: Some(true),
+                .unwrap_or_else(|| {
+                    info!(
+                        "Creating table config for {} with partition_by from event: {:?}",
+                        table_name, partition_by
+                    );
+                    DeltaTableConfig {
+                        name: table_name.to_string(),
+                        partition_by: partition_by.clone(),
+                        schema_evolution: Some(true),
+                    }
                 });
 
             DeltaLakeWriter::new(
@@ -246,7 +306,7 @@ mod tests {
                 if let Some(table_name) = table_name {
                     table_events
                         .entry(table_name.to_string())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(Event::Log(log_event));
                 }
             }
