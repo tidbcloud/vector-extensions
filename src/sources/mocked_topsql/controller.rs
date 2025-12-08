@@ -131,7 +131,7 @@ fn create_event_for_instance_partition(timestamp: i64, tidb_number: usize, tikv_
         let log = event.as_mut_log();
 
         // Add metadata with Vector prefix (ensure all fields have values)
-        log.insert("source_table", "topsql_instance_partition");
+        log.insert("source_table", "instance_partition");
         log.insert("timestamps", LogValue::from(timestamp));
         log.insert("instance_type", "tidb");
         log.insert("instance", format!("127.0.1.{}", i));
