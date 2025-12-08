@@ -290,12 +290,35 @@ impl TopSQLDeltaLakeSink {
             sink_clone.process_events_loop(rx).await;
         });
         
-        // Return the sink (Arc::try_unwrap will fail if there are other references,
-        // but we just created it, so it should work)
-        Arc::try_unwrap(sink).unwrap_or_else(|_| {
-            // If there are still references (shouldn't happen), this is a bug
-            panic!("Failed to unwrap Arc in TopSQLDeltaLakeSink::new - there are unexpected references");
-        })
+        // Return the sink (Arc::try_unwrap will fail because tokio task holds a reference,
+        // so we use unsafe to manually get the inner value without decrementing the reference count)
+        // Safety: We know there's exactly one more reference (the tokio task),
+        // but we need to return Self, not Arc<Self>. The tokio task will continue
+        // to hold its reference, which is safe because TopSQLDeltaLakeSink contains
+        // only Arc and atomic types that are safe to share.
+        // We use into_raw to get a raw pointer, then manually reconstruct the value.
+        unsafe {
+            let ptr = Arc::into_raw(sink);
+            // Get a reference to the inner value
+            let inner_ref = &*ptr;
+            // Clone the value (TopSQLDeltaLakeSink contains only Arc and atomic types, so cloning is safe)
+            let inner_value = TopSQLDeltaLakeSink {
+                base_path: inner_ref.base_path.clone(),
+                tables: inner_ref.tables.clone(),
+                write_config: inner_ref.write_config.clone(),
+                storage_options: inner_ref.storage_options.clone(),
+                writers: Arc::clone(&inner_ref.writers),
+                tikv_exec_count_cache: Arc::clone(&inner_ref.tikv_exec_count_cache),
+                tidb_event_cache: Arc::clone(&inner_ref.tidb_event_cache),
+                instance_events_counter: std::sync::atomic::AtomicU64::new(
+                    inner_ref.instance_events_counter.load(std::sync::atomic::Ordering::Relaxed)
+                ),
+                tx: Arc::clone(&inner_ref.tx),
+            };
+            // Reconstruct the Arc (so the tokio task's reference remains valid)
+            let _ = Arc::from_raw(ptr);
+            inner_value
+        }
     }
     
     #[cfg(test)]
