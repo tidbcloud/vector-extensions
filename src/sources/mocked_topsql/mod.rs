@@ -29,7 +29,7 @@ pub struct MockedTopSQLConfig {
     pub tikv_number: usize,
 
     /// part instance number
-    pub instance_part_number: usize,
+    pub partition_number: usize,
 
     /// Extra column number
     #[serde(default = "default_extra_column_number")]
@@ -68,7 +68,7 @@ impl GenerateConfig for MockedTopSQLConfig {
             tidb_number: default_tidb_number(),
             tikv_number: default_tikv_number(),
             extra_column_number: default_extra_column_number(),
-            instance_part_number: default_instance_part_number(),
+            partition_number: default_instance_part_number(),
         })
         .unwrap()
     }
@@ -83,7 +83,7 @@ impl SourceConfig for MockedTopSQLConfig {
         let tidb_number = self.tidb_number;
         let tikv_number = self.tikv_number;
         let extra_column_number = self.extra_column_number;
-        let instance_part_number = self.instance_part_number;
+        let instance_part_number = self.partition_number;
 
         Ok(Box::pin(async move {
             let controller = Controller::new(

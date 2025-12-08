@@ -12,6 +12,7 @@ use std::time::Duration;
 use rand::Rng;
 use rand::distr::{Alphanumeric, Uniform, StandardUniform};
 use std::collections::BTreeMap;
+use crc32fast::Hasher as Crc32Hasher;
 
 const SQL_CONSTANT: &str = "SELECT
   `tbl_test_001`.`column0`,
@@ -95,13 +96,13 @@ const PLAN_CONSTANT: &str = "	Projection   	root	db_test_0001.tbl_test_001.colum
 
 fn generate_random_int() -> Vec<i32> {
     let mut rng = rand::rng();
-    let arr1: [i32; 2000] = rng.random();
+    let arr1: [i32; 1000] = rng.random();
     arr1.to_vec()
 }
 
 fn generate_random_bigint() -> Vec<i64> {
     let mut rng = rand::rng();
-    let arr1: [i64; 2000] = rng.random();
+    let arr1: [i64; 1000] = rng.random();
     arr1.to_vec()
 }
 
@@ -119,6 +120,54 @@ fn generate_random_string(num_strings: i32, string_length: usize) -> Vec<String>
 }
 fn generate_random_digest() -> Vec<String> {
     generate_random_string(100000, 64)
+}
+
+fn create_event_for_instance_partition(timestamp: i64, tidb_number: usize, tikv_number: usize, instance_part: usize) -> Vec<Event> {
+    let mut events = vec![];
+    for i in 0..tidb_number {
+        let mut event = Event::Log(LogEvent::default());
+        let log = event.as_mut_log();
+
+        // Add metadata with Vector prefix (ensure all fields have values)
+        log.insert("source_table", "topsql_instance_partition");
+        log.insert("timestamps", LogValue::from(timestamp));
+        log.insert("instance_type", "tidb");
+        log.insert("instance", format!("127.0.1.{}", i));
+
+        // Calculate CRC32 for (instance, instance_type)
+        let instance_key = format!("127.0.1.{}_tidb", i);
+        let mut hasher = Crc32Hasher::new();
+        hasher.update(instance_key.as_bytes());
+        let crc_value = hasher.finalize();
+
+        // Calculate partition by taking modulo
+        // Use max(1, partition_number) to avoid division by zero
+        let partition_mod = if instance_part == 0 { 1 } else { instance_part };
+        let calculated_partition = (crc_value % partition_mod as u32) as u32;        
+        log.insert("instance_part", LogValue::from(calculated_partition));
+        events.push(event);
+    }
+    for i in 0..tikv_number {
+        let mut event = Event::Log(LogEvent::default());
+        let log = event.as_mut_log();
+        log.insert("source_table", "topsql_instance_partition");
+        log.insert("timestamps", LogValue::from(timestamp));
+        log.insert("instance_type", "tikv");
+        log.insert("instance", format!("127.0.0.{}", i));
+        // Calculate CRC32 for (instance, instance_type)
+        let instance_key = format!("127.0.0.{}_tikv", i);
+        let mut hasher = Crc32Hasher::new();
+        hasher.update(instance_key.as_bytes());
+        let crc_value = hasher.finalize();
+
+        // Calculate partition by taking modulo
+        // Use max(1, partition_number) to avoid division by zero
+        let partition_mod = if instance_part == 0 { 1 } else { instance_part };
+        let calculated_partition = (crc_value % partition_mod as u32) as u32;        
+        log.insert("instance_part", LogValue::from(calculated_partition));
+        events.push(event);
+    }
+    events
 }
 
 fn create_event_for_tidb_instance(index : usize) -> Event {
@@ -219,9 +268,6 @@ fn create_event_for_tikv_sql(
     logical_read_vec: &Vec<i64>, logical_write_vec: &Vec<i64>, top_n: usize, instance_part: usize) -> Vec<Event> {
     let mut events = vec![];
     for i in 0..(top_n + top_n) {
-        let i_str_now = i.to_string();
-        let i_str = i_str_now.as_str();
-
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
 
@@ -266,9 +312,6 @@ fn create_event_for_tikv_region(
     logical_read_vec: &Vec<i64>, logical_write_vec: &Vec<i64>, top_n: usize, instance_part: usize) -> Vec<Event> {
     let mut events = vec![];
     for i in 0..(top_n + top_n) {
-        let i_str_now = i.to_string();
-        let i_str = i_str_now.as_str();
-
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
 
@@ -351,24 +394,31 @@ impl Controller {
     }
 
     async fn run_loop(&mut self) {
-        let sql_digest_vec = generate_random_digest();
+        let mut batch = vec![];
+        let mut tidb_events = create_event_for_instance_partition(chrono::Utc::now().timestamp(), self.tidb_number, self.tikv_number, self.instance_part_number);
+        batch.append(tidb_events.as_mut());
+        if self.out.send_batch(batch).await.is_err() {
+            info!(message = "Downstream is closed, stopping TopSQL source.");
+            return;
+        }
         let sql_random_vec = generate_random_string(100000, 10);
         let mut tick_stream = IntervalStream::new(time::interval(Duration::from_secs(1)));
         let mut worker_stream = IntervalStream::new(time::interval(Duration::from_secs(60)));
-        let mut instance_stream = IntervalStream::new(time::interval(Duration::from_secs(30)));
-        let int_vec_1 = generate_random_int();
-        let int_vec_2 = generate_random_int();
-        let int_vec_3 = generate_random_int();
-        let bigint_vec_1 = generate_random_bigint();
-        let bigint_vec_2 = generate_random_bigint();
-        let bigint_vec_3 = generate_random_bigint();
-        let bigint_vec_4 = generate_random_bigint();
+        let mut instance_stream = IntervalStream::new(time::interval(Duration::from_secs(30)));        
         let mut trigger_counter : u64 = 0;
         let mut instance_events_counter : u64 = 0;
         loop {
             tokio::select! {
                 _ = worker_stream.next() => {
                     let timestamp = chrono::Utc::now().timestamp();
+                    let sql_digest_vec = generate_random_digest();
+                    let int_vec_1 = generate_random_int();
+                    let int_vec_2 = generate_random_int();
+                    let int_vec_3 = generate_random_int();
+                    let bigint_vec_1 = generate_random_bigint();
+                    let bigint_vec_2 = generate_random_bigint();
+                    let bigint_vec_3 = generate_random_bigint();
+                    let bigint_vec_4 = generate_random_bigint();                    
                     for index in 0..self.tidb_number {
                         let mut batch = vec![];
                         let (mut sql_events, mut plan_events) = create_event_for_tidb_sql_plan_meta(&sql_digest_vec, &sql_digest_vec, &sql_random_vec, index%20);
@@ -388,7 +438,6 @@ impl Controller {
                     if self.downsampling_interval != 0 {
                         loop_count = 60 / self.downsampling_interval;
                     }
-                    let mut current_time = chrono::Utc::now();
                     for _ in 0..loop_count {
                         for index in 0..self.tidb_number {
                             let mut batch = vec![];
@@ -411,7 +460,6 @@ impl Controller {
                                 break;
                             }
                         }
-                        current_time.checked_add_signed(chrono::Duration::seconds(self.downsampling_interval.into()));
                     }
                 }
                 _ = tick_stream.next() => tokio::time::sleep(Duration::from_millis(50)).await,
@@ -420,7 +468,7 @@ impl Controller {
                     instance_events_counter += self.tidb_number as u64;
                     instance_events_counter += self.tikv_number as u64;
                     for index in 0..self.tidb_number {
-                        let mut instance_event = create_event_for_tidb_instance(index);
+                        let instance_event = create_event_for_tidb_instance(index);
                         if self.out.send_event(instance_event).await.is_err() {
                             info!(message = "Downstream is closed, stopping TopSQL source.");
                             break;
