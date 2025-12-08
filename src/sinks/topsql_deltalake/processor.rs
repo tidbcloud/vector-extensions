@@ -682,17 +682,14 @@ impl StreamSink<Event> for TopSQLDeltaLakeSink {
                     // Successfully sent, clear the cache
                     cur_cached_size = 0;
                     events_cache = vec![];
-                    println!("Successfully sent events");
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Full(restored_events)) => {
                     if should_drop_on_full {
-                        println!("Channel full and timeout exceeded, dropping events");
                         // Timeout exceeded, drop the data
                         error!("Channel full and timeout exceeded, dropping events");
                         cur_cached_size = 0;
                         events_cache = vec![];
                     } else {
-                        println!("Channel full and not timeout exceeded, keep events");
                         // Keep in cache for next retry
                         // Keep cur_cached_size unchanged so we can retry
                         events_cache = restored_events;
@@ -961,7 +958,6 @@ mod tests {
             tokio::time::Duration::from_millis(200),
             rx.recv()
         ).await;
-        println!("second_msg: {:?}", second_msg);
         // The second message should NOT be sent because data was dropped due to timeout
         assert!(second_msg.is_err() || second_msg.unwrap().is_none(), 
                 "Should NOT receive second message as data was dropped due to timeout");
