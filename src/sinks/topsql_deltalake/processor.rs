@@ -50,7 +50,7 @@ lazy_static! {
             }),
         );
         schema_info.insert(
-            "instance_part".into(),
+            "instance_partition_id".into(),
             serde_json::json!({
                 "mysql_type": "bigint",
                 "is_nullable": false
@@ -228,7 +228,7 @@ lazy_static! {
             }),
         );
         schema_info.insert(
-            "partition_id".into(),
+            "instance_partition_id".into(),
             serde_json::json!({
                 "mysql_type": "bigint",
                 "is_nullable": false
@@ -601,7 +601,7 @@ impl TopSQLDeltaLakeSink {
             };
 
             let partition_by = if table_name == "topsql_data" {
-                Some(vec!["date".to_string(), "instance_part".to_string()])
+                Some(vec!["date".to_string(), "instance_partition_id".to_string()])
             } else {
                 Some(vec!["date".to_string()])
             };

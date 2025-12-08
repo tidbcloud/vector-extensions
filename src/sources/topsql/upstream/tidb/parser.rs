@@ -29,6 +29,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         instance: String,
         _schema_cache: Arc<SchemaCache>,
         enable_row_format: bool,
+        instance_partition_id: u32,
     ) -> Vec<LogEvent> {
         if !enable_row_format {
             match response.resp_oneof {
@@ -40,7 +41,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         } else {
             match response.resp_oneof {
                 Some(RespOneof::Record(record)) => {
-                    Self::parse_tidb_record_to_row_format(record, instance)
+                    Self::parse_tidb_record_to_row_format(record, instance, instance_partition_id)
                 }
                 Some(RespOneof::SqlMeta(sql_meta)) => {
                     Self::parse_tidb_sql_meta_to_row_format(sql_meta)
@@ -435,7 +436,7 @@ impl TopSqlSubResponseParser {
     }
 
     // TODO: consider apply chunk style LogEvent for better performance
-    fn parse_tidb_record_to_row_format(record: TopSqlRecord, instance: String) -> Vec<LogEvent> {
+    fn parse_tidb_record_to_row_format(record: TopSqlRecord, instance: String, instance_partition_id: u32) -> Vec<LogEvent> {
         let mut events = vec![];
         for item in &record.items {
             let mut event = Event::Log(LogEvent::default());
@@ -446,6 +447,7 @@ impl TopSqlSubResponseParser {
             log.insert("timestamps", LogValue::from(item.timestamp_sec));
             log.insert("instance_type", INSTANCE_TYPE_TIDB.to_string());
             log.insert("instance", instance.clone());
+            log.insert("instance_partition_id", LogValue::from(instance_partition_id as i64));
             log.insert(
                 LABEL_SQL_DIGEST,
                 hex::encode_upper(record.sql_digest.clone()),

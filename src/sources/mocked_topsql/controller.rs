@@ -122,8 +122,10 @@ fn generate_random_digest() -> Vec<String> {
     generate_random_string(100000, 64)
 }
 
-fn create_event_for_instance_partition(timestamp: i64, tidb_number: usize, tikv_number: usize, instance_part: usize) -> Vec<Event> {
+fn create_event_for_instance_partition(timestamp: i64, tidb_number: usize, tikv_number: usize, instance_part: usize) -> (Vec<Event>, Vec<u32>, Vec<u32>) {
     let mut events = vec![];
+    let mut tidb_instance_partition_vec = vec![];
+    let mut tikv_instance_partition_vec = vec![];
     for i in 0..tidb_number {
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
@@ -143,8 +145,9 @@ fn create_event_for_instance_partition(timestamp: i64, tidb_number: usize, tikv_
         // Calculate partition by taking modulo
         // Use max(1, partition_number) to avoid division by zero
         let partition_mod = if instance_part == 0 { 1 } else { instance_part };
-        let calculated_partition = (crc_value % partition_mod as u32) as u32;        
-        log.insert("instance_part", LogValue::from(calculated_partition));
+        let calculated_partition = (crc_value % partition_mod as u32) as u32;
+        tidb_instance_partition_vec.push(calculated_partition);
+        log.insert("instance_partition_id", LogValue::from(calculated_partition));
         events.push(event);
     }
     for i in 0..tikv_number {
@@ -163,11 +166,12 @@ fn create_event_for_instance_partition(timestamp: i64, tidb_number: usize, tikv_
         // Calculate partition by taking modulo
         // Use max(1, partition_number) to avoid division by zero
         let partition_mod = if instance_part == 0 { 1 } else { instance_part };
-        let calculated_partition = (crc_value % partition_mod as u32) as u32;        
-        log.insert("instance_part", LogValue::from(calculated_partition));
+        let calculated_partition = (crc_value % partition_mod as u32) as u32;
+        tikv_instance_partition_vec.push(calculated_partition);
+        log.insert("instance_partition_id", LogValue::from(calculated_partition));
         events.push(event);
     }
-    events
+    (events, tidb_instance_partition_vec, tikv_instance_partition_vec)
 }
 
 fn create_event_for_tidb_instance(index : usize) -> Event {
@@ -235,7 +239,7 @@ fn create_event_for_tidb_sql(index: usize, timestamp: i64, sql_digest_vec: &Vec<
         log.insert("time", LogValue::from(timestamp));
         log.insert("instance_type", "tidb");
         log.insert("instance", format!("127.0.1.{}", index));
-        log.insert("instance_part", LogValue::from(instance_part));
+        log.insert("instance_partition_id", LogValue::from(instance_part));
         log.insert("sql_digest", sql_digest_vec[i+index].clone());
         log.insert("plan_digest", plan_digest_vec[i+index].clone());
         log.insert("topsql_cpu_time_ms", LogValue::from(cpu_time_vec[i]));
@@ -277,7 +281,7 @@ fn create_event_for_tikv_sql(
         log.insert("time", LogValue::from(timestamp));
         log.insert("instance_type", "tikv");
         log.insert("instance", format!("127.0.0.{}", index));
-        log.insert("instance_part", LogValue::from(instance_part));
+        log.insert("instance_partition_id", LogValue::from(instance_part));
         log.insert("sql_digest", sql_digest_vec[i+index].clone());
         log.insert("plan_digest", plan_digest_vec[i+index].clone());
         log.insert("topsql_cpu_time_ms", LogValue::from(cpu_time_vec[i]));
@@ -321,7 +325,7 @@ fn create_event_for_tikv_region(
         log.insert("time", LogValue::from(timestamp));
         log.insert("instance_type", "tikv");
         log.insert("instance", format!("127.0.0.{}", index));
-        log.insert("instance_part", LogValue::from(instance_part));
+        log.insert("instance_partition_id", LogValue::from(instance_part));
         log.insert("region_id", LogValue::from(region_id_vec[i]));
         log.insert("topsql_cpu_time_ms", LogValue::from(cpu_time_vec[i]));
         log.insert("topsql_read_keys", LogValue::from(read_keys_vec[i]));
@@ -395,8 +399,8 @@ impl Controller {
 
     async fn run_loop(&mut self) {
         let mut batch = vec![];
-        let mut tidb_events = create_event_for_instance_partition(chrono::Utc::now().timestamp(), self.tidb_number, self.tikv_number, self.instance_part_number);
-        batch.append(tidb_events.as_mut());
+        let (mut tidb_events, tidb_instance_partition_vec, tikv_instance_partition_vec) = create_event_for_instance_partition(chrono::Utc::now().timestamp(), self.tidb_number, self.tikv_number, self.instance_part_number);
+        batch.append(&mut tidb_events);
         if self.out.send_batch(batch).await.is_err() {
             info!(message = "Downstream is closed, stopping TopSQL source.");
             return;
@@ -442,7 +446,7 @@ impl Controller {
                         for index in 0..self.tidb_number {
                             let mut batch = vec![];
                             let mut tidb_events = create_event_for_tidb_sql(index, timestamp, &sql_digest_vec, &sql_digest_vec, &int_vec_1,
-                                &bigint_vec_1, &bigint_vec_2, &bigint_vec_3, &bigint_vec_4, self.top_n, index%self.instance_part_number as usize);
+                                &bigint_vec_1, &bigint_vec_2, &bigint_vec_3, &bigint_vec_4, self.top_n, tidb_instance_partition_vec[index] as usize);
                             batch.append(tidb_events.as_mut());
                             if self.out.send_batch(batch).await.is_err() {
                                 info!(message = "Downstream is closed, stopping TopSQL source.");
@@ -452,9 +456,9 @@ impl Controller {
                         for index in 0..self.tikv_number {
                             let mut batch = vec![];
                             batch.append(create_event_for_tikv_sql(index, timestamp, &sql_digest_vec, &sql_digest_vec, &int_vec_1,
-                                &int_vec_2, &bigint_vec_1, &bigint_vec_2, &bigint_vec_3, &bigint_vec_4, self.top_n, index%self.instance_part_number as usize).as_mut());
+                                &int_vec_2, &bigint_vec_1, &bigint_vec_2, &bigint_vec_3, &bigint_vec_4, self.top_n, tikv_instance_partition_vec[index] as usize).as_mut());
                             batch.append(create_event_for_tikv_region(index, timestamp, &int_vec_1,
-                                &int_vec_2, &int_vec_3, &bigint_vec_1, &bigint_vec_2, &bigint_vec_3, &bigint_vec_4, self.top_n, index%self.instance_part_number as usize).as_mut());
+                                &int_vec_2, &int_vec_3, &bigint_vec_1, &bigint_vec_2, &bigint_vec_3, &bigint_vec_4, self.top_n, tikv_instance_partition_vec[index] as usize).as_mut());
                             if self.out.send_batch(batch).await.is_err() {
                                 info!(message = "Downstream is closed, stopping TopSQL source. {}",);
                                 break;

@@ -86,7 +86,8 @@ struct BaseTopSQLSource {
     downsampling_interval: u32,
     schema_cache: Arc<SchemaCache>,
     enable_row_format: bool,
-    partition_number: u32,
+    partition_number: u32, // Only used when enable_row_format is true
+    instance_partition_id: u32, // Only used when enable_row_format is true and partition_number > 0
 }
 
 impl BaseTopSQLSource {
@@ -125,6 +126,7 @@ impl BaseTopSQLSource {
                 schema_cache,
                 enable_row_format,
                 partition_number,
+                instance_partition_id: 0,
             }),
             None => None,
         }
@@ -281,6 +283,7 @@ impl BaseTopSQLSource {
                 self.instance.clone(),
                 self.schema_cache.clone(),
                 self.enable_row_format,
+                self.instance_partition_id,
             );
             batch.append(&mut events);
         }
@@ -307,28 +310,31 @@ impl BaseTopSQLSource {
         self.retry_delay = self.init_retry_delay;
         info!("Connected to the upstream.");
 
-        // Calculate CRC32 for (instance, instance_type)
-        let instance_key = format!("{}_{}", self.instance, self.instance_type);
-        let mut hasher = Crc32Hasher::new();
-        hasher.update(instance_key.as_bytes());
-        let crc_value = hasher.finalize();
+        if self.enable_row_format && self.partition_number > 0 {
+            // Calculate CRC32 for (instance, instance_type)
+            let instance_key = format!("{}_{}", self.instance, self.instance_type);
+            let mut hasher = Crc32Hasher::new();
+            hasher.update(instance_key.as_bytes());
+            let crc_value = hasher.finalize();
 
-        // Calculate partition by taking modulo
-        // Use max(1, partition_number) to avoid division by zero
-        let partition_mod = if self.partition_number == 0 { 1 } else { self.partition_number };
-        let calculated_partition = (crc_value % partition_mod as u32) as u32;
+            // Calculate partition by taking modulo
+            // Use max(1, partition_number) to avoid division by zero
+            let partition_number = if self.partition_number == 0 { 1 } else { self.partition_number };
+            let instance_partition_id = (crc_value % partition_number as u32) as u32;
+            self.instance_partition_id = instance_partition_id;
 
-        // Create and send LogEvent with (instance, instance_type, partition_number)
-        let mut event = Event::Log(LogEvent::default());
-        let log = event.as_mut_log();
-        log.insert("source_table", "topsql_instance_partition");
-        log.insert("timestamps", LogValue::from(Utc::now().timestamp()));
-        log.insert("instance", self.instance.clone());
-        log.insert("instance_type", self.instance_type.to_string());
-        log.insert("partition_id", LogValue::from(calculated_partition as i64));
+            // Create and send LogEvent with (instance, instance_type, partition_number)
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
+            log.insert("source_table", "topsql_instance_partition");
+            log.insert("timestamps", LogValue::from(Utc::now().timestamp()));
+            log.insert("instance", self.instance.clone());
+            log.insert("instance_type", self.instance_type.to_string());
+            log.insert("instance_partition_id", LogValue::from(instance_partition_id as i64));
 
-        if self.out.send_event(event).await.is_err() {
-            StreamClosedError { count: 1 }.emit();
+            if self.out.send_event(event).await.is_err() {
+                StreamClosedError { count: 1 }.emit();
+            }
         }
     }
 }

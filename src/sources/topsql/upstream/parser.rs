@@ -19,6 +19,7 @@ pub trait UpstreamEventParser {
         instance: String,
         schema_cache: Arc<SchemaCache>,
         enable_row_format: bool,
+        instance_partition_id: u32,
     ) -> Vec<LogEvent>;
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent>;

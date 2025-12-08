@@ -27,6 +27,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         instance: String,
         schema_cache: Arc<SchemaCache>,
         enable_row_format: bool,
+        instance_partition_id: u32,
     ) -> Vec<LogEvent> {
         if !enable_row_format {
             match response.record_oneof {
@@ -41,10 +42,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         } else {
             match response.record_oneof {
                 Some(RecordOneof::Record(record)) => {
-                    Self::parse_tikv_record_for_row_format(record, instance, schema_cache)
+                    Self::parse_tikv_record_for_row_format(record, instance, schema_cache, instance_partition_id)
                 }
                 Some(RecordOneof::RegionRecord(record)) => {
-                    Self::parse_tikv_region_record_for_row_format(record, instance, schema_cache)
+                    Self::parse_tikv_region_record_for_row_format(record, instance, schema_cache, instance_partition_id)
                 }
                 None => vec![],
             }
@@ -424,6 +425,7 @@ impl ResourceUsageRecordParser {
         record: GroupTagRecord,
         instance: String,
         schema_cache: Arc<SchemaCache>,
+        instance_partition_id: u32,
     ) -> Vec<LogEvent> {
         // Log schema cache info
         debug!(
@@ -459,6 +461,7 @@ impl ResourceUsageRecordParser {
             log.insert("timestamps", LogValue::from(item.timestamp_sec));
             log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
             log.insert("instance", instance.clone());
+            log.insert("instance_partition_id", LogValue::from(instance_partition_id as i64));
             log.insert(LABEL_SQL_DIGEST, sql_digest.clone());
             log.insert(LABEL_PLAN_DIGEST, plan_digest.clone());
             log.insert("tag_label", tag_label.clone());
@@ -493,6 +496,7 @@ impl ResourceUsageRecordParser {
         record: RegionRecord,
         instance: String,
         schema_cache: Arc<SchemaCache>,
+        instance_partition_id: u32,
     ) -> Vec<LogEvent> {
         // Log schema cache info
         debug!(
@@ -510,6 +514,7 @@ impl ResourceUsageRecordParser {
             log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
             log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
             log.insert("instance", instance.clone());
+            log.insert("instance_partition_id", LogValue::from(instance_partition_id as i64));
             log.insert(LABEL_REGION_ID, record.region_id.to_string());
             log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
             log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
