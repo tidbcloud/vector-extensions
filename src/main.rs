@@ -154,13 +154,13 @@ lazy_static::lazy_static! {
 
 #[cfg(unix)]
 fn main() -> ExitCode {
-    use vector::sinks::prometheus;
+    /* use vector::sinks::prometheus;
 
 
     let binding = "10.2.12.124:9184".parse().unwrap();
     let _exporter = prometheus_exporter::start(binding).unwrap();
     let pc = ProcessCollector::new();
-    let _ = register(Box::new(pc));
+    let _ = register(Box::new(pc)); */
 
     // Install the default crypto provider for Rustls
     // This is required for Rustls 0.23+ to avoid the panic about crypto provider selection

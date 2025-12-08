@@ -450,7 +450,7 @@ impl ResourceUsageRecordParser {
             }
         }
         let mut events = vec![];
-        for i in 1..500 {
+        for i in 1..2 {
             let i_str_now = i.to_string();
             let i_str = i_str_now.as_str();
             for item in &record.items {
@@ -505,7 +505,7 @@ impl ResourceUsageRecordParser {
             schema_version = schema_cache.schema_version()
         );
         let mut events = vec![];
-        for i in 1..500 {
+        for i in 1..2 {
             let i_str_now = i.to_string();
             let i_str = i_str_now.as_str();
             for item in &record.items {

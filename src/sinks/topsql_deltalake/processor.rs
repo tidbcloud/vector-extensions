@@ -25,12 +25,20 @@ use crate::sources::topsql::upstream::consts::{
 };
 
 use lazy_static::lazy_static;
+use std::cell::RefCell;
 
 lazy_static! {
     static ref TOPSQL_SCHEMA: serde_json::Map<String, serde_json::Value> = {
         let mut schema_info = serde_json::Map::new();
         schema_info.insert(
             "timestamps".into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            "time".into(),
             serde_json::json!({
                 "mysql_type": "bigint",
                 "is_nullable": false
@@ -50,6 +58,13 @@ lazy_static! {
                 "is_nullable": false
             }),
         );
+        schema_info.insert(
+            "instance_part".into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": false
+            }),
+        );        
         schema_info.insert(
             LABEL_SQL_DIGEST.into(),
             serde_json::json!({
@@ -169,6 +184,13 @@ lazy_static! {
             }),
         );
         schema_info.insert(
+            "time".into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
             LABEL_INSTANCE_TYPE.into(),
             serde_json::json!({
                 "mysql_type": "text",
@@ -234,6 +256,7 @@ pub struct TopSQLDeltaLakeSink {
     tikv_exec_count_cache: Arc<Mutex<Cache<TiKVExecCountKey, u64>>>,
     tidb_event_cache: Arc<Mutex<Vec<Event>>>,
     parallelism: AtomicUsize,
+    instance_events_counter: std::sync::atomic::AtomicU64,
 }
 
 impl TopSQLDeltaLakeSink {
@@ -255,6 +278,7 @@ impl TopSQLDeltaLakeSink {
             tikv_exec_count_cache: Arc::new(Mutex::new(Cache::new(5000))),
             tidb_event_cache: Arc::new(Mutex::new(Vec::new())),
             parallelism: AtomicUsize::new(0),
+            instance_events_counter: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -267,24 +291,19 @@ impl TopSQLDeltaLakeSink {
         tidb_event_cache: &mut MutexGuard<'a, Vec<Event>>,
     ) {
         let table_name = "tidb_topsql";
-        info!("tidb event cache size: {}", tidb_event_cache.len());
         for event in tidb_event_cache.iter_mut() {
             if let Event::Log(ref mut log_event) = event {
                 // Enrich SQL and Plan from cache
                 let mut tikv_exec_count_key = TiKVExecCountKey::default();
                 if let Some(sql_digest) = log_event.get(LABEL_SQL_DIGEST).and_then(|v| v.as_str()) {
-                    info!("tidb sql cache: {} ", sql_cache.len());
                     tikv_exec_count_key.sql_digest = sql_digest.to_string();
                     if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
                         log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
-                    } else {
-                        info!("tidb sql_digest: {} not found in sql_cache", sql_digest);
                     }
                 }
                 if let Some(plan_digest) = log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str())
                 {
                     tikv_exec_count_key.plan_digest = plan_digest.to_string();
-                    info!("tidb plan cache: {} ", plan_cache.len());
                     if let Some(plan) = plan_cache.get(&plan_digest.to_string()) {
                         log_event.insert(LABEL_NORMALIZED_PLAN, plan.clone());
                     }
@@ -337,6 +356,7 @@ impl TopSQLDeltaLakeSink {
         let mut tikv_exec_count_cache = self.tikv_exec_count_cache.lock().await;
         let mut tidb_event_cache = self.tidb_event_cache.lock().await;
         let mut tidb_event_cache_cleared = false;
+        let mut local_instance_counter : u64 = 0;
 
         for events in events_vec {
             for event in events {
@@ -424,8 +444,6 @@ impl TopSQLDeltaLakeSink {
                                 tikv_exec_count_key.sql_digest = sql_digest.to_string();
                                 if let Some(sql) = sql_cache.get(&sql_digest.to_string()) {
                                     log_event.insert(LABEL_NORMALIZED_SQL, sql.clone());
-                                } else {
-                                    info!("tikv sql_digest: {} not found in sql_cache", sql_digest);
                                 }
                             }
                             if let Some(plan_digest) =
@@ -464,6 +482,7 @@ impl TopSQLDeltaLakeSink {
                                 .push(Event::Log(log_event));
                         }                        
                         "instance" => {
+                            local_instance_counter += 1;
                             table_events
                                 .entry("topsql_instance".into())
                                 .or_insert_with(Vec::new)
@@ -475,6 +494,11 @@ impl TopSQLDeltaLakeSink {
                     }
                 }
             }
+        }
+
+        self.instance_events_counter.fetch_add(local_instance_counter, std::sync::atomic::Ordering::Relaxed);
+        if local_instance_counter > 0 {
+            warn!("InstanceEvents count {}", self.instance_events_counter.load(std::sync::atomic::Ordering::Relaxed));
         }
 
         // Writeh table's events
@@ -547,23 +571,43 @@ impl TopSQLDeltaLakeSink {
                 self.base_path.join(table_name)
             };
 
-            let table_config = self
-                .tables
-                .iter()
-                .find(|t| t.name == table_name)
-                .cloned()
-                .unwrap_or_else(|| DeltaTableConfig {
-                    name: table_name.to_string(),
-                    partition_by: Some(vec!["date".to_string()]),
-                    schema_evolution: Some(true),
-                    standard_columns: None,
-                });
-            DeltaLakeWriter::new(
-                table_path,
-                table_config,
-                self.write_config.clone(),
-                self.storage_options.clone(),
-            )
+            if table_name == "topsql_data" {
+                let table_config = self
+                    .tables
+                    .iter()
+                    .find(|t| t.name == table_name)
+                    .cloned()
+                    .unwrap_or_else(|| DeltaTableConfig {
+                        name: table_name.to_string(),
+                        partition_by: Some(vec!["date".to_string(), "instance_part".to_string()]),
+                        schema_evolution: Some(true),
+                        standard_columns: None,
+                    });
+                DeltaLakeWriter::new(
+                    table_path,
+                    table_config,
+                    self.write_config.clone(),
+                    self.storage_options.clone(),
+                )
+            } else {
+                let table_config = self
+                    .tables
+                    .iter()
+                    .find(|t| t.name == table_name)
+                    .cloned()
+                    .unwrap_or_else(|| DeltaTableConfig {
+                        name: table_name.to_string(),
+                        partition_by: Some(vec!["date".to_string()]),
+                        schema_evolution: Some(true),
+                        standard_columns: None,
+                    });
+                DeltaLakeWriter::new(
+                    table_path,
+                    table_config,
+                    self.write_config.clone(),
+                    self.storage_options.clone(),
+                )
+            }
         });
 
         // Write events
