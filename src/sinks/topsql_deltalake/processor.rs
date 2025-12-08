@@ -254,7 +254,7 @@ pub struct TopSQLDeltaLakeSink {
     tikv_exec_count_cache: Arc<Mutex<Cache<TiKVExecCountKey, u64>>>,
     tidb_event_cache: Arc<Mutex<Vec<Event>>>,
     instance_events_counter: std::sync::atomic::AtomicU64,
-    tx: Arc<mpsc::Sender<(Vec<Vec<Event>>, bool)>>,
+    tx: Arc<mpsc::Sender<Vec<Vec<Event>>>>,
 }
 
 impl TopSQLDeltaLakeSink {
@@ -284,7 +284,7 @@ impl TopSQLDeltaLakeSink {
             tx: Arc::clone(&tx),
         });
         
-        // Spawn process_events_loop as a separate tokio task
+        // Spawn process_events_loop as a separate tokio task to avoid blocking
         let sink_clone = Arc::clone(&sink);
         tokio::spawn(async move {
             sink_clone.process_events_loop(rx).await;
@@ -307,9 +307,9 @@ impl TopSQLDeltaLakeSink {
         tables: Vec<DeltaTableConfig>,
         write_config: WriteConfig,
         storage_options: Option<HashMap<String, String>>,
-    ) -> (Self, mpsc::Receiver<(Vec<Vec<Event>>, bool)>) {
+    ) -> (Self, mpsc::Receiver<Vec<Vec<Event>>>) {
         // Create a channel with capacity 1
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, rx): (mpsc::Sender<Vec<Vec<Event>>>, mpsc::Receiver<Vec<Vec<Event>>>) = mpsc::channel(1);
         let tx = Arc::new(tx);
         
         // Create sink instance (without starting process_events_loop)
@@ -392,10 +392,10 @@ impl TopSQLDeltaLakeSink {
     /// Process events from channel and write to Delta Lake
     async fn process_events_loop(
         &self,
-        mut rx: mpsc::Receiver<(Vec<Vec<Event>>, bool)>,
+        mut rx: mpsc::Receiver<Vec<Vec<Event>>>,
     ) {
-        while let Some((events_vec, cache_tidb_events)) = rx.recv().await {
-            if let Err(e) = self.process_events(events_vec, cache_tidb_events).await {
+        while let Some(events_vec) = rx.recv().await {
+            if let Err(e) = self.process_events(events_vec).await {
                 error!("Failed to process events: {}", e);
             }
         }
@@ -405,7 +405,6 @@ impl TopSQLDeltaLakeSink {
     async fn process_events(
         &self,
         events_vec: Vec<Vec<Event>>,
-        cache_tidb_events: bool,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if events_vec.is_empty() {
             return Ok(());
@@ -478,10 +477,8 @@ impl TopSQLDeltaLakeSink {
                                 });
                         }
                         "tidb_topsql" => {
-                            if cache_tidb_events {
-                                tidb_event_cache.push(Event::Log(log_event.clone()));
-                                continue;
-                            }
+                            tidb_event_cache.push(Event::Log(log_event.clone()));
+                            continue;
                         }
                         "tikv_topsql" => {
                             // handle tidb events first, since tikv events may depend on tidb's tikv_exec_count info
@@ -723,35 +720,45 @@ impl StreamSink<Event> for TopSQLDeltaLakeSink {
 
             // Send events to process_events through channel
             let should_drop_on_full = latest_timestamp >= oldest_timestamp + 180;
-            match tx.try_send((events_cache, true)) {
+            match tx.try_send(events_cache) {
                 Ok(_) => {
                     // Successfully sent, clear the cache
                     cur_cached_size = 0;
                     events_cache = vec![];
+                    println!("Successfully sent events");
                 }
-                Err(tokio::sync::mpsc::error::TrySendError::Full(payload)) => {
-                    let (restored_events, _) = payload;
+                Err(tokio::sync::mpsc::error::TrySendError::Full(restored_events)) => {
                     if should_drop_on_full {
+                        println!("Channel full and timeout exceeded, dropping events");
                         // Timeout exceeded, drop the data
                         error!("Channel full and timeout exceeded, dropping events");
                         cur_cached_size = 0;
                         events_cache = vec![];
                     } else {
+                        println!("Channel full and not timeout exceeded, keep events");
                         // Keep in cache for next retry
-                        error!("Channel full, keeping events in cache for retry");
-                        events_cache = restored_events;
                         // Keep cur_cached_size unchanged so we can retry
+                        events_cache = restored_events;
                     }
                 }
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(payload)) => {
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(restored_events)) => {
                     // Receiver closed, restore events_cache and keep it for next retry
-                    let (restored_events, _) = payload;
                     error!("Channel closed, keeping events in cache");
                     events_cache = restored_events;
                     // Keep cur_cached_size unchanged so we can retry
                 }
             }
         }
+        
+        // When the input stream ends, try to send any remaining cached events
+        if !events_cache.is_empty() {
+            // Send remaining events, wait if channel is full
+            if let Err(_) = tx.send(events_cache).await {
+                // Receiver closed, log error
+                error!("Channel closed when flushing remaining events, dropping events");
+            }
+        }
+        
         // Note: We don't drop tx here as it's owned by the sink and may be used by other run() calls
         // The channel will be closed when the sink is dropped
         Ok(())
@@ -773,21 +780,7 @@ mod tests {
         event
     }
 
-    fn create_test_sink(batch_size: usize) -> TopSQLDeltaLakeSink {
-        TopSQLDeltaLakeSink::new(
-            PathBuf::from("/tmp/test"),
-            vec![],
-            WriteConfig {
-                batch_size,
-                max_row_group_size: 8192,
-                timeout_secs: 0,
-                compression: "snappy".to_string(),
-            },
-            None,
-        )
-    }
-
-    fn create_test_sink_with_receiver(batch_size: usize) -> (TopSQLDeltaLakeSink, mpsc::Receiver<(Vec<Vec<Event>>, bool)>) {
+    fn create_test_sink_with_receiver(batch_size: usize) -> (TopSQLDeltaLakeSink, mpsc::Receiver<Vec<Vec<Event>>>) {
         TopSQLDeltaLakeSink::new_for_test(
             PathBuf::from("/tmp/test"),
             vec![],
@@ -829,9 +822,8 @@ mod tests {
         ).await;
         
         assert!(received.is_ok(), "Should receive a message from channel");
-        if let Ok(Some((events_vec, cache_tidb_events))) = received {
+        if let Ok(Some(events_vec)) = received {
             // Verify the message content
-            assert_eq!(cache_tidb_events, true, "cache_tidb_events should be true");
             // Count total events
             let total_events: usize = events_vec.iter().map(|v| v.len()).sum();
             assert_eq!(total_events, batch_size, "Should receive exactly batch_size events");
@@ -882,16 +874,11 @@ mod tests {
         ).await;
         
         assert!(received.is_ok(), "Should receive a message from channel due to timeout");
-        if let Ok(Some((events_vec, cache_tidb_events))) = received {
+        if let Ok(Some(events_vec)) = received {
             // Verify the message content
-            assert_eq!(cache_tidb_events, true, "cache_tidb_events should be true");
             // Verify events were sent
             let total_events: usize = events_vec.iter().map(|v| v.len()).sum();
-            assert!(total_events > 0, "Should receive events");
             assert_eq!(total_events, 2, "Should receive both events (oldest and latest)");
-            
-            // Verify event structure
-            assert!(!events_vec.is_empty(), "Events vector should not be empty");
         } else {
             panic!("Failed to receive message from channel");
         }
@@ -922,8 +909,6 @@ mod tests {
         
         // Don't consume from rx immediately to fill the channel
         // Wait a bit for the first message to be sent
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        
         // The channel should be full now, and subsequent sends should keep data in cache
         // Since we're not consuming, the channel stays full
         // After a bit more time, the run should complete
@@ -932,9 +917,8 @@ mod tests {
         // Now consume the first message
         let first_msg = rx.recv().await;
         assert!(first_msg.is_some(), "Should receive first message");
-        if let Some((events_vec, cache_tidb_events)) = first_msg {
+        if let Some(events_vec) = first_msg {
             // Verify first message content
-            assert_eq!(cache_tidb_events, true, "cache_tidb_events should be true");
             let total_events: usize = events_vec.iter().map(|v| v.len()).sum();
             assert_eq!(total_events, batch_size, "First message should contain batch_size events");
         }
@@ -950,9 +934,8 @@ mod tests {
         
         // The second batch should eventually be sent (kept in cache and retried)
         assert!(second_msg.is_ok(), "Should eventually receive second message after retry");
-        if let Ok(Some((events_vec, cache_tidb_events))) = second_msg {
+        if let Ok(Some(events_vec)) = second_msg {
             // Verify second message content
-            assert_eq!(cache_tidb_events, true, "cache_tidb_events should be true");
             let total_events: usize = events_vec.iter().map(|v| v.len()).sum();
             assert_eq!(total_events, batch_size, "Second message should contain batch_size events");
         }
@@ -973,7 +956,10 @@ mod tests {
             events.push(create_test_event(1000 + i as i64));
         }
         // Then an event at 1181 (exceeds timeout)
-        events.push(create_test_event(1181));
+        for i in 0..batch_size {
+            events.push(create_test_event(1005 + i as i64));
+        }
+        events.push(create_test_event(1186));
         
         let input_stream = stream::iter(events.clone()).boxed();
         let sink_box = Box::new(sink);
@@ -987,14 +973,13 @@ mod tests {
         // Wait for first message to be sent
         // Channel should be full now
         // When the timeout event arrives and channel is full, data should be dropped
-        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         
         // Consume the first message
         let first_msg = rx.recv().await;
         assert!(first_msg.is_some(), "Should receive first message");
-        if let Some((events_vec, cache_tidb_events)) = first_msg {
+        if let Some(events_vec) = first_msg {
             // Verify first message content
-            assert_eq!(cache_tidb_events, true, "cache_tidb_events should be true");
             let total_events: usize = events_vec.iter().map(|v| v.len()).sum();
             assert_eq!(total_events, batch_size, "First message should contain batch_size events");
             
@@ -1019,7 +1004,7 @@ mod tests {
             tokio::time::Duration::from_millis(200),
             rx.recv()
         ).await;
-        
+        println!("second_msg: {:?}", second_msg);
         // The second message should NOT be sent because data was dropped due to timeout
         assert!(second_msg.is_err() || second_msg.unwrap().is_none(), 
                 "Should NOT receive second message as data was dropped due to timeout");
@@ -1063,9 +1048,8 @@ mod tests {
         
         // With the current implementation, when stream ends, remaining cache might be sent
         // So we check if a message was received and verify its content
-        if let Ok(Some((events_vec, cache_tidb_events))) = received {
+        if let Ok(Some(events_vec)) = received {
             // Verify the message content
-            assert_eq!(cache_tidb_events, true);
             let total_events: usize = events_vec.iter().map(|v| v.len()).sum();
             assert_eq!(total_events, 3, "Should receive the 3 events that were cached");
         } else {
@@ -1102,16 +1086,15 @@ mod tests {
         ).await;
         
         assert!(received.is_ok(), "Should receive a message from channel");
-        if let Ok(Some((events_vec, cache_tidb_events))) = received {
+        if let Ok(Some(events_vec)) = received {
             // Verify the message content
-            assert_eq!(cache_tidb_events, true);
             // Count total events
             let total_events: usize = events_vec.iter().map(|v| v.len()).sum();
             assert_eq!(total_events, batch_size, "Should receive exactly batch_size events");
             
             // Verify event timestamps
-            for (i, event_batch) in events_vec.iter().enumerate() {
-                for event in event_batch {
+            for event_batch in events_vec {
+                for (i, event) in event_batch.iter().enumerate() {
                     if let Event::Log(ref log_event) = event {
                         if let Some(timestamp) = log_event.get("timestamps").and_then(|v| v.as_integer()) {
                             assert_eq!(timestamp, 1000 + i as i64, "Event timestamp should match");
@@ -1158,9 +1141,8 @@ mod tests {
         ).await;
         
         assert!(received.is_ok(), "Should receive a message from channel due to timeout");
-        if let Ok(Some((events_vec, cache_tidb_events))) = received {
+        if let Ok(Some(events_vec)) = received {
             // Verify the message content
-            assert_eq!(cache_tidb_events, true);
             // Count total events
             let total_events: usize = events_vec.iter().map(|v| v.len()).sum();
             assert_eq!(total_events, 2, "Should receive both events");
@@ -1215,7 +1197,6 @@ mod tests {
                 tokio::time::Duration::from_millis(500),
                 rx.recv()
             ).await;
-            
             if let Ok(Some(msg)) = received {
                 received_messages.push(msg);
             } else {
@@ -1224,17 +1205,15 @@ mod tests {
         }
         
         // Verify we received the expected number of batches
-        assert!(received_messages.len() > 0, "Should receive at least one batch");
-        
+        assert!(received_messages.len() >= 1);
         // Verify total events received
         let total_received: usize = received_messages.iter()
-            .map(|(events_vec, _)| events_vec.iter().map(|v| v.len()).sum::<usize>())
+            .map(|events_vec| events_vec.iter().map(|v| v.len()).sum::<usize>())
             .sum();
         assert_eq!(total_received, total_events, "Should receive all events across batches");
         
-        // Verify each message has cache_tidb_events = true
-        for (events_vec, cache_tidb_events) in &received_messages {
-            assert_eq!(*cache_tidb_events, true, "All messages should have cache_tidb_events = true");
+        // Verify each message
+        for events_vec in &received_messages {
             assert!(!events_vec.is_empty(), "Each batch should contain events");
         }
         
