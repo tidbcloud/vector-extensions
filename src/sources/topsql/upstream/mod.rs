@@ -25,6 +25,7 @@ use vector_lib::{
     event::{Event, LogEvent, Value as LogValue},
 };
 use chrono::Utc;
+use crc32fast::Hasher as Crc32Hasher;
 
 use crate::common::topology::{Component, InstanceType};
 use crate::sources::topsql::{
@@ -85,6 +86,7 @@ struct BaseTopSQLSource {
     downsampling_interval: u32,
     schema_cache: Arc<SchemaCache>,
     enable_row_format: bool,
+    partition_number: u32,
 }
 
 impl BaseTopSQLSource {
@@ -97,6 +99,7 @@ impl BaseTopSQLSource {
         downsampling_interval: u32,
         schema_cache: Arc<SchemaCache>,
         enable_row_format: bool,
+        partition_number: u32,
     ) -> Option<Self> {
         let protocal = if tls.is_none() {
             "http".into()
@@ -121,6 +124,7 @@ impl BaseTopSQLSource {
                 downsampling_interval,
                 schema_cache,
                 enable_row_format,
+                partition_number,
             }),
             None => None,
         }
@@ -180,7 +184,7 @@ impl BaseTopSQLSource {
             Ok(stream) => stream,
             Err(state) => return state,
         };
-        self.on_connected();
+        self.on_connected().await;
 
         let mut tick_stream = IntervalStream::new(time::interval(Duration::from_secs(1)));
         let mut instance_stream = IntervalStream::new(time::interval(Duration::from_secs(30)));
@@ -299,9 +303,33 @@ impl BaseTopSQLSource {
             .await;
     }
 
-    fn on_connected(&mut self) {
+    async fn on_connected(&mut self) {
         self.retry_delay = self.init_retry_delay;
         info!("Connected to the upstream.");
+
+        // Calculate CRC32 for (instance, instance_type)
+        let instance_key = format!("{}_{}", self.instance, self.instance_type);
+        let mut hasher = Crc32Hasher::new();
+        hasher.update(instance_key.as_bytes());
+        let crc_value = hasher.finalize();
+
+        // Calculate partition by taking modulo
+        // Use max(1, partition_number) to avoid division by zero
+        let partition_mod = if self.partition_number == 0 { 1 } else { self.partition_number };
+        let calculated_partition = (crc_value % partition_mod as u32) as u32;
+
+        // Create and send LogEvent with (instance, instance_type, partition_number)
+        let mut event = Event::Log(LogEvent::default());
+        let log = event.as_mut_log();
+        log.insert("source_table", "topsql_instance_partition");
+        log.insert("timestamps", LogValue::from(Utc::now().timestamp()));
+        log.insert("instance", self.instance.clone());
+        log.insert("instance_type", self.instance_type.to_string());
+        log.insert("partition_id", LogValue::from(calculated_partition as i64));
+
+        if self.out.send_event(event).await.is_err() {
+            StreamClosedError { count: 1 }.emit();
+        }
     }
 }
 
@@ -354,6 +382,7 @@ impl LegacyTopSQLSource {
         downsampling_interval: u32,
         schema_cache: Arc<SchemaCache>,
         enable_row_format: bool,
+        partition_number: u32,
     ) -> Option<Self> {
         let base = BaseTopSQLSource::new(
             component,
@@ -364,6 +393,7 @@ impl LegacyTopSQLSource {
             downsampling_interval,
             schema_cache,
             enable_row_format,
+            partition_number,
         )?;
         Some(LegacyTopSQLSource { base })
     }
@@ -455,6 +485,8 @@ impl NextgenTopSQLSource {
         downsampling_interval: u32,
         schema_cache: Arc<SchemaCache>,
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
+        enable_row_format: bool,
+        partition_number: u32,
     ) -> Option<Self> {
         let base = BaseTopSQLSource::new(
             component,
@@ -464,7 +496,8 @@ impl NextgenTopSQLSource {
             top_n,
             downsampling_interval,
             schema_cache,
-            false,
+            enable_row_format,
+            partition_number,
         )?;
         let behavior = NextgenTopSQLBehavior {
             keyspace_to_vmtenants,
@@ -494,6 +527,7 @@ impl TopSQLSource {
         schema_cache: Arc<SchemaCache>,
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
         enable_row_format: bool,
+        partition_number: u32,
     ) -> Option<Self> {
         use crate::common::features::is_nextgen_mode;
 
@@ -507,6 +541,8 @@ impl TopSQLSource {
                 downsampling_interval,
                 schema_cache,
                 keyspace_to_vmtenants,
+                enable_row_format,
+                partition_number,
             )?;
             Some(TopSQLSource::Nextgen(source))
         } else {
@@ -519,6 +555,7 @@ impl TopSQLSource {
                 downsampling_interval,
                 schema_cache,
                 enable_row_format,
+                partition_number,
             )?;
             Some(TopSQLSource::Legacy(source))
         }

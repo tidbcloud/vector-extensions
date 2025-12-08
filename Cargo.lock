@@ -13833,6 +13833,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes 1.10.1",
  "chrono",
+ "crc32fast",
  "datafusion 48.0.1",
  "deltalake",
  "etcd-client",

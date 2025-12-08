@@ -450,45 +450,41 @@ impl ResourceUsageRecordParser {
             }
         }
         let mut events = vec![];
-        for i in 1..2 {
-            let i_str_now = i.to_string();
-            let i_str = i_str_now.as_str();
-            for item in &record.items {
-                let mut event = Event::Log(LogEvent::default());
-                let log = event.as_mut_log();
+        for item in &record.items {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
 
-                // Add metadata with Vector prefix (ensure all fields have values)
-                log.insert("source_table", "tikv_topsql");
-                log.insert("timestamps", LogValue::from(item.timestamp_sec));
-                log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
-                log.insert("instance", instance.clone() + i_str);
-                log.insert(LABEL_SQL_DIGEST, sql_digest.clone() + i_str);
-                log.insert(LABEL_PLAN_DIGEST, plan_digest.clone() + i_str);
-                log.insert("tag_label", tag_label.clone());
-                log.insert("db_name", db_name.clone());
-                log.insert("table_name", table_name.clone());
-                log.insert("table_id", table_id_str.clone());
-                log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms + i as u32));
-                log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys + i as u32));
-                log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys + i as u32));
-                log.insert(
-                    METRIC_NAME_NETWORK_IN_BYTES,
-                    LogValue::from(item.network_in_bytes + i as u64),
-                );
-                log.insert(
-                    METRIC_NAME_NETWORK_OUT_BYTES,
-                    LogValue::from(item.network_out_bytes + i as u64),
-                );
-                log.insert(
-                    METRIC_NAME_LOGICAL_READ_BYTES,
-                    LogValue::from(item.logical_read_bytes + i as u64),
-                );
-                log.insert(
-                    METRIC_NAME_LOGICAL_WRITE_BYTES,
-                    LogValue::from(item.logical_write_bytes + i as u64),
-                );
-                events.push(event.into_log());
-            }
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert("source_table", "tikv_topsql");
+            log.insert("timestamps", LogValue::from(item.timestamp_sec));
+            log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
+            log.insert("instance", instance.clone());
+            log.insert(LABEL_SQL_DIGEST, sql_digest.clone());
+            log.insert(LABEL_PLAN_DIGEST, plan_digest.clone());
+            log.insert("tag_label", tag_label.clone());
+            log.insert("db_name", db_name.clone());
+            log.insert("table_name", table_name.clone());
+            log.insert("table_id", table_id_str.clone());
+            log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
+            log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
+            log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys));
+            log.insert(
+                METRIC_NAME_NETWORK_IN_BYTES,
+                LogValue::from(item.network_in_bytes),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_OUT_BYTES,
+                LogValue::from(item.network_out_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_READ_BYTES,
+                LogValue::from(item.logical_read_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_WRITE_BYTES,
+                LogValue::from(item.logical_write_bytes),
+            );
+            events.push(event.into_log());
         }
         events
     }
@@ -505,40 +501,36 @@ impl ResourceUsageRecordParser {
             schema_version = schema_cache.schema_version()
         );
         let mut events = vec![];
-        for i in 1..2 {
-            let i_str_now = i.to_string();
-            let i_str = i_str_now.as_str();
-            for item in &record.items {
-                let mut event = Event::Log(LogEvent::default());
-                let log = event.as_mut_log();
+        for item in &record.items {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
 
-                // Add metadata with Vector prefix (ensure all fields have values)
-                log.insert("source_table", "tikv_topregion");
-                log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
-                log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
-                log.insert("instance", instance.clone() + i_str);
-                log.insert(LABEL_REGION_ID, (record.region_id + i).to_string());
-                log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms + i as u32));
-                log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys + i as u32));
-                log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys + i as u32));
-                log.insert(
-                    METRIC_NAME_NETWORK_IN_BYTES,
-                    LogValue::from(item.network_in_bytes + i as u64),
-                );
-                log.insert(
-                    METRIC_NAME_NETWORK_OUT_BYTES,
-                    LogValue::from(item.network_out_bytes + i as u64),
-                );
-                log.insert(
-                    METRIC_NAME_LOGICAL_READ_BYTES,
-                    LogValue::from(item.logical_read_bytes + i as u64),
-                );
-                log.insert(
-                    METRIC_NAME_LOGICAL_WRITE_BYTES,
-                    LogValue::from(item.logical_write_bytes + i as u64),
-                );
-                events.push(event.into_log());
-            }
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert("source_table", "tikv_topregion");
+            log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
+            log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
+            log.insert("instance", instance.clone());
+            log.insert(LABEL_REGION_ID, record.region_id.to_string());
+            log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
+            log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
+            log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys));
+            log.insert(
+                METRIC_NAME_NETWORK_IN_BYTES,
+                LogValue::from(item.network_in_bytes),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_OUT_BYTES,
+                LogValue::from(item.network_out_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_READ_BYTES,
+                LogValue::from(item.logical_read_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_WRITE_BYTES,
+                LogValue::from(item.logical_write_bytes),
+            );
+            events.push(event.into_log());
         }
         events
     }

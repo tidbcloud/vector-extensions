@@ -30,6 +30,7 @@ pub struct Controller {
     active_schema_manager: Option<ActiveSchemaManager>,
     keyspace_to_vmtenants: HashMap<String, (String, String)>,
     enable_row_format: bool,
+    partition_number: u32,
     out: SourceSender,
 }
 
@@ -52,6 +53,7 @@ impl Controller {
         label_k8s_instance: Option<String>,
         keyspace_to_vmtenants: HashMap<String, (String, String)>,
         enable_row_format: bool,
+        partition_number: u32,
         out: SourceSender,
     ) -> vector::Result<Self> {
         let topo_fetcher = TopologyFetcher::new(
@@ -84,6 +86,7 @@ impl Controller {
             active_schema_manager: None,
             keyspace_to_vmtenants,
             enable_row_format,
+            partition_number,
             out,
         })
     }
@@ -265,6 +268,7 @@ impl Controller {
             self.schema_cache.clone(),
             self.keyspace_to_vmtenants.clone(),
             self.enable_row_format,
+            self.partition_number,
         );
         let source = match source {
             Some(source) => source,
