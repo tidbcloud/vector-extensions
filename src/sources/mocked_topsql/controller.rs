@@ -153,7 +153,7 @@ fn create_event_for_instance_partition(timestamp: i64, tidb_number: usize, tikv_
     for i in 0..tikv_number {
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
-        log.insert("source_table", "topsql_instance_partition");
+        log.insert("source_table", "instance_partition");
         log.insert("timestamps", LogValue::from(timestamp));
         log.insert("instance_type", "tikv");
         log.insert("instance", format!("127.0.0.{}", i));
