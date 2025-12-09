@@ -45,10 +45,6 @@ pub struct DeltaLakeConfig {
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 
-    /// Compression format
-    #[serde(default = "default_compression")]
-    pub compression: String,
-
     /// Storage options for cloud storage
     pub storage_options: Option<HashMap<String, String>>,
 
@@ -95,29 +91,13 @@ pub struct DeltaTableConfig {
 
 /// Write configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WriteConfig {
-    /// Batch size for writing
+pub struct WriteConfig {    /// Batch size for writing
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 
     /// Write timeout in seconds
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
-
-    /// Compression format
-    #[serde(default = "default_compression")]
-    pub compression: String,
-}
-
-/// Compression format
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum CompressionFormat {
-    /// Snappy compression
-    Snappy,
-    /// Gzip compression
-    Gzip,
-    /// No compression
-    None,
 }
 
 pub const fn default_batch_size() -> usize {
@@ -126,10 +106,6 @@ pub const fn default_batch_size() -> usize {
 
 pub const fn default_timeout_secs() -> u64 {
     30
-}
-
-pub fn default_compression() -> String {
-    "snappy".to_string()
 }
 
 pub fn default_force_path_style() -> Option<bool> {
@@ -255,7 +231,6 @@ impl GenerateConfig for DeltaLakeConfig {
             base_path: "./delta-tables".to_owned(),
             batch_size: default_batch_size(),
             timeout_secs: default_timeout_secs(),
-            compression: default_compression(),
             storage_options: None,
             bucket: None,
             options: None,
@@ -362,7 +337,6 @@ impl DeltaLakeConfig {
         let write_config = WriteConfig {
             batch_size: self.batch_size,
             timeout_secs: self.timeout_secs,
-            compression: self.compression.clone(),
         };
 
         let mut storage_options = self.storage_options.clone().unwrap_or_default();
@@ -955,7 +929,6 @@ mod tests {
         let write_config = WriteConfig {
             batch_size: 1000,
             timeout_secs: 30,
-            compression: "snappy".to_string(),
         };
 
         let mut writer =
