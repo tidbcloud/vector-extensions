@@ -91,7 +91,8 @@ pub struct DeltaTableConfig {
 
 /// Write configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WriteConfig {    /// Batch size for writing
+pub struct WriteConfig {
+    /// Batch size for writing
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 

@@ -103,15 +103,16 @@ mod tests {
 
     #[test]
     fn topsql_event() {
-        let event = Buf::default()
+        let events = Buf::default()
             .label_name("topsql_cpu_time_ms")
             .instance("db:10080")
             .instance_type("tidb")
             .sql_digest("DEAD")
             .plan_digest("BEEF")
             .points([(1661396787, 80.0), (1661396788, 443.0)].into_iter())
-            .build_event()
+            .build_events()
             .unwrap();
+        let event = events.into_iter().next().unwrap().into_log();
 
         let value = VMImportSinkEventEncoder::encode_log(event.into()).unwrap();
 
@@ -123,6 +124,9 @@ mod tests {
                 "sql_digest": "DEAD",
                 "plan_digest": "BEEF",
                 "tag_label": "",
+                "db": "",
+                "table": "",
+                "table_id": "",
             },
             "timestamps": [1661396787000u64, 1661396788000u64],
             "values": [80.0, 443.0],
@@ -139,15 +143,16 @@ mod tests {
             let tmp = tmp_str.try_into().unwrap();
             let mut encoder = VMImportSinkEventEncoder::new(tmp);
 
-            let mut event = Buf::default()
+            let events = Buf::default()
                 .label_name("topsql_cpu_time_ms")
                 .instance("db:10080")
                 .instance_type("tidb")
                 .sql_digest("DEAD")
                 .plan_digest("BEEF")
                 .points([(1661396787, 80.0), (1661396788, 443.0)].into_iter())
-                .build_event()
+                .build_events()
                 .unwrap();
+            let mut event = events.into_iter().next().unwrap().into_log();
             let labels = event.get_mut("labels").unwrap();
             labels.insert("cluster_id", Value::Bytes(Bytes::from("10086")));
 

@@ -14,20 +14,27 @@ use crate::sources::topsql::shutdown::{pair, ShutdownNotifier, ShutdownSubscribe
 use crate::sources::topsql::upstream::TopSQLSource;
 
 pub struct Controller {
+    sharedpool_id: Option<String>,
+
     topo_fetch_interval: Duration,
     topo_fetcher: TopologyFetcher,
+
     components: HashSet<Component>,
     running_components: HashMap<Component, ShutdownNotifier>,
+
     shutdown_notifier: ShutdownNotifier,
     shutdown_subscriber: ShutdownSubscriber,
+
     tls: Option<TlsConfig>,
     init_retry_delay: Duration,
     top_n: usize,
     downsampling_interval: u32,
+
     schema_cache: Arc<SchemaCache>,
     schema_update_interval: Duration,
     active_schema_manager: Option<ActiveSchemaManager>,
     keyspace_to_vmtenants: HashMap<String, (String, String)>,
+
     out: SourceSender,
 }
 
@@ -38,6 +45,7 @@ struct ActiveSchemaManager {
 
 impl Controller {
     pub async fn new(
+        sharedpool_id: Option<String>,
         pd_address: Option<String>,
         topo_fetch_interval: Duration,
         init_retry_delay: Duration,
@@ -59,13 +67,13 @@ impl Controller {
             label_k8s_instance,
         )
         .await?;
-
         let (shutdown_notifier, shutdown_subscriber) = pair();
 
         // Initialize an empty schema cache to ensure all components always have a cache reference
         let schema_cache = Arc::new(SchemaCache::new());
 
         Ok(Self {
+            sharedpool_id,
             topo_fetch_interval,
             topo_fetcher,
             components: HashSet::new(),
@@ -214,27 +222,28 @@ impl Controller {
 
             if is_nextgen_mode() {
                 // Schema manager is not supported in nextgen mode
-                info!(message = "Schema manager is not supported in nextgen mode");
+                debug!(message = "Schema manager is not supported in nextgen mode");
+                return;
+            }
+
+            // Clone the etcd client for the schema manager
+            if let Some(etcd_client) = self.topo_fetcher.etcd_client() {
+                let etcd_client = etcd_client.clone();
+
+                // Spawn the schema manager task
+                let task_handle = tokio::spawn(
+                    schema_manager
+                        .run_update_loop_with_etcd(shutdown, etcd_client.clone())
+                        .instrument(tracing::info_span!("topsql_schema_manager")),
+                );
+
+                // Store the reference to the active schema manager
+                self.active_schema_manager = Some(ActiveSchemaManager {
+                    tidb: tidb.clone(),
+                    task_handle,
+                });
             } else {
-                // Clone the etcd client for the schema manager
-                if let Some(etcd_client) = self.topo_fetcher.etcd_client() {
-                    let etcd_client = etcd_client.clone();
-
-                    // Spawn the schema manager task
-                    let task_handle = tokio::spawn(
-                        schema_manager
-                            .run_update_loop_with_etcd(shutdown, etcd_client.clone())
-                            .instrument(tracing::info_span!("topsql_schema_manager")),
-                    );
-
-                    // Store the reference to the active schema manager
-                    self.active_schema_manager = Some(ActiveSchemaManager {
-                        tidb: tidb.clone(),
-                        task_handle,
-                    });
-                } else {
-                    error!(message = "Etcd client not available for schema manager");
-                }
+                error!(message = "Etcd client not available for schema manager");
             }
 
             info!(
@@ -256,6 +265,7 @@ impl Controller {
 
     fn start_component(&mut self, component: &Component) -> bool {
         let source = TopSQLSource::new(
+            self.sharedpool_id.clone(),
             component.clone(),
             self.tls.clone(),
             self.out.clone(),
