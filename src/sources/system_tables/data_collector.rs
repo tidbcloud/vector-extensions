@@ -306,3 +306,95 @@ pub mod utils {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sources::system_tables::{CollectionConfig, TableConfig};
+    use vector_lib::event::Event;
+
+    #[test]
+    fn test_collection_method_from_string() {
+        assert!(matches!(
+            CollectionMethod::from_string("sql").unwrap(),
+            CollectionMethod::Sql
+        ));
+        assert!(matches!(
+            CollectionMethod::from_string("coprocessor").unwrap(),
+            CollectionMethod::Coprocessor
+        ));
+        assert!(matches!(
+            CollectionMethod::from_string("http_api").unwrap(),
+            CollectionMethod::HttpApi
+        ));
+        assert!(matches!(
+            CollectionMethod::from_string("custom_grpc").unwrap(),
+            CollectionMethod::CustomGrpc
+        ));
+        assert!(CollectionMethod::from_string("invalid").is_err());
+    }
+
+    #[test]
+    fn test_parse_collection_interval() {
+        let config = CollectionConfig {
+            short_interval: 5,
+            long_interval: 1800,
+            retention_days: 7,
+        };
+
+        assert_eq!(utils::parse_collection_interval("short", &config), 5);
+        assert_eq!(utils::parse_collection_interval("long", &config), 1800);
+        assert_eq!(utils::parse_collection_interval("custom=600", &config), 600);
+        assert_eq!(
+            utils::parse_collection_interval("custom=invalid", &config),
+            5
+        );
+        assert_eq!(utils::parse_collection_interval("unknown", &config), 5);
+    }
+
+    #[test]
+    fn test_event_creation_metadata() {
+        let mut row_data = HashMap::new();
+        row_data.insert(
+            "DIGEST".to_string(),
+            serde_json::Value::String("test_digest".to_string()),
+        );
+        row_data.insert(
+            "EXEC_COUNT".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(100)),
+        );
+
+        let metadata = CollectionMetadata {
+            instance: "test_instance".to_string(),
+            table_config: TableConfig {
+                source_schema: "metrics_schema".to_string(),
+                source_table: "CLUSTER_STATEMENTS_SUMMARY".to_string(),
+                dest_table: "hist_cluster_statements_summary".to_string(),
+                collection_interval: "short".to_string(),
+                where_clause: None,
+                enabled: true,
+            },
+            collection_method: CollectionMethod::Coprocessor,
+            timestamp: chrono::Utc::now(),
+            row_count: 1,
+            duration_ms: 150,
+            extra: HashMap::new(),
+        };
+
+        let collection_result = CollectionResult {
+            data: vec![row_data.clone()],
+            metadata,
+        };
+
+        let event = utils::create_event_from_result(&collection_result, row_data);
+        let log_event = match event {
+            Event::Log(log_event) => log_event,
+            _ => panic!("Expected Log event"),
+        };
+
+        assert!(log_event.get("_vector_id").is_some());
+        assert!(log_event.get("_vector_table").is_some());
+        assert!(log_event.get("_vector_instance").is_some());
+        assert!(log_event.get("DIGEST").is_some());
+    }
+}
