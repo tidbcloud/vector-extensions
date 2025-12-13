@@ -3,6 +3,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=proto/tidb.proto");
     println!("cargo:rerun-if-changed=proto/tikv.proto");
+    println!("cargo:rerun-if-changed=proto/tipb_simple.proto");
     println!("cargo:rerun-if-changed=proto/resource_tag.proto");
 
     let mut prost_build = prost_build::Config::new();
@@ -14,6 +15,7 @@ fn main() {
             &[
                 "proto/tidb.proto",
                 "proto/tikv.proto",
+                "proto/tipb_simple.proto",
                 "proto/resource_tag.proto",
             ],
             &["proto/"],

@@ -1,0 +1,500 @@
+syntax = "proto3";
+
+package tipb;
+
+// Complete proto definitions based on official tipb and kvproto
+
+// Basic enums
+enum EncodeType {
+    TypeDefault = 0;
+    TypeChunk = 1;
+    TypeCHBlock = 2;
+}
+
+enum Endian {
+    ENDIAN_UNSPECIFIED = 0;
+    LittleEndian = 1;
+    BigEndian = 2;
+}
+
+enum ExecType {
+    TypeTableScan = 0;
+    TypeIndexScan = 1;
+    TypeSelection = 2;
+    TypeAggregation = 3;
+    TypeTopN = 4;
+    TypeLimit = 5;
+    TypeStreamAgg = 6;
+    TypeJoin = 7;
+    TypeKill = 8;
+    TypeExchangeSender = 9;
+    TypeExchangeReceiver = 10;
+    TypeProjection = 11;
+    TypePartitionTableScan = 12;
+    TypeSort = 13;
+    TypeWindow = 14;
+    TypeExpand = 15;
+    TypeExpand2 = 16;
+    TypeBroadcastQuery = 17;
+    TypeCTESink = 18;
+    TypeCTESource = 19;
+    TypeIndexLookUp = 20;
+}
+
+enum Op {
+    Put = 0;
+    Del = 1;
+    Lock = 2;
+    Rollback = 3;
+    Insert = 4;
+    CheckNotExists = 5;
+}
+
+// Basic structures
+message ChunkMemoryLayout {
+    Endian endian = 1;
+}
+
+message UserIdentity {
+    string user_name = 1;
+    string user_host = 2;
+}
+
+message IntermediateOutputChannel {
+    uint32 executor_idx = 1;
+    repeated uint32 output_offsets = 2;
+}
+
+message ColumnInfo {
+    int64 column_id = 1;
+    int32 tp = 2;
+}
+
+// Expression definition
+message Expr {
+    int32 tp = 1;
+    bytes val = 2;
+    repeated Expr children = 3;
+    int32 sig = 4;
+    FieldType field_type = 5;
+}
+
+message TableScan {
+    int64 table_id = 1;
+    repeated ColumnInfo columns = 2;
+    bool desc = 3;
+}
+
+// Add missing message types for Executor
+message IndexScan {
+    int64 table_id = 1;
+    int64 index_id = 2;
+    repeated ColumnInfo columns = 3;
+    bool desc = 4;
+}
+
+message Selection {
+    repeated Expr conditions = 1;
+}
+
+message Aggregation {
+    repeated Expr group_by = 1;
+    repeated Expr agg_func = 2;
+}
+
+message TopN {
+    repeated ByItem order_by = 1;
+    uint64 limit = 2;
+}
+
+message Limit {
+    uint64 limit = 1;
+}
+
+message ExchangeReceiver {
+    repeated FieldType field_types = 1;
+}
+
+message Join {
+    int32 join_type = 1;
+    repeated Expr left_join_keys = 2;
+    repeated Expr right_join_keys = 3;
+}
+
+message Kill {
+    uint64 conn_id = 1;
+}
+
+message ExchangeSender {
+    int32 tp = 1;
+    repeated bytes encoded_task_meta = 2;
+}
+
+message Projection {
+    repeated Expr exprs = 1;
+}
+
+message PartitionTableScan {
+    int64 table_id = 1;
+    repeated ColumnInfo columns = 2;
+    repeated int64 partition_ids = 3;
+}
+
+message Sort {
+    repeated ByItem by_items = 1;
+}
+
+message Window {
+    repeated Expr func_desc = 1;
+    repeated ByItem order_by = 2;
+    repeated Expr partition_by = 3;
+}
+
+message Expand {
+    repeated GroupingSet grouping_sets = 1;
+}
+
+message Expand2 {
+    repeated GroupingSet grouping_sets = 1;
+}
+
+message BroadcastQuery {
+    int32 query_type = 1;
+}
+
+message CTESink {
+    int32 cte_id = 1;
+}
+
+message CTESource {
+    int32 cte_id = 1;
+}
+
+message IndexLookUp {
+    IndexScan index_scan = 1;
+    TableScan table_scan = 2;
+}
+
+// Supporting message types
+message ByItem {
+    Expr expr = 1;
+    bool desc = 2;
+}
+
+message GroupingSet {
+    repeated uint64 grouping_exprs = 1;
+}
+
+message FieldType {
+    int32 tp = 1;
+    uint32 flag = 2;
+    int32 flen = 3;
+    int32 decimal = 4;
+    string charset = 5;
+    string collate = 6;
+}
+
+message Executor {
+    ExecType tp = 1;
+    TableScan tbl_scan = 2;
+    IndexScan idx_scan = 3;
+    Selection selection = 4;
+    Aggregation aggregation = 5;
+    TopN topN = 6;
+    Limit limit = 7;
+    ExchangeReceiver exchange_receiver = 8;
+    Join join = 9;
+    string executor_id = 10;
+    Kill kill = 11;
+    ExchangeSender exchange_sender = 12;
+    Projection projection = 13;
+    PartitionTableScan partition_table_scan = 14;
+    Sort sort = 15;
+    Window window = 16;
+    uint64 fine_grained_shuffle_stream_count = 17;
+    uint64 fine_grained_shuffle_batch_size = 18;
+    Expand expand = 19;
+    Expand2 expand2 = 20;
+    BroadcastQuery broadcast_query = 21;
+    CTESink cte_sink = 22;
+    CTESource cte_source = 23;
+    IndexLookUp index_lookup = 24;
+    uint32 parent_idx = 25;
+}
+
+message DagRequest {
+    uint64 start_ts_fallback = 1;
+    repeated Executor executors = 2;
+    int64 time_zone_offset = 3;
+    uint64 flags = 4;
+    repeated uint32 output_offsets = 5;
+    bool collect_range_counts = 6;
+    uint64 max_warning_count = 7;
+    EncodeType encode_type = 8;
+    uint64 sql_mode = 9;
+    string time_zone_name = 11;
+    bool collect_execution_summaries = 12;
+    uint64 max_allowed_packet = 13;
+    ChunkMemoryLayout chunk_memory_layout = 14;
+    bool is_rpn_expr = 15;
+    UserIdentity user = 16;
+    Executor root_executor = 17;
+    bool force_encode_type = 18;
+    uint32 div_precision_increment = 19;
+    repeated IntermediateOutputChannel intermediate_output_channels = 20;
+}
+
+// Context and region related
+message RegionEpoch {
+    uint64 conf_ver = 1;
+    uint64 version = 2;
+}
+
+message Peer {
+    uint64 id = 1;
+    uint64 store_id = 2;
+}
+
+message SourceStmt {
+    uint64 connection_id = 1;
+    string session_alias = 2;
+}
+
+message Context {
+    uint64 region_id = 1;
+    RegionEpoch region_epoch = 2;
+    Peer peer = 3;
+    SourceStmt source_stmt = 4;
+}
+
+message KeyRange {
+    bytes start = 1;
+    bytes end = 2;
+}
+
+// Coprocessor request/response
+message CoprocessorRequest {
+    Context context = 1;
+    int64 tp = 2;
+    bytes data = 3;
+    repeated KeyRange ranges = 4;
+    bool is_cache_enabled = 5;
+    uint64 cache_if_match_version = 6;
+    uint64 start_ts = 7;
+    int64 schema_ver = 8;
+    bool is_trace_enabled = 9;
+    uint64 paging_size = 10;
+    uint64 connection_id = 12;
+    string connection_alias = 13;
+}
+
+// Error handling
+message RegionError {
+    string message = 1;
+    NotLeader not_leader = 2;
+    RegionNotFound region_not_found = 3;
+    KeyNotInRegion key_not_in_region = 4;
+    EpochNotMatch epoch_not_match = 5;
+    ServerIsBusy server_is_busy = 6;
+    StaleCommand stale_command = 7;
+    StoreNotMatch store_not_match = 8;
+    RaftEntryTooLarge raft_entry_too_large = 9;
+    MaxTimestampNotSynced max_timestamp_not_synced = 10;
+    ReadIndexNotReady read_index_not_ready = 11;
+    ProposalInMergingMode proposal_in_merging_mode = 12;
+    DataIsNotReady data_is_not_ready = 13;
+    RegionNotInitialized region_not_initialized = 14;
+    DiskFull disk_full = 15;
+}
+
+message NotLeader {
+    uint64 region_id = 1;
+    Peer leader = 2;
+}
+
+message RegionNotFound {
+    uint64 region_id = 1;
+}
+
+message KeyNotInRegion {
+    bytes key = 1;
+    uint64 region_id = 2;
+    bytes start_key = 3;
+    bytes end_key = 4;
+}
+
+message EpochNotMatch {
+    repeated Region current_regions = 1;
+}
+
+message Region {
+    uint64 id = 1;
+    bytes start_key = 2;
+    bytes end_key = 3;
+    RegionEpoch region_epoch = 4;
+    repeated Peer peers = 5;
+}
+
+message ServerIsBusy {
+    string reason = 1;
+    uint64 backoff_ms = 2;
+}
+
+message StaleCommand {}
+
+message StoreNotMatch {
+    uint64 request_store_id = 1;
+    uint64 actual_store_id = 2;
+}
+
+message RaftEntryTooLarge {
+    uint64 region_id = 1;
+    uint64 entry_size = 2;
+}
+
+message MaxTimestampNotSynced {}
+
+message ReadIndexNotReady {
+    string reason = 1;
+    uint64 region_id = 2;
+}
+
+message ProposalInMergingMode {
+    uint64 region_id = 1;
+}
+
+message DataIsNotReady {
+    uint64 region_id = 1;
+    uint64 peer_id = 2;
+    uint64 safe_ts = 3;
+}
+
+message RegionNotInitialized {
+    uint64 region_id = 1;
+}
+
+message DiskFull {}
+
+message LockInfo {
+    bytes primary_lock = 1;
+    uint64 lock_version = 2;
+    bytes key = 3;
+    uint64 lock_ttl = 4;
+    uint64 txn_size = 5;
+    Op lock_type = 6;
+    uint64 lock_for_update_ts = 7;
+    bool use_async_commit = 8;
+    repeated bytes secondaries = 9;
+    uint64 min_commit_ts = 10;
+}
+
+// Execution details
+message TimeDetail {
+    uint64 process_wall_time_ms = 1;
+    uint64 process_cpu_time_ms = 2;
+    uint64 total_keys = 3;
+    uint64 processed_keys = 4;
+}
+
+message TimeDetailV2 {
+    uint64 process_wall_time_ns = 1;
+    uint64 process_cpu_time_ns = 2;
+    uint64 total_keys = 3;
+    uint64 processed_keys = 4;
+}
+
+message ScanDetail {
+    uint64 total = 1;
+    uint64 processed = 2;
+}
+
+message ScanDetailV2 {
+    uint64 processed_versions = 1;
+    uint64 total_versions = 2;
+    uint64 rocksdb_delete_skipped_count = 3;
+    uint64 rocksdb_key_skipped_count = 4;
+    uint64 rocksdb_block_cache_hit_count = 5;
+    uint64 rocksdb_block_read_count = 6;
+    uint64 rocksdb_block_read_byte = 7;
+}
+
+message WriteDetail {
+    uint64 store_batch_wait_duration = 1;
+    uint64 propose_send_wait_duration = 2;
+    uint64 persist_log_duration = 3;
+    uint64 raft_db_write_leader_wait_duration = 4;
+    uint64 raft_db_sync_log_duration = 5;
+    uint64 raft_db_write_memtable_duration = 6;
+    uint64 commit_log_duration = 7;
+    uint64 apply_batch_wait_duration = 8;
+    uint64 apply_log_duration = 9;
+    uint64 apply_mutate_duration = 10;
+    uint64 apply_wait_duration = 11;
+}
+
+message ExecDetails {
+    TimeDetail time_detail = 1;
+    ScanDetail scan_detail = 2;
+    WriteDetail write_detail = 3;
+}
+
+message ExecDetailsV2 {
+    TimeDetailV2 time_detail_v2 = 1;
+    ScanDetailV2 scan_detail_v2 = 2;
+    WriteDetail write_detail = 3;
+}
+
+// CoprocessorResponse - official definition from kvproto
+message CoprocessorResponse {
+    bytes data = 1;
+    RegionError region_error = 2;
+    LockInfo locked = 3;
+    string other_error = 4;
+    KeyRange range = 5;
+    ExecDetails exec_details = 6;
+    bool is_cache_hit = 7;
+    uint64 cache_last_version = 8;
+    bool can_be_cached = 9;
+    ExecDetailsV2 exec_details_v2 = 11;
+    uint64 latest_buckets_version = 12;
+}
+
+// SelectResponse and related messages
+message SelectResponse {
+    Error error = 1;
+    repeated Row rows = 2;
+    repeated Chunk chunks = 3;
+    repeated Error warnings = 4;
+    repeated int64 output_counts = 5;
+    int64 warning_count = 6;
+    repeated ExecutorExecutionSummary execution_summaries = 8;
+    EncodeType encode_type = 9;
+    repeated int64 ndvs = 10;
+}
+
+message Row {
+    bytes handle = 1;
+    bytes data = 2;
+}
+
+message Error {
+    int32 code = 1;
+    string msg = 2;
+}
+
+message Chunk {
+    bytes rows_data = 3;
+    repeated RowMeta rows_meta = 4;
+}
+
+message RowMeta {
+    int64 handle = 1;
+    int64 length = 2;
+}
+
+message ExecutorExecutionSummary {
+    uint64 time_processed_ns = 1;
+    uint64 num_produced_rows = 2;
+    uint64 num_iterations = 3;
+    uint64 concurrency = 4;
+}
