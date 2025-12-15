@@ -13554,6 +13554,7 @@ dependencies = [
  "md-5",
  "metrics",
  "mockall",
+ "openssl",
  "ordered-float 4.6.0",
  "parquet",
  "prost 0.12.6",

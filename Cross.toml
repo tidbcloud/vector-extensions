@@ -13,9 +13,6 @@ passthrough = [
 
 [target.x86_64-unknown-linux-gnu]
 image = "vector-cross-env:x86_64-unknown-linux-gnu"
-xargo = false
-cc = "clang"
-cxx = "clang++"
 
 [target.aarch64-unknown-linux-gnu]
 image = "vector-cross-env:aarch64-unknown-linux-gnu"

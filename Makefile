@@ -104,10 +104,30 @@ build-armv7-unknown-linux-musleabihf: target/armv7-unknown-linux-musleabihf/rele
 build-armv7-unknown-linux-musleabihf-nextgen: target/armv7-unknown-linux-musleabihf/release/vector-nextgen
 	@echo "Output to ${<}"
 
+# Auto-detect Docker platform for cross-compilation
+#
+# macOS on Apple Silicon (Darwin arm64) requires --platform linux/amd64 because:
+# 1. macOS runs Darwin kernel, not Linux - containers need Linux environment
+# 2. Rosetta 2 provides efficient x86_64->ARM64 translation for Linux containers
+# 3. Building linux/arm64 containers would require QEMU emulation, which is slower
+#
+# Usage:
+#   Default: Auto-detect platform based on host system
+#   Override: DOCKER_PLATFORM="--platform linux/amd64" make build-aarch64-unknown-linux-gnu
+#   Disable: DOCKER_PLATFORM="" make build-aarch64-unknown-linux-gnu
+DOCKER_PLATFORM ?= $(shell if [ "$$(uname)" = "Darwin" ] && [ "$$(uname -m)" = "arm64" ]; then echo "--platform linux/amd64"; else echo ""; fi)
+
 .PHONY: cross-image-%
 cross-image-%: export TRIPLE =$($(strip @):cross-image-%=%)
 cross-image-%:
+	@echo "Building cross image for ${TRIPLE}..."
+	@if [ -n "$(DOCKER_PLATFORM)" ]; then \
+		echo "Using Docker platform: $(DOCKER_PLATFORM)"; \
+	else \
+		echo "Using default Docker platform"; \
+	fi
 	docker build \
+		$(DOCKER_PLATFORM) \
 		--tag vector-cross-env:${TRIPLE} \
 		--file scripts/cross/${TRIPLE}.dockerfile \
 		scripts/cross
