@@ -2,7 +2,7 @@ pub mod fetch;
 
 use std::fmt;
 
-pub use fetch::{FetchError, TopologyFetcher};
+pub use fetch::FetchError;
 
 #[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
 pub enum InstanceType {
