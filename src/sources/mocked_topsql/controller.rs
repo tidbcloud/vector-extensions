@@ -1,3 +1,4 @@
+use chrono::{DateTime, Timelike};
 use ordered_float::NotNan;
 use serde_json::Value;
 use vector_lib::event::{Event, KeyString, LogEvent, Value as LogValue};
@@ -237,6 +238,19 @@ fn create_event_for_tidb_sql(index: usize, timestamp: i64, sql_digest_vec: &Vec<
         log.insert("source_table", "tidb_topsql");
         log.insert("timestamps", LogValue::from(timestamp));
         log.insert("time", LogValue::from(timestamp));
+        // Calculate datetime string: %Y-%m-%d %H where %H is time slot index (0-3)
+        // Skip current event if timestamp conversion fails
+        let dt = match DateTime::from_timestamp(timestamp, 0) {
+            Some(dt) => dt,
+            None => continue,
+        };
+        let naive_dt = dt.naive_utc();
+        let date = naive_dt.date();
+        let hour = naive_dt.hour();
+        // Calculate time slot index: 0-6=0, 6-12=1, 12-18=2, 18-24=3
+        let time_slot = (hour / 6) as u32;
+        let datetime_str = format!("{} {}", date.format("%Y-%m-%d"), time_slot);
+        log.insert("datetime", LogValue::from(datetime_str));
         log.insert("instance_type", "tidb");
         log.insert("instance", format!("127.0.1.{}", index));
         log.insert("instance_partition_id", LogValue::from(instance_part));
@@ -279,6 +293,19 @@ fn create_event_for_tikv_sql(
         log.insert("source_table", "tikv_topsql");
         log.insert("timestamps", LogValue::from(timestamp));
         log.insert("time", LogValue::from(timestamp));
+        // Calculate datetime string: %Y-%m-%d %H where %H is time slot index (0-3)
+        // Skip current event if timestamp conversion fails
+        let dt = match DateTime::from_timestamp(timestamp, 0) {
+            Some(dt) => dt,
+            None => continue,
+        };
+        let naive_dt = dt.naive_utc();
+        let date = naive_dt.date();
+        let hour = naive_dt.hour();
+        // Calculate time slot index: 0-6=0, 6-12=1, 12-18=2, 18-24=3
+        let time_slot = (hour / 6) as u32;
+        let datetime_str = format!("{} {}", date.format("%Y-%m-%d"), time_slot);
+        log.insert("datetime", LogValue::from(datetime_str));
         log.insert("instance_type", "tikv");
         log.insert("instance", format!("127.0.0.{}", index));
         log.insert("instance_partition_id", LogValue::from(instance_part));
@@ -323,6 +350,19 @@ fn create_event_for_tikv_region(
         log.insert("source_table", "tikv_topregion");
         log.insert("timestamps", LogValue::from(timestamp));
         log.insert("time", LogValue::from(timestamp));
+        // Calculate datetime string: %Y-%m-%d %H where %H is time slot index (0-3)
+        // Skip current event if timestamp conversion fails
+        let dt = match DateTime::from_timestamp(timestamp, 0) {
+            Some(dt) => dt,
+            None => continue,
+        };
+        let naive_dt = dt.naive_utc();
+        let date = naive_dt.date();
+        let hour = naive_dt.hour();
+        // Calculate time slot index: 0-6=0, 6-12=1, 12-18=2, 18-24=3
+        let time_slot = (hour / 6) as u32;
+        let datetime_str = format!("{} {}", date.format("%Y-%m-%d"), time_slot);
+        log.insert("datetime", LogValue::from(datetime_str));
         log.insert("instance_type", "tikv");
         log.insert("instance", format!("127.0.0.{}", index));
         log.insert("instance_partition_id", LogValue::from(instance_part));

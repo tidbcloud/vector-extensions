@@ -12,6 +12,7 @@ use crate::sources::topsql::upstream::tikv::proto::resource_usage_record::Record
 use crate::sources::topsql::upstream::tikv::proto::{
     GroupTagRecord, GroupTagRecordItem, RegionRecord, ResourceUsageRecord,
 };
+use chrono::{DateTime, Timelike};
 use prost::Message;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -29,6 +30,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         enable_row_format: bool,
         instance_partition_id: u32,
     ) -> Vec<LogEvent> {
+        info!(message = "parse tikv record", instance__A = %instance, instance_partition_BB = %instance_partition_id);
         if !enable_row_format {
             match response.record_oneof {
                 Some(RecordOneof::Record(record)) => {
@@ -359,7 +361,6 @@ impl ResourceUsageRecordParser {
         buf.instance(instance)
             .instance_type(INSTANCE_TYPE_TIKV)
             .region_id(record.region_id.to_string());
-        warn!("Parsing TiKV RegionRecord {}", record.region_id);
 
         macro_rules! append {
             ($( ($label_name:expr, $item_name:tt), )* ) => {
@@ -459,6 +460,19 @@ impl ResourceUsageRecordParser {
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert("source_table", "tikv_topsql");
             log.insert("timestamps", LogValue::from(item.timestamp_sec));
+            // Calculate datetime string: %Y-%m-%d %H where %H is time slot index (0-3)
+            // Skip current item if timestamp conversion fails
+            let dt = match DateTime::from_timestamp(item.timestamp_sec as i64, 0) {
+                Some(dt) => dt,
+                None => continue,
+            };
+            let naive_dt = dt.naive_utc();
+            let date = naive_dt.date();
+            let hour = naive_dt.hour();
+            // Calculate time slot index: 0-6=0, 6-12=1, 12-18=2, 18-24=3
+            let time_slot = (hour / 6) as u32;
+            let datetime_str = format!("{} {}", date.format("%Y-%m-%d"), time_slot);
+            log.insert("datetime", LogValue::from(datetime_str));
             log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
             log.insert("instance", instance.clone());
             log.insert("instance_partition_id", LogValue::from(instance_partition_id as i64));
@@ -512,6 +526,19 @@ impl ResourceUsageRecordParser {
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert("source_table", "tikv_topregion");
             log.insert("timestamps", LogValue::from(item.timestamp_sec as i64));
+            // Calculate datetime string: %Y-%m-%d %H where %H is time slot index (0-3)
+            // Skip current item if timestamp conversion fails
+            let dt = match DateTime::from_timestamp(item.timestamp_sec as i64, 0) {
+                Some(dt) => dt,
+                None => continue,
+            };
+            let naive_dt = dt.naive_utc();
+            let date = naive_dt.date();
+            let hour = naive_dt.hour();
+            // Calculate time slot index: 0-6=0, 6-12=1, 12-18=2, 18-24=3
+            let time_slot = (hour / 6) as u32;
+            let datetime_str = format!("{} {}", date.format("%Y-%m-%d"), time_slot);
+            log.insert("datetime", LogValue::from(datetime_str));
             log.insert("instance_type", INSTANCE_TYPE_TIKV.to_string());
             log.insert("instance", instance.clone());
             log.insert("instance_partition_id", LogValue::from(instance_partition_id as i64));

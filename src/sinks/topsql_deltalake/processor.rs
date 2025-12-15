@@ -36,6 +36,13 @@ lazy_static! {
             }),
         );
         schema_info.insert(
+            "datetime".into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
             LABEL_INSTANCE_TYPE.into(),
             serde_json::json!({
                 "mysql_type": "text",
@@ -601,7 +608,7 @@ impl TopSQLDeltaLakeSink {
             };
 
             let partition_by = if table_name == "topsql_data" {
-                Some(vec!["date".to_string(), "instance_partition_id".to_string()])
+                Some(vec!["datetime".to_string(), "instance_partition_id".to_string()])
             } else {
                 Some(vec!["date".to_string()])
             };
