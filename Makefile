@@ -77,7 +77,7 @@ build-armv7-unknown-linux-gnueabihf: target/armv7-unknown-linux-gnueabihf/releas
 	@echo "Output to ${<}"
 
 .PHONY: build-armv7-unknown-linux-gnueabihf-nextgen
-build-armv7-unknown-linux-gnueabihf: target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
+build-armv7-unknown-linux-gnueabihf-nextgen: target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
 	@echo "Output to ${<}"
 
 .PHONY: build-x86_64-unknown-linux-musl
@@ -101,7 +101,7 @@ build-armv7-unknown-linux-musleabihf: target/armv7-unknown-linux-musleabihf/rele
 	@echo "Output to ${<}"
 
 .PHONY: build-armv7-unknown-linux-musleabihf-nextgen
-build-armv7-unknown-linux-musleabihf: target/armv7-unknown-linux-musleabihf/release/vector-nextgen
+build-armv7-unknown-linux-musleabihf-nextgen: target/armv7-unknown-linux-musleabihf/release/vector-nextgen
 	@echo "Output to ${<}"
 
 .PHONY: cross-image-%
