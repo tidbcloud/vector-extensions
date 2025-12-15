@@ -800,6 +800,8 @@ impl DeltaLakeConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::print_stdout)]
+#[allow(clippy::print_stderr)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;

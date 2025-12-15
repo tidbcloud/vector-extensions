@@ -32,7 +32,7 @@ pub enum FetchError {
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug)]
-enum EtcdTopology {
+pub(crate) enum EtcdTopology {
     TTL {
         address: String,
         ttl: u128,

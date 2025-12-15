@@ -291,12 +291,9 @@ impl Controller {
 mod tests {
     use super::*;
     use crate::sources::conprof::topology::InstanceType;
-    use crate::sources::conprof::topology::fetch::TopologyFetcherTrait;
-    use mockall::predicate::*;
     // Note: mock module is private, so we can't use it directly
     // We'll create our own mock server instead
     use vector::config::ProxyConfig;
-    use vector::http::HttpClient;
     use hyper::service::{make_service_fn, service_fn};
     use hyper::{Body, Request, Response, Server, StatusCode};
     use std::convert::Infallible;
