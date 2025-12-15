@@ -1,4 +1,4 @@
-use crate::sources::topsql::topology::{Component, InstanceType};
+use crate::common::topology::{Component, InstanceType};
 
 use std::collections::HashSet;
 
@@ -13,22 +13,25 @@ pub enum FetchError {
     #[snafu(display("Failed to list pods in namespace '{}': {}", namespace, source))]
     ListPods {
         namespace: String,
-        tidb_group: String,
+        label_k8s_instance: String,
         source: kube::Error,
     },
 }
 
-pub struct TiDBNextGenTopologyFetcher {
+pub struct TiKVNextGenTopologyFetcher {
     client: Client,
-    tidb_group: String,
+    label_k8s_instance: String,
 }
 
-impl TiDBNextGenTopologyFetcher {
-    pub fn new(client: Client, tidb_group: String) -> Self {
-        Self { client, tidb_group }
+impl TiKVNextGenTopologyFetcher {
+    pub fn new(client: Client, label_k8s_instance: String) -> Self {
+        Self {
+            client,
+            label_k8s_instance,
+        }
     }
 
-    pub async fn get_up_tidbs(
+    pub async fn get_up_tikvs(
         &self,
         components: &mut HashSet<Component>,
     ) -> Result<(), FetchError> {
@@ -37,15 +40,15 @@ impl TiDBNextGenTopologyFetcher {
                 .await
                 .context(GetNamespaceSnafu)?;
         let label_selector = format!(
-            "app.kubernetes.io/component=tidb,tags.tidbcloud.com/tidb-group={}",
-            self.tidb_group
+            "app.kubernetes.io/component=tikv,app.kubernetes.io/instance={}",
+            self.label_k8s_instance
         );
         let pod_list = Api::<Pod>::namespaced(self.client.clone(), &namespace)
             .list(&ListParams::default().labels(&label_selector))
             .await
             .context(ListPodsSnafu {
                 namespace: namespace.clone(),
-                tidb_group: self.tidb_group.clone(),
+                label_k8s_instance: self.label_k8s_instance.clone(),
             })?;
         for pod in pod_list.items {
             if let Some(status) = pod.status {
@@ -57,10 +60,10 @@ impl TiDBNextGenTopologyFetcher {
                         continue;
                     }
                     components.insert(Component {
-                        instance_type: InstanceType::TiDB,
+                        instance_type: InstanceType::TiKV,
                         host: pod_ip,
-                        primary_port: 4000,
-                        secondary_port: 10080,
+                        primary_port: 20160,
+                        secondary_port: 20180,
                     });
                 }
             }

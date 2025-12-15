@@ -1,0 +1,114 @@
+# Example configuration for DeltaLake sink with S3 storage and AWS authentication
+# This configuration shows how to write Delta Lake tables to S3 using various AWS authentication methods
+
+sources:
+  conprof_add_meta:
+    type: "stdin"  # Replace with your actual source
+    decoding:
+      codec: "json"
+
+sinks:
+  # Delta Lake sink writing to S3 with assume role authentication
+  deltalake_s3_assume_role:
+    type: "deltalake"
+    inputs: ["conprof_add_meta"]
+    
+    # S3 base path where Delta Lake tables will be stored
+    # Tables will be created as subdirectories under this path
+    base_path: "s3://o11y-test-shared-us-west-2/deltalake-tables"
+    
+    # S3 bucket name (required for S3 storage)
+    bucket: "o11y-test-shared-us-west-2"
+    
+    # AWS region configuration
+    region: "${REGION:-us-west-2}"
+    
+    # AWS authentication using assume role (完全参考 aws_s3_upload_file)
+    auth:
+      assume_role: "arn:aws:iam::123456789012:role/YourDeltaLakeRole"
+      external_id: "your-external-id"           # Optional
+      role_session_name: "vector-deltalake"     # Optional
+    
+    # S3 options (参考 aws_s3_upload_file 的 S3Options)
+    storage_class: "STANDARD"       # S3 storage class
+    server_side_encryption: "AES256"  # Server-side encryption
+    
+    # TLS configuration (optional)
+    tls:
+      verify_certificate: true
+      verify_hostname: true
+    
+    # Force path-style addressing for S3 (optional)
+    force_path_style: false
+    
+    # Delta Lake configuration
+    batch_size: 1000              # Number of events to batch before writing
+    timeout_secs: 30              # Timeout for write operations
+    compression: "snappy"         # Compression format (snappy, gzip, none)
+    
+    # Storage options (optional) - these are passed directly to Delta Lake
+    storage_options:
+      AWS_STORAGE_ALLOW_HTTP: "true"
+      # Additional S3/AWS options can be added here
+    
+    # Acknowledgments
+    acknowledgements:
+      enabled: true
+
+  # Delta Lake sink with static AWS credentials
+  deltalake_s3_static_credentials:
+    type: "deltalake"
+    inputs: ["conprof_add_meta"]
+    
+    base_path: "s3://my-bucket/deltalake-tables"
+    bucket: "my-bucket"
+    region: "us-east-1"
+    
+    # Static credentials
+    auth:
+      access_key_id: "${AWS_ACCESS_KEY_ID}"
+      secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
+      token: "${AWS_SESSION_TOKEN}"  # Optional, for temporary credentials
+    
+    batch_size: 1000
+    timeout_secs: 30
+    compression: "snappy"
+    
+    acknowledgements:
+      enabled: true
+
+  # Delta Lake sink using default AWS credential chain
+  deltalake_s3_default_auth:
+    type: "deltalake"
+    inputs: ["conprof_add_meta"]
+    
+    base_path: "s3://my-bucket/deltalake-tables"
+    bucket: "my-bucket"
+    region: "us-east-1"
+    
+    # Default authentication (uses AWS credential chain)
+    # This will try: environment variables -> IAM role -> AWS config files
+    
+    batch_size: 1000
+    timeout_secs: 30
+    compression: "snappy"
+    
+    acknowledgements:
+      enabled: true
+
+# Alternative configuration for local Delta Lake storage
+sinks:
+  deltalake_local:
+    type: "deltalake"
+    inputs: ["conprof_add_meta"]
+    
+    # Local filesystem path
+    base_path: "./delta-tables"
+    
+    # Delta Lake configuration
+    batch_size: 1000
+    timeout_secs: 30
+    compression: "snappy"
+    
+    acknowledgements:
+      enabled: true

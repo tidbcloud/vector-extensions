@@ -16,7 +16,6 @@ pub use upstream::parser;
 mod controller;
 mod schema_cache;
 pub mod shutdown;
-pub mod topology;
 pub mod upstream;
 
 /// PLACEHOLDER
@@ -54,6 +53,14 @@ pub struct TopSQLConfig {
     /// Keyspace to VM tenants mapping for nextgen mode
     #[serde(skip)]
     pub keyspace_to_vmtenants: Option<std::collections::HashMap<String, (String, String)>>,
+
+    /// enable_row_format
+    #[serde(default = "default_enable_row_format")]
+    pub enable_row_format: bool,
+
+    /// Partition number
+    #[serde(default = "default_partition_number")]
+    pub partition_number: u32,
 }
 
 pub const fn default_init_retry_delay() -> f64 {
@@ -72,6 +79,14 @@ pub const fn default_downsampling_interval() -> u32 {
     0
 }
 
+pub const fn default_enable_row_format() -> bool {
+    false
+}
+
+pub const fn default_partition_number() -> u32 {
+    1
+}
+
 impl GenerateConfig for TopSQLConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
@@ -84,6 +99,8 @@ impl GenerateConfig for TopSQLConfig {
             tidb_group: None,
             label_k8s_instance: None,
             keyspace_to_vmtenants: None,
+            enable_row_format: default_enable_row_format(),
+            partition_number: default_partition_number(),
         })
         .unwrap()
     }
@@ -106,6 +123,9 @@ impl SourceConfig for TopSQLConfig {
         let tidb_group = self.tidb_group.clone();
         let label_k8s_instance = self.label_k8s_instance.clone();
         let keyspace_to_vmtenants = self.keyspace_to_vmtenants.clone().unwrap_or_default();
+        let enable_row_format = self.enable_row_format;
+        let partition_number = self.partition_number;
+        info!("TopSql source enable_row_format: {}", enable_row_format);
 
         Ok(Box::pin(async move {
             let controller = Controller::new(
@@ -120,6 +140,8 @@ impl SourceConfig for TopSQLConfig {
                 tidb_group,
                 label_k8s_instance,
                 keyspace_to_vmtenants,
+                enable_row_format,
+                partition_number,
                 cx.out,
             )
             .await

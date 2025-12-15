@@ -1,0 +1,39 @@
+# Minimal Vector Configuration File - Coprocessor Collection Method
+# Database connection fields are optional for coprocessor method
+
+[sources.tidb_system_tables]
+type = "system_tables"
+
+# PD configuration (required for topology discovery)
+pd_address = "127.0.0.1:2379"
+
+# Collection configuration
+short_interval = 5
+long_interval = 30
+retention_days = 1
+topology_fetch_interval_seconds = 10.0
+
+# Collection method configuration
+collection_method = "coprocessor"
+
+# Tables to collect configuration - only CLUSTER_STATEMENTS_SUMMARY for testing
+[[sources.tidb_system_tables.tables]]
+source_schema = "information_schema"
+source_table = "CLUSTER_STATEMENTS_SUMMARY"
+dest_table = "statements_summary"
+collection_interval = "short"
+enabled = true
+
+# Output to Delta Lake (local storage, using default partitioning)
+[sinks.deltalake]
+type = "deltalake"
+inputs = ["tidb_system_tables"]
+base_path = "./test_data/deltalake"
+batch_size = 100
+timeout_secs = 30
+compression = "snappy"
+
+# Local storage options
+[sinks.deltalake.storage_options]
+# Use local file system
+"file.enable_move" = "true"

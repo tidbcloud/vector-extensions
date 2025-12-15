@@ -12,6 +12,10 @@ mod utils;
 
 #[cfg(unix)]
 fn main() -> ExitCode {
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Failed to install default crypto provider");
+
     let exit_code = Application::run(ExtraContext::default())
         .code()
         .unwrap_or(exitcode::UNAVAILABLE) as u8;

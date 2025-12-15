@@ -3,3 +3,5 @@
 .idea
 .DS_Store
 .specstory/
+delta-tables/
+test_data/

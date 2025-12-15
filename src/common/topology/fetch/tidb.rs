@@ -3,8 +3,8 @@ use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
 
 use snafu::{ResultExt, Snafu};
 
-use crate::sources::topsql::topology::fetch::{models, utils};
-use crate::sources::topsql::topology::{Component, InstanceType};
+use crate::common::topology::fetch::{models, utils};
+use crate::common::topology::{Component, InstanceType};
 
 #[derive(Debug, Snafu)]
 pub enum FetchError {

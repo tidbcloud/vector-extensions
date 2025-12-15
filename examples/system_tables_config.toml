@@ -1,0 +1,107 @@
+# TiDB System Tables Source 配置示例
+# 此配置文件展示了 system_tables source 的各种配置选项
+
+# 数据源配置
+[sources.tidb_system_tables]
+type = "tidb_system_tables"
+collection_method = "coprocessor"  # 可选: sql, http_api, coprocessor
+instance = "tidb-cluster-1"
+enabled = true
+
+# 拓扑发现配置
+[sources.tidb_system_tables.topology]
+discovery_method = "static"  # 可选: static, consul, etcd
+refresh_interval = "30s"
+
+# Coprocessor 收集器配置 (高性能方式)
+[sources.tidb_system_tables.coprocessor]
+host = "127.0.0.1"
+port = 4000
+grpc_timeout_secs = 30
+max_retries = 3
+
+# SQL 收集器配置 (兼容性方式)
+[sources.tidb_system_tables.sql]
+host = "127.0.0.1"
+port = 4000
+username = "root"
+password = ""
+database = "information_schema"
+connection_pool_size = 5
+query_timeout_secs = 30
+
+# HTTP API 收集器配置 (轻量级方式)
+[sources.tidb_system_tables.http_api]
+host = "127.0.0.1"
+port = 10080
+timeout_secs = 30
+max_retries = 3
+
+# 表配置 - CLUSTER_STATEMENTS_SUMMARY (集群表)
+[[sources.tidb_system_tables.tables]]
+source_schema = "information_schema"
+source_table = "CLUSTER_STATEMENTS_SUMMARY"
+dest_table = "cluster_statements_summary"
+collection_interval = "short"  # 可选: short (30s), medium (5m), long (1h)
+enabled = true
+
+# 表配置 - CLUSTER_TIDB_STATEMENTS_STATS (集群表)
+[[sources.tidb_system_tables.tables]]
+source_schema = "information_schema"
+source_table = "CLUSTER_TIDB_STATEMENTS_STATS"
+dest_table = "cluster_tidb_statements_stats"
+collection_interval = "short"
+enabled = true
+
+# 表配置 - STATEMENTS_SUMMARY (非集群表，使用 SQL 方式)
+[[sources.tidb_system_tables.tables]]
+source_schema = "information_schema"
+source_table = "STATEMENTS_SUMMARY"
+dest_table = "statements_summary"
+collection_interval = "medium"
+enabled = true
+
+# 表配置 - SLOW_QUERY (慢查询表)
+[[sources.tidb_system_tables.tables]]
+source_schema = "information_schema"
+source_table = "SLOW_QUERY"
+dest_table = "slow_query"
+collection_interval = "long"
+enabled = true
+
+# Delta Lake 输出配置
+[sinks.deltalake]
+type = "deltalake"
+inputs = ["tidb_system_tables"]
+base_path = "./data/deltalake"
+batch_size = 1000
+timeout_secs = 30
+compression = "snappy"
+
+# 本地存储选项
+[sinks.deltalake.storage_options]
+"file.enable_move" = "true"
+
+# S3 存储选项 (可选)
+# [sinks.deltalake.storage_options]
+# "aws.access_key_id" = "your_access_key"
+# "aws.secret_access_key" = "your_secret_key"
+# "aws.region" = "us-west-2"
+# "aws.bucket" = "your-bucket"
+
+# 日志配置
+[log]
+level = "info"
+format = "json"
+
+# 指标配置
+[metrics]
+enabled = true
+port = 9598
+path = "/metrics"
+
+# 健康检查配置
+[health_check]
+enabled = true
+port = 9599
+path = "/health"

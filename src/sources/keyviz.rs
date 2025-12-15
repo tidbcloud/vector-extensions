@@ -18,7 +18,7 @@ use vector_lib::{
     tls::TlsConfig,
 };
 
-use super::topsql::topology::{InstanceType, TopologyFetcher};
+use crate::common::topology::{InstanceType, TopologyFetcher};
 use crate::utils::http::build_reqwest_client;
 
 /// PLACEHOLDER

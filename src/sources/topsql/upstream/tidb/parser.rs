@@ -2,13 +2,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use chrono::Utc;
-use vector::event::LogEvent;
+use vector_lib::event::{Event, KeyString, LogEvent, Value as LogValue};
 
 use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
     INSTANCE_TYPE_TIDB, INSTANCE_TYPE_TIKV, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_IS_INTERNAL_SQL,
     LABEL_NAME, LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_SQL_DIGEST,
-    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_PLAN_META, METRIC_NAME_SQL_META,
+    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_NETWORK_BYTES, METRIC_NAME_NETWORK_IN_BYTES,
+    METRIC_NAME_NETWORK_OUT_BYTES, METRIC_NAME_PLAN_META, METRIC_NAME_SQL_META,
     METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT,
 };
 use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser};
@@ -27,12 +28,29 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         response: Self::UpstreamEvent,
         instance: String,
         _schema_cache: Arc<SchemaCache>,
+        enable_row_format: bool,
+        instance_partition_id: u32,
     ) -> Vec<LogEvent> {
-        match response.resp_oneof {
-            Some(RespOneof::Record(record)) => Self::parse_tidb_record(record, instance),
-            Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
-            Some(RespOneof::PlanMeta(plan_meta)) => Self::parse_tidb_plan_meta(plan_meta),
-            None => vec![],
+        if !enable_row_format {
+            match response.resp_oneof {
+                Some(RespOneof::Record(record)) => Self::parse_tidb_record(record, instance),
+                Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
+                Some(RespOneof::PlanMeta(plan_meta)) => Self::parse_tidb_plan_meta(plan_meta),
+                None => vec![],
+            }
+        } else {
+            match response.resp_oneof {
+                Some(RespOneof::Record(record)) => {
+                    Self::parse_tidb_record_to_row_format(record, instance, instance_partition_id)
+                }
+                Some(RespOneof::SqlMeta(sql_meta)) => {
+                    Self::parse_tidb_sql_meta_to_row_format(sql_meta)
+                }
+                Some(RespOneof::PlanMeta(plan_meta)) => {
+                    Self::parse_tidb_plan_meta_to_row_format(plan_meta)
+                }
+                None => vec![],
+            }
         }
     }
 
@@ -45,6 +63,8 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             stmt_kv_exec_count: BTreeMap<String, u64>,
             stmt_duration_sum_ns: u64,
             stmt_duration_count: u64,
+            stmt_network_in_bytes: u64,
+            stmt_network_out_bytes: u64,
         }
 
         let mut new_responses = vec![];
@@ -66,6 +86,8 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                             stmt_kv_exec_count: item.stmt_kv_exec_count.clone(),
                             stmt_duration_sum_ns: item.stmt_duration_sum_ns,
                             stmt_duration_count: item.stmt_duration_count,
+                            stmt_network_in_bytes: item.stmt_network_in_bytes,
+                            stmt_network_out_bytes: item.stmt_network_out_bytes,
                         };
                         match ts_digests.get_mut(&item.timestamp_sec) {
                             None => {
@@ -92,9 +114,9 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             for e in evicted {
                 others.timestamp_sec = *ts;
                 others.cpu_time_ms += e.cpu_time_ms;
-                others.stmt_exec_count = e.stmt_exec_count;
-                others.stmt_duration_sum_ns = e.stmt_duration_sum_ns;
-                others.stmt_duration_count = e.stmt_duration_count;
+                others.stmt_exec_count += e.stmt_exec_count;
+                others.stmt_duration_sum_ns += e.stmt_duration_sum_ns;
+                others.stmt_duration_count += e.stmt_duration_count;
                 for (k, v) in &e.stmt_kv_exec_count {
                     match others.stmt_kv_exec_count.get(k) {
                         None => {
@@ -105,6 +127,8 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                         }
                     }
                 }
+                others.stmt_network_in_bytes += e.stmt_network_in_bytes;
+                others.stmt_network_out_bytes += e.stmt_network_out_bytes;
             }
             v.truncate(top_n);
             match ts_others.get_mut(&ts) {
@@ -128,6 +152,8 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                             }
                         }
                     }
+                    existed_others.stmt_network_in_bytes += others.stmt_network_in_bytes;
+                    existed_others.stmt_network_out_bytes += others.stmt_network_out_bytes;
                 }
             }
         }
@@ -143,6 +169,8 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                     stmt_kv_exec_count: psd.stmt_kv_exec_count.clone(),
                     stmt_duration_sum_ns: psd.stmt_duration_sum_ns,
                     stmt_duration_count: psd.stmt_duration_count,
+                    stmt_network_in_bytes: psd.stmt_network_in_bytes,
+                    stmt_network_out_bytes: psd.stmt_network_out_bytes,
                 };
                 match digest_items.get_mut(&k) {
                     None => {
@@ -280,6 +308,8 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                                     }
                                 }
                             }
+                            new_item.stmt_network_in_bytes += item.stmt_network_in_bytes;
+                            new_item.stmt_network_out_bytes += item.stmt_network_out_bytes;
                             new_items.insert(new_ts, new_item);
                         }
                     }
@@ -327,6 +357,22 @@ impl TopSqlSubResponseParser {
             // stmt_duration_count
             (METRIC_NAME_STMT_DURATION_COUNT, stmt_duration_count),
         );
+
+        // stmt_network_in_bytes + stmt_network_out_bytes
+        buf.label_name(METRIC_NAME_NETWORK_BYTES)
+            .points(record.items.iter().filter_map(|item| {
+                if item.stmt_network_in_bytes > 0 || item.stmt_network_out_bytes > 0 {
+                    Some((
+                        item.timestamp_sec,
+                        (item.stmt_network_in_bytes + item.stmt_network_out_bytes) as f64,
+                    ))
+                } else {
+                    None
+                }
+            }));
+        if let Some(event) = buf.build_event() {
+            logs.push(event);
+        }
 
         // stmt_kv_exec_count
         buf.label_name(METRIC_NAME_STMT_EXEC_COUNT)
@@ -388,6 +434,98 @@ impl TopSqlSubResponseParser {
             &[1.0],
         )]
     }
+
+    // TODO: consider apply chunk style LogEvent for better performance
+    fn parse_tidb_record_to_row_format(record: TopSqlRecord, instance: String, instance_partition_id: u32) -> Vec<LogEvent> {
+        let mut events = vec![];
+        for item in &record.items {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
+
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert("source_table", "tidb_topsql");
+            log.insert("timestamps", LogValue::from(item.timestamp_sec));
+            log.insert("instance_type", INSTANCE_TYPE_TIDB.to_string());
+            log.insert("instance", instance.clone());
+            log.insert("instance_partition_id", LogValue::from(instance_partition_id as i64));
+            log.insert(
+                LABEL_SQL_DIGEST,
+                hex::encode_upper(record.sql_digest.clone()),
+            );
+            log.insert(
+                LABEL_PLAN_DIGEST,
+                hex::encode_upper(record.plan_digest.clone()),
+            );
+            log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
+            log.insert(
+                METRIC_NAME_STMT_EXEC_COUNT,
+                LogValue::from(item.stmt_exec_count),
+            );
+            log.insert(
+                METRIC_NAME_STMT_DURATION_SUM_NS,
+                LogValue::from(item.stmt_duration_sum_ns),
+            );
+            log.insert(
+                METRIC_NAME_STMT_DURATION_COUNT,
+                LogValue::from(item.stmt_duration_count),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_IN_BYTES,
+                LogValue::from(item.stmt_network_in_bytes),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_OUT_BYTES,
+                LogValue::from(item.stmt_network_out_bytes),
+            );
+            let mut tikv_exec_count = BTreeMap::<KeyString, LogValue>::new();
+            for (tikv_instance, exec_count) in item.stmt_kv_exec_count.iter() {
+                tikv_exec_count.insert(
+                    KeyString::from(tikv_instance.as_str()),
+                    LogValue::from(*exec_count),
+                );
+            }
+            log.insert(
+                "topsql_tikv_stmt_exec_count",
+                LogValue::Object(tikv_exec_count),
+            );
+            events.push(event.into_log());
+        }
+        events
+    }
+
+    fn parse_tidb_sql_meta_to_row_format(sql_meta: SqlMeta) -> Vec<LogEvent> {
+        let mut events = vec![];
+        let sql_digest = hex::encode_upper(sql_meta.sql_digest);
+        let mut event = Event::Log(LogEvent::default());
+        let log = event.as_mut_log();
+
+        log.insert("source_table", "tidb_sql_meta");
+        log.insert(LABEL_SQL_DIGEST, sql_digest);
+        log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql);
+        log.insert(LABEL_IS_INTERNAL_SQL, sql_meta.is_internal_sql.to_string());
+        events.push(event.into_log());
+        events
+    }
+
+    fn parse_tidb_plan_meta_to_row_format(plan_meta: PlanMeta) -> Vec<LogEvent> {
+        let mut events = vec![];
+        let plan_digest = hex::encode_upper(plan_meta.plan_digest);
+        let encoded_normalized_plan =
+        hex::encode_upper(plan_meta.encoded_normalized_plan);
+        let mut event = Event::Log(LogEvent::default());
+        let log = event.as_mut_log();
+
+        // Add metadata with Vector prefix (ensure all fields have values)
+        log.insert("source_table", "tidb_plan_meta");
+        log.insert(LABEL_PLAN_DIGEST, plan_digest);
+        log.insert(LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan);
+        log.insert(
+            LABEL_ENCODED_NORMALIZED_PLAN,
+            encoded_normalized_plan.clone(),
+        );
+        events.push(event.into_log());
+        events
+    }
 }
 
 #[cfg(test)]
@@ -432,6 +570,8 @@ mod tests {
                             stmt_kv_exec_count: i.stmt_kv_exec_count,
                             stmt_duration_sum_ns: i.stmt_duration_sum_ns,
                             stmt_duration_count: i.stmt_duration_count,
+                            stmt_network_in_bytes: 0,
+                            stmt_network_out_bytes: 0,
                         })
                         .collect(),
                     keyspace_name: vec![],

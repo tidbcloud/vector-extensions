@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use snafu::{ResultExt, Snafu};
 use vector::http::HttpClient;
 
-use crate::sources::topsql::topology::fetch::{models, utils};
-use crate::sources::topsql::topology::{Component, InstanceType};
+use crate::common::topology::fetch::{models, utils};
+use crate::common::topology::{Component, InstanceType};
 
 #[derive(Debug, Snafu)]
 pub enum FetchError {
