@@ -130,12 +130,12 @@ impl SourceConfig for ConprofConfig {
         let pd_address = self.pd_address.clone();
         let tls = self.tls.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
-        let components_profile_types = self.components_profile_types;
+        let enable_tikv_heap_profile = self.components_profile_types.tikv.heap;
         Ok(Box::pin(async move {
             Controller::new(
                 pd_address,
                 topology_fetch_interval,
-                components_profile_types,
+                enable_tikv_heap_profile,
                 tls,
                 &cx.proxy,
                 cx.out,
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_default_enable_tikv_heap_profile() {
-        assert_eq!(default_enable_tikv_heap_profile(), false);
+        assert_eq!(default_components_profile_types().tikv.heap, true);
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         let outputs = config.outputs(LogNamespace::Legacy);
         assert_eq!(outputs.len(), 1);
@@ -238,7 +238,7 @@ mod tests {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         assert_eq!(config.can_acknowledge(), false);
     }
@@ -249,7 +249,7 @@ mod tests {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         assert!(config.validate_tls().is_ok());
     }
@@ -260,7 +260,7 @@ mod tests {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: Some(TlsConfig::default()),
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         assert!(config.validate_tls().is_ok());
     }
@@ -285,7 +285,7 @@ mod tests {
                 ..Default::default()
             }),
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         assert!(config.validate_tls().is_ok());
     }
@@ -305,7 +305,7 @@ mod tests {
                 ..Default::default()
             }),
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         assert!(config.validate_tls().is_err());
         let err = config.validate_tls().unwrap_err();
@@ -327,7 +327,7 @@ mod tests {
                 ..Default::default()
             }),
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         assert!(config.validate_tls().is_err());
     }
@@ -347,7 +347,7 @@ mod tests {
                 ..Default::default()
             }),
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         assert!(config.validate_tls().is_err());
     }
@@ -369,7 +369,7 @@ mod tests {
                 ..Default::default()
             }),
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         assert!(config.validate_tls().is_err());
     }
@@ -385,7 +385,7 @@ mod tests {
                 ..Default::default()
             }),
             topology_fetch_interval_seconds: 30.0,
-            enable_tikv_heap_profile: false,
+            components_profile_types: default_components_profile_types(),
         };
         assert!(config.validate_tls().is_err());
         let err = config.validate_tls().unwrap_err();
