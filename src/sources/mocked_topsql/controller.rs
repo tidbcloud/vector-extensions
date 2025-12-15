@@ -249,7 +249,7 @@ fn create_event_for_tidb_sql(index: usize, timestamp: i64, sql_digest_vec: &Vec<
         let hour = naive_dt.hour();
         // Calculate time slot index: 0-6=0, 6-12=1, 12-18=2, 18-24=3
         let time_slot = (hour / 6) as u32;
-        let datetime_str = format!("{} {}", date.format("%Y-%m-%d"), time_slot);
+        let datetime_str = format!("{}-{}", date.format("%Y-%m-%d"), time_slot);
         log.insert("datetime", LogValue::from(datetime_str));
         log.insert("instance_type", "tidb");
         log.insert("instance", format!("127.0.1.{}", index));
@@ -304,7 +304,7 @@ fn create_event_for_tikv_sql(
         let hour = naive_dt.hour();
         // Calculate time slot index: 0-6=0, 6-12=1, 12-18=2, 18-24=3
         let time_slot = (hour / 6) as u32;
-        let datetime_str = format!("{} {}", date.format("%Y-%m-%d"), time_slot);
+        let datetime_str = format!("{}-{}", date.format("%Y-%m-%d"), time_slot);
         log.insert("datetime", LogValue::from(datetime_str));
         log.insert("instance_type", "tikv");
         log.insert("instance", format!("127.0.0.{}", index));
@@ -361,7 +361,7 @@ fn create_event_for_tikv_region(
         let hour = naive_dt.hour();
         // Calculate time slot index: 0-6=0, 6-12=1, 12-18=2, 18-24=3
         let time_slot = (hour / 6) as u32;
-        let datetime_str = format!("{} {}", date.format("%Y-%m-%d"), time_slot);
+        let datetime_str = format!("{}-{}", date.format("%Y-%m-%d"), time_slot);
         log.insert("datetime", LogValue::from(datetime_str));
         log.insert("instance_type", "tikv");
         log.insert("instance", format!("127.0.0.{}", index));
