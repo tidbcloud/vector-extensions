@@ -309,7 +309,9 @@ mod tests {
         };
         assert!(config.validate_tls().is_err());
         let err = config.validate_tls().unwrap_err();
-        assert!(err.to_string().contains("ca, cert and private key should be all configured"));
+        assert!(err
+            .to_string()
+            .contains("ca, cert and private key should be all configured"));
     }
 
     #[test]
@@ -410,10 +412,8 @@ mod tests {
 
     #[test]
     fn test_check_key_file_not_exists() {
-        let result = ConprofConfig::check_key_file(
-            "test",
-            &Some(PathBuf::from("/nonexistent/test.key")),
-        );
+        let result =
+            ConprofConfig::check_key_file("test", &Some(PathBuf::from("/nonexistent/test.key")));
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("failed to open"));

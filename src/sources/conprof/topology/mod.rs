@@ -94,7 +94,10 @@ mod tests {
             primary_port: 2379,
             secondary_port: 10080,
         };
-        assert_eq!(component.conprof_address(), Some("127.0.0.1:2379".to_string()));
+        assert_eq!(
+            component.conprof_address(),
+            Some("127.0.0.1:2379".to_string())
+        );
     }
 
     #[test]
@@ -105,7 +108,10 @@ mod tests {
             primary_port: 4000,
             secondary_port: 10080,
         };
-        assert_eq!(component.conprof_address(), Some("127.0.0.1:10080".to_string()));
+        assert_eq!(
+            component.conprof_address(),
+            Some("127.0.0.1:10080".to_string())
+        );
     }
 
     #[test]
@@ -116,7 +122,10 @@ mod tests {
             primary_port: 20160,
             secondary_port: 20180,
         };
-        assert_eq!(component.conprof_address(), Some("127.0.0.1:20180".to_string()));
+        assert_eq!(
+            component.conprof_address(),
+            Some("127.0.0.1:20180".to_string())
+        );
     }
 
     #[test]
@@ -127,7 +136,10 @@ mod tests {
             primary_port: 9000,
             secondary_port: 8123,
         };
-        assert_eq!(component.conprof_address(), Some("127.0.0.1:8123".to_string()));
+        assert_eq!(
+            component.conprof_address(),
+            Some("127.0.0.1:8123".to_string())
+        );
     }
 
     #[test]
@@ -138,7 +150,10 @@ mod tests {
             primary_port: 6000,
             secondary_port: 10080,
         };
-        assert_eq!(component.conprof_address(), Some("127.0.0.1:10080".to_string()));
+        assert_eq!(
+            component.conprof_address(),
+            Some("127.0.0.1:10080".to_string())
+        );
     }
 
     #[test]
@@ -149,7 +164,10 @@ mod tests {
             primary_port: 8287,
             secondary_port: 8286,
         };
-        assert_eq!(component.conprof_address(), Some("127.0.0.1:8286".to_string()));
+        assert_eq!(
+            component.conprof_address(),
+            Some("127.0.0.1:8286".to_string())
+        );
     }
 
     #[test]

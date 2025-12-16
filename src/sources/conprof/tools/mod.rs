@@ -42,8 +42,8 @@ pub async fn fetch_raw(url: String, tls: Option<TlsConfig>) -> Result<Vec<u8>, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_jeprof_constant_exists() {
@@ -79,7 +79,11 @@ mod tests {
         });
 
         // This test will fail if perl is not available or jeprof script is invalid
-        let result = fetch_raw("https://127.0.0.1:8080/debug/pprof/heap".to_string(), tls_config).await;
+        let result = fetch_raw(
+            "https://127.0.0.1:8080/debug/pprof/heap".to_string(),
+            tls_config,
+        )
+        .await;
         // We expect this to fail because there's no real server, but function should be callable
         let _ = result;
     }
@@ -102,7 +106,11 @@ mod tests {
         });
 
         // This should work with all TLS files
-        let result = fetch_raw("https://127.0.0.1:8080/debug/pprof/heap".to_string(), tls_config).await;
+        let result = fetch_raw(
+            "https://127.0.0.1:8080/debug/pprof/heap".to_string(),
+            tls_config,
+        )
+        .await;
         // We expect this to fail because there's no real server, but function should be callable
         let _ = result;
     }

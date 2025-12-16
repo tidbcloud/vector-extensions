@@ -91,11 +91,9 @@ impl<'a> StoreTopologyFetcher<'a> {
     }
 
     fn parse_instance_type(store: &models::StoreInfo) -> InstanceType {
-        if store
-            .labels
-            .iter()
-            .any(|models::LabelItem { key, value }| key == "engine" && value.to_lowercase().contains("tiflash"))
-        {
+        if store.labels.iter().any(|models::LabelItem { key, value }| {
+            key == "engine" && value.to_lowercase().contains("tiflash")
+        }) {
             InstanceType::TiFlash
         } else {
             InstanceType::TiKV
@@ -112,8 +110,8 @@ mod tests {
     use std::convert::Infallible;
     use std::net::SocketAddr;
     use tokio::net::TcpListener;
-    use vector::http::HttpClient;
     use vector::config::ProxyConfig;
+    use vector::http::HttpClient;
 
     #[test]
     fn test_is_up() {
@@ -247,12 +245,12 @@ mod tests {
             state_name: "Up".to_string(),
             labels: vec![],
         };
-        
+
         if StoreTopologyFetcher::is_up(&store) {
             let (host, primary_port) = utils::parse_host_port(&store.address).unwrap();
             let (_, secondary_port) = utils::parse_host_port(&store.status_address).unwrap();
             let instance_type = StoreTopologyFetcher::parse_instance_type(&store);
-            
+
             components.insert(Component {
                 instance_type,
                 host,
@@ -260,7 +258,7 @@ mod tests {
                 secondary_port,
             });
         }
-        
+
         assert_eq!(components.len(), 1);
         let component = components.iter().next().unwrap();
         assert_eq!(component.host, "127.0.0.1");
@@ -279,12 +277,12 @@ mod tests {
             state_name: "Down".to_string(),
             labels: vec![],
         };
-        
+
         if StoreTopologyFetcher::is_up(&store) {
             let (host, primary_port) = utils::parse_host_port(&store.address).unwrap();
             let (_, secondary_port) = utils::parse_host_port(&store.status_address).unwrap();
             let instance_type = StoreTopologyFetcher::parse_instance_type(&store);
-            
+
             components.insert(Component {
                 instance_type,
                 host,
@@ -292,7 +290,7 @@ mod tests {
                 secondary_port,
             });
         }
-        
+
         assert_eq!(components.len(), 0);
     }
 
@@ -318,12 +316,12 @@ mod tests {
                 value: "tiflash".to_string(),
             }],
         };
-        
+
         if StoreTopologyFetcher::is_up(&store) {
             let (host, primary_port) = utils::parse_host_port(&store.address).unwrap();
             let (_, secondary_port) = utils::parse_host_port(&store.status_address).unwrap();
             let instance_type = StoreTopologyFetcher::parse_instance_type(&store);
-            
+
             components.insert(Component {
                 instance_type,
                 host,
@@ -331,7 +329,7 @@ mod tests {
                 secondary_port,
             });
         }
-        
+
         assert_eq!(components.len(), 1);
         let component = components.iter().next().unwrap();
         assert_eq!(component.instance_type, InstanceType::TiFlash);
@@ -358,17 +356,17 @@ mod tests {
                 },
             },
         ];
-        
+
         let mut components = HashSet::new();
         for models::StoreItem { store } in stores {
             if !StoreTopologyFetcher::is_up(&store) {
                 continue;
             }
-            
+
             let (host, primary_port) = utils::parse_host_port(&store.address).unwrap();
             let (_, secondary_port) = utils::parse_host_port(&store.status_address).unwrap();
             let instance_type = StoreTopologyFetcher::parse_instance_type(&store);
-            
+
             components.insert(Component {
                 instance_type,
                 host,
@@ -376,7 +374,7 @@ mod tests {
                 secondary_port,
             });
         }
-        
+
         assert_eq!(components.len(), 1);
     }
 
@@ -410,17 +408,17 @@ mod tests {
                 },
             },
         ];
-        
+
         let mut components = HashSet::new();
         for models::StoreItem { store } in stores {
             if !StoreTopologyFetcher::is_up(&store) {
                 continue;
             }
-            
+
             let (host, primary_port) = utils::parse_host_port(&store.address).unwrap();
             let (_, secondary_port) = utils::parse_host_port(&store.status_address).unwrap();
             let instance_type = StoreTopologyFetcher::parse_instance_type(&store);
-            
+
             components.insert(Component {
                 instance_type,
                 host,
@@ -428,15 +426,15 @@ mod tests {
                 secondary_port,
             });
         }
-        
+
         assert_eq!(components.len(), 2);
     }
 
     async fn mock_http_server(port: u16, stores_resp: String) -> String {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        
+
         let stores_resp_clone = stores_resp.clone();
-        
+
         tokio::spawn(async move {
             let make_svc = make_service_fn(move |_conn| {
                 let stores_resp = stores_resp_clone.clone();
@@ -461,11 +459,11 @@ mod tests {
                     }))
                 }
             });
-            
+
             let server = Server::bind(&addr).serve(make_svc);
             server.await.unwrap();
         });
-        
+
         format!("http://127.0.0.1:{}", port)
     }
 
@@ -492,24 +490,24 @@ mod tests {
                 },
             ],
         };
-        
+
         let stores_resp_json = serde_json::to_string(&stores_resp).unwrap();
-        
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         let pd_address = mock_http_server(port, stores_resp_json).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let proxy_config = ProxyConfig::from_env();
         let http_client = HttpClient::new(None, &proxy_config).unwrap();
         let mut fetcher = StoreTopologyFetcher::new(&pd_address, &http_client);
-        
+
         let mut components = HashSet::new();
         let result = fetcher.get_up_stores(&mut components).await;
-        
+
         assert!(result.is_ok());
         // Should only have one component (the "Up" one)
         assert_eq!(components.len(), 1);
@@ -519,34 +517,32 @@ mod tests {
     async fn test_fetch_stores_with_mock_server() {
         // Test fetch_stores with mock HTTP server
         let stores_resp = models::StoresResponse {
-            stores: vec![
-                models::StoreItem {
-                    store: models::StoreInfo {
-                        address: "127.0.0.1:20160".to_string(),
-                        status_address: "127.0.0.1:20180".to_string(),
-                        state_name: "Up".to_string(),
-                        labels: vec![],
-                    },
+            stores: vec![models::StoreItem {
+                store: models::StoreInfo {
+                    address: "127.0.0.1:20160".to_string(),
+                    status_address: "127.0.0.1:20180".to_string(),
+                    state_name: "Up".to_string(),
+                    labels: vec![],
                 },
-            ],
+            }],
         };
-        
+
         let stores_resp_json = serde_json::to_string(&stores_resp).unwrap();
-        
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         let pd_address = mock_http_server(port, stores_resp_json).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let proxy_config = ProxyConfig::from_env();
         let http_client = HttpClient::new(None, &proxy_config).unwrap();
         let mut fetcher = StoreTopologyFetcher::new(&pd_address, &http_client);
-        
+
         let result = fetcher.fetch_stores().await;
-        
+
         assert!(result.is_ok());
         let stores = result.unwrap();
         assert_eq!(stores.stores.len(), 1);

@@ -249,7 +249,11 @@ impl ConprofSource {
     }
 
     #[cfg(test)]
-    pub(crate) async fn fetch_goroutine(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+    pub(crate) async fn fetch_goroutine(
+        &mut self,
+        filename: String,
+        mut shutdown: ShutdownSubscriber,
+    ) {
         self.fetch_goroutine_impl(filename, shutdown).await
     }
 
@@ -286,11 +290,19 @@ impl ConprofSource {
     }
 
     #[cfg(test)]
-    pub(crate) async fn fetch_heap_with_jeprof(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+    pub(crate) async fn fetch_heap_with_jeprof(
+        &mut self,
+        filename: String,
+        mut shutdown: ShutdownSubscriber,
+    ) {
         self.fetch_heap_with_jeprof_impl(filename, shutdown).await
     }
 
-    async fn fetch_heap_with_jeprof_impl(&mut self, filename: String, mut shutdown: ShutdownSubscriber) {
+    async fn fetch_heap_with_jeprof_impl(
+        &mut self,
+        filename: String,
+        mut shutdown: ShutdownSubscriber,
+    ) {
         tokio::select! {
             _ = shutdown.done() => {}
             resp = fetch_raw(format!("{}/debug/pprof/heap", self.uri), self.tls.clone()) => {
@@ -330,9 +342,9 @@ mod tests {
     fn create_test_source_sender() -> SourceSender {
         // Create SourceSender using builder pattern
         // We need to add a source output first, then build
-        use vector_lib::config::{DataType, SourceOutput};
         use vector::config::ComponentKey;
-        
+        use vector_lib::config::{DataType, SourceOutput};
+
         let mut builder = SourceSender::builder().with_buffer(1000);
         let source_output = SourceOutput {
             port: None,
@@ -350,7 +362,7 @@ mod tests {
 
     async fn mock_pprof_server_with_status(port: u16, status: StatusCode) -> String {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        
+
         tokio::spawn(async move {
             let make_svc = make_service_fn(move |_conn| {
                 let status = status.clone();
@@ -377,24 +389,24 @@ mod tests {
                     }))
                 }
             });
-            
+
             let server = Server::bind(&addr).serve(make_svc);
             server.await.unwrap();
         });
-        
+
         format!("http://127.0.0.1:{}", port)
     }
 
     async fn mock_pprof_server_with_error(port: u16) -> String {
         // Server that will cause connection errors
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        
+
         tokio::spawn(async move {
             // Start server and immediately close it to cause connection errors
             let listener = TcpListener::bind(&addr).await.unwrap();
             drop(listener);
         });
-        
+
         format!("http://127.0.0.1:{}", port)
     }
 
@@ -442,20 +454,22 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         // Update URI to point to mock server
         source.uri = mock_pprof_server(port).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (_, shutdown) = pair();
         let filename = "test-cpu".to_string();
-        
+
         // This will execute the fetch_cpu code path
         source.fetch_cpu(filename, shutdown.clone()).await;
     }
@@ -470,19 +484,21 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (_, shutdown) = pair();
         let filename = "test-heap".to_string();
-        
+
         source.fetch_heap(filename, shutdown.clone()).await;
     }
 
@@ -496,19 +512,21 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (_, shutdown) = pair();
         let filename = "test-mutex".to_string();
-        
+
         source.fetch_mutex(filename, shutdown.clone()).await;
     }
 
@@ -522,19 +540,21 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (_, shutdown) = pair();
         let filename = "test-goroutine".to_string();
-        
+
         source.fetch_goroutine(filename, shutdown.clone()).await;
     }
 
@@ -548,14 +568,16 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         // Use invalid port to cause connection error
         source.uri = "http://127.0.0.1:65535".to_string();
-        
+
         let (_, shutdown) = pair();
         let filename = "test-cpu-error".to_string();
-        
+
         // Should handle error gracefully
         source.fetch_cpu(filename, shutdown.clone()).await;
     }
@@ -570,19 +592,21 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server_with_status(port, StatusCode::INTERNAL_SERVER_ERROR).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (_, shutdown) = pair();
         let filename = "test-cpu-status-error".to_string();
-        
+
         source.fetch_cpu(filename, shutdown.clone()).await;
     }
 
@@ -596,19 +620,21 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server_with_status(port, StatusCode::NOT_FOUND).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (_, shutdown) = pair();
         let filename = "test-heap-status-error".to_string();
-        
+
         source.fetch_heap(filename, shutdown.clone()).await;
     }
 
@@ -622,19 +648,21 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server_with_status(port, StatusCode::BAD_REQUEST).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (_, shutdown) = pair();
         let filename = "test-mutex-status-error".to_string();
-        
+
         source.fetch_mutex(filename, shutdown.clone()).await;
     }
 
@@ -648,19 +676,21 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server_with_status(port, StatusCode::SERVICE_UNAVAILABLE).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (_, shutdown) = pair();
         let filename = "test-goroutine-status-error".to_string();
-        
+
         source.fetch_goroutine(filename, shutdown.clone()).await;
     }
 
@@ -733,22 +763,26 @@ mod tests {
             secondary_port: 20180,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, true).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, true)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (_, shutdown) = pair();
         let filename = "test-heap-jeprof".to_string();
-        
+
         // Note: fetch_heap_with_jeprof uses fetch_raw which calls perl
         // This will fail in test environment, but we can test the code path
-        source.fetch_heap_with_jeprof(filename, shutdown.clone()).await;
+        source
+            .fetch_heap_with_jeprof(filename, shutdown.clone())
+            .await;
     }
 
     #[tokio::test]
@@ -761,29 +795,31 @@ mod tests {
             secondary_port: 2379,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (notifier, mut shutdown) = pair();
-        
+
         // Start run_loop in background and immediately shutdown
         let handle = tokio::spawn(async move {
             source.run_loop(shutdown.clone()).await;
         });
-        
+
         // Give it a moment to start
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        
+
         // Shutdown to stop the loop
         notifier.shutdown();
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         // Cancel the task
         handle.abort();
     }
@@ -798,21 +834,23 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (notifier, mut shutdown) = pair();
-        
+
         let handle = tokio::spawn(async move {
             source.run_loop(shutdown.clone()).await;
         });
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         notifier.shutdown();
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -829,21 +867,23 @@ mod tests {
             secondary_port: 8286,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (notifier, mut shutdown) = pair();
-        
+
         let handle = tokio::spawn(async move {
             source.run_loop(shutdown.clone()).await;
         });
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         notifier.shutdown();
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -860,21 +900,23 @@ mod tests {
             secondary_port: 20180,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (notifier, mut shutdown) = pair();
-        
+
         let handle = tokio::spawn(async move {
             source.run_loop(shutdown.clone()).await;
         });
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         notifier.shutdown();
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -891,21 +933,23 @@ mod tests {
             secondary_port: 20180,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, true).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, true)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (notifier, mut shutdown) = pair();
-        
+
         let handle = tokio::spawn(async move {
             source.run_loop(shutdown.clone()).await;
         });
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         notifier.shutdown();
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -922,14 +966,16 @@ mod tests {
             secondary_port: 8123,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let (notifier, mut shutdown) = pair();
-        
+
         let handle = tokio::spawn(async move {
             source.run_loop(shutdown.clone()).await;
         });
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         notifier.shutdown();
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -946,22 +992,24 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false).await.unwrap();
-        
+        let mut source = ConprofSource::new(component, None, out, false)
+            .await
+            .unwrap();
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         source.uri = mock_pprof_server(port).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let (notifier, mut shutdown) = pair();
-        
+
         // This will test the sleep path in run_loop
         let handle = tokio::spawn(async move {
             source.run_loop(shutdown.clone()).await;
         });
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         notifier.shutdown();
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -979,7 +1027,7 @@ mod tests {
             InstanceType::TiProxy,
             InstanceType::Lightning,
         ];
-        
+
         for instance_type in types {
             let component = Component {
                 instance_type,
@@ -996,14 +1044,14 @@ mod tests {
     fn test_run_loop_instance_type_branches() {
         // Test that all instance type branches in run_loop are covered conceptually
         let instance_types = vec![
-            (InstanceType::TiDB, true),  // Should fetch goroutine, mutex, heap, cpu
-            (InstanceType::PD, true),    // Should fetch goroutine, mutex, heap, cpu
+            (InstanceType::TiDB, true),    // Should fetch goroutine, mutex, heap, cpu
+            (InstanceType::PD, true),      // Should fetch goroutine, mutex, heap, cpu
             (InstanceType::TiProxy, true), // Should fetch goroutine, mutex, heap, cpu
             (InstanceType::Lightning, true), // Should fetch goroutine, mutex, heap, cpu
-            (InstanceType::TiKV, false),  // Should only fetch cpu (and heap if enabled)
+            (InstanceType::TiKV, false),   // Should only fetch cpu (and heap if enabled)
             (InstanceType::TiFlash, false), // Should do nothing
         ];
-        
+
         for (instance_type, should_fetch_multiple) in instance_types {
             let component = Component {
                 instance_type,
@@ -1011,13 +1059,18 @@ mod tests {
                 primary_port: 4000,
                 secondary_port: 10080,
             };
-            
+
             // Verify component structure
-            assert!(component.conprof_address().is_some() || instance_type == InstanceType::TiFlash);
-            
+            assert!(
+                component.conprof_address().is_some() || instance_type == InstanceType::TiFlash
+            );
+
             // Test that we can determine which branch to take
             match instance_type {
-                InstanceType::TiDB | InstanceType::PD | InstanceType::TiProxy | InstanceType::Lightning => {
+                InstanceType::TiDB
+                | InstanceType::PD
+                | InstanceType::TiProxy
+                | InstanceType::Lightning => {
                     assert!(should_fetch_multiple);
                 }
                 InstanceType::TiKV => {
@@ -1036,16 +1089,16 @@ mod tests {
         let ts = 1234567890;
         let instance_type = InstanceType::TiDB;
         let instance_b64 = BASE64_URL_SAFE_NO_PAD.encode("127.0.0.1:10080");
-        
+
         let goroutine_filename = format!("{}-{}-goroutine-{}", ts, instance_type, instance_b64);
         assert!(goroutine_filename.contains("goroutine"));
-        
+
         let mutex_filename = format!("{}-{}-mutex-{}", ts, instance_type, instance_b64);
         assert!(mutex_filename.contains("mutex"));
-        
+
         let heap_filename = format!("{}-{}-heap-{}", ts, instance_type, instance_b64);
         assert!(heap_filename.contains("heap"));
-        
+
         let cpu_filename = format!("{}-{}-cpu-{}", ts, instance_type, instance_b64);
         assert!(cpu_filename.contains("cpu"));
     }
@@ -1054,12 +1107,12 @@ mod tests {
     fn test_uri_construction() {
         // Test URI construction logic
         let address = "127.0.0.1:10080";
-        
+
         // Without TLS
         let uri = format!("http://{}", address);
         assert_eq!(uri, "http://127.0.0.1:10080");
         assert!(uri.starts_with("http://"));
-        
+
         // With TLS
         let uri = format!("https://{}", address);
         assert_eq!(uri, "https://127.0.0.1:10080");
@@ -1072,7 +1125,7 @@ mod tests {
         let address = "127.0.0.1:10080";
         let encoded = BASE64_URL_SAFE_NO_PAD.encode(address);
         assert!(!encoded.is_empty());
-        
+
         // Verify it's valid base64
         let decoded = BASE64_URL_SAFE_NO_PAD.decode(&encoded);
         assert!(decoded.is_ok());
@@ -1085,7 +1138,7 @@ mod tests {
         let mut ts = 1234567890;
         ts -= ts % 60;
         assert_eq!(ts % 60, 0);
-        
+
         let next_minute_ts = ts + 60;
         assert_eq!(next_minute_ts, ts + 60);
     }
@@ -1093,22 +1146,20 @@ mod tests {
     #[test]
     fn test_timestamp_calculation_edge_cases() {
         // Test timestamp calculation with different values
-        let test_cases = vec![
-            1234567890,
-            1234567891,
-            1234567899,
-            1234567859,
-            1234567860,
-        ];
-        
+        let test_cases = vec![1234567890, 1234567891, 1234567899, 1234567859, 1234567860];
+
         for mut ts in test_cases {
             let original_ts = ts;
             ts -= ts % 60;
             assert_eq!(ts % 60, 0, "Timestamp should be rounded down to minute");
             assert!(ts <= original_ts, "Rounded timestamp should be <= original");
-            
+
             let next_minute_ts = ts + 60;
-            assert_eq!(next_minute_ts - ts, 60, "Next minute should be 60 seconds later");
+            assert_eq!(
+                next_minute_ts - ts,
+                60,
+                "Next minute should be 60 seconds later"
+            );
         }
     }
 
@@ -1118,7 +1169,7 @@ mod tests {
         let ts = 1234567890;
         let next_minute_ts = ts + 60; // 1234567950
         let now = 1234567895; // 5 seconds into the minute
-        
+
         if now < next_minute_ts {
             let sleep_seconds = (next_minute_ts - now + 1) as u64;
             // next_minute_ts - now = 1234567950 - 1234567895 = 55
@@ -1133,7 +1184,7 @@ mod tests {
         let ts = 1234567890;
         let next_minute_ts = ts + 60;
         let now = 1234567950; // 50 seconds past the minute
-        
+
         if now < next_minute_ts {
             // Should not enter this branch
             assert!(false, "Should not sleep when past next minute");
@@ -1148,12 +1199,12 @@ mod tests {
         // Test TiKV heap profile conditional logic
         let enable_tikv_heap_profile_true = true;
         let enable_tikv_heap_profile_false = false;
-        
+
         if enable_tikv_heap_profile_true {
             // Should fetch heap with jeprof
             assert!(true, "Should fetch when enabled");
         }
-        
+
         if enable_tikv_heap_profile_false {
             assert!(false, "Should not fetch when disabled");
         } else {
@@ -1206,13 +1257,13 @@ mod tests {
     fn test_status_code_checking() {
         // Test status code checking logic
         use http::StatusCode;
-        
+
         let success_status = StatusCode::OK;
         assert!(success_status.is_success());
-        
+
         let error_status = StatusCode::INTERNAL_SERVER_ERROR;
         assert!(!error_status.is_success());
-        
+
         let not_found_status = StatusCode::NOT_FOUND;
         assert!(!not_found_status.is_success());
     }
@@ -1223,7 +1274,7 @@ mod tests {
         let body = b"test body content";
         let encoded = BASE64_STANDARD.encode(body);
         assert!(!encoded.is_empty());
-        
+
         // Verify it's valid base64
         let decoded = BASE64_STANDARD.decode(&encoded);
         assert!(decoded.is_ok());
@@ -1234,11 +1285,11 @@ mod tests {
     fn test_event_filename_insertion() {
         // Test that filename is inserted into event
         use vector::event::LogEvent;
-        
+
         let mut event = LogEvent::from_str_legacy("test");
         let filename = "1234567890-TiDB-cpu-abc123";
         event.insert("filename", filename);
-        
+
         // Verify filename was inserted
         assert!(event.get("filename").is_some());
     }
@@ -1248,7 +1299,10 @@ mod tests {
         // Test TiDB branch logic
         let instance_type = InstanceType::TiDB;
         match instance_type {
-            InstanceType::TiDB | InstanceType::PD | InstanceType::TiProxy | InstanceType::Lightning => {
+            InstanceType::TiDB
+            | InstanceType::PD
+            | InstanceType::TiProxy
+            | InstanceType::Lightning => {
                 // Should fetch goroutine, mutex, heap, cpu
                 assert!(true, "TiDB should fetch multiple profiles");
             }
@@ -1293,7 +1347,10 @@ mod tests {
         // Test URL construction for fetch_cpu
         let uri = "http://127.0.0.1:10080";
         let cpu_url = format!("{}/debug/pprof/profile?seconds=10", uri);
-        assert_eq!(cpu_url, "http://127.0.0.1:10080/debug/pprof/profile?seconds=10");
+        assert_eq!(
+            cpu_url,
+            "http://127.0.0.1:10080/debug/pprof/profile?seconds=10"
+        );
     }
 
     #[test]
@@ -1317,7 +1374,10 @@ mod tests {
         // Test URL construction for fetch_goroutine
         let uri = "http://127.0.0.1:10080";
         let goroutine_url = format!("{}/debug/pprof/goroutine", uri);
-        assert_eq!(goroutine_url, "http://127.0.0.1:10080/debug/pprof/goroutine");
+        assert_eq!(
+            goroutine_url,
+            "http://127.0.0.1:10080/debug/pprof/goroutine"
+        );
     }
 
     #[test]
@@ -1331,13 +1391,8 @@ mod tests {
     #[test]
     fn test_run_loop_timestamp_alignment() {
         // Test timestamp alignment logic
-        let test_timestamps = vec![
-            1234567890,
-            1234567891,
-            1234567899,
-            1234567949,
-        ];
-        
+        let test_timestamps = vec![1234567890, 1234567891, 1234567899, 1234567949];
+
         for mut ts in test_timestamps {
             let original_ts = ts;
             ts -= ts % 60;
@@ -1353,7 +1408,7 @@ mod tests {
         let mut ts = 1234567890;
         ts -= ts % 60;
         let next_minute_ts = ts + 60;
-        
+
         assert_eq!(next_minute_ts, ts + 60);
         assert!(next_minute_ts > ts);
     }
@@ -1363,13 +1418,13 @@ mod tests {
         // Test enable_tikv_heap_profile flag logic
         let enable_true = true;
         let enable_false = false;
-        
+
         // Test conditional logic
         if enable_true {
             // Should fetch heap with jeprof
             assert!(enable_true);
         }
-        
+
         if !enable_false {
             // Should not fetch heap with jeprof
             assert!(!enable_false);

@@ -85,28 +85,28 @@ mod tests {
         let pod_name1 = "import-test-1".to_string();
         let pod_name2 = "other-pod".to_string();
         let pod_name3 = "import-test-2".to_string();
-        
+
         // Test pod name filtering - executes the check from get_up_lightnings
         assert!(pod_name1.starts_with("import-"));
         assert!(!pod_name2.starts_with("import-"));
         assert!(pod_name3.starts_with("import-"));
-        
+
         // Test phase filtering - executes the check from get_up_lightnings
         let phase_running = Some("Running".to_string());
         let phase_pending = Some("Pending".to_string());
-        
+
         // Execute the actual comparison from get_up_lightnings
         assert_eq!(phase_running.as_deref(), Some("Running"));
         assert_ne!(phase_pending.as_deref(), Some("Running"));
-        
+
         // Test pod_ip filtering - executes the check from get_up_lightnings
         let pod_ip_valid = Some("127.0.0.1".to_string());
         let pod_ip_empty = Some("".to_string());
-        
+
         // Execute the actual checks from get_up_lightnings
         assert!(!pod_ip_valid.as_ref().unwrap().is_empty());
         assert!(pod_ip_empty.as_ref().unwrap().is_empty());
-        
+
         // Test component creation - executes the Component creation from get_up_lightnings
         let pod_ip = "127.0.0.1".to_string();
         if !pod_ip.is_empty() {
@@ -116,7 +116,7 @@ mod tests {
                 primary_port: 8289,
                 secondary_port: 8289,
             };
-            
+
             assert_eq!(component.instance_type, InstanceType::Lightning);
             assert_eq!(component.primary_port, 8289);
             assert_eq!(component.secondary_port, 8289);
@@ -131,7 +131,7 @@ mod tests {
         };
         let display1 = format!("{}", error1);
         assert!(display1.contains("Failed to get namespace"));
-        
+
         // Test ListPods error - we can't easily create kube::Error, so we test the error structure
         // The actual error creation will be tested in integration tests
         let _namespace = "test-ns".to_string();
@@ -143,7 +143,7 @@ mod tests {
             source: std::io::Error::from(std::io::ErrorKind::NotFound),
         };
         let _display = format!("{}", error);
-        
+
         // We can't easily create kube::Error, so we just test that the error type exists
         // The actual error creation will be tested in integration tests
     }
@@ -156,7 +156,7 @@ mod tests {
             phase: Option<String>,
             pod_ip: Option<String>,
         }
-        
+
         let pods = vec![
             MockPod {
                 name: Some("import-test-1".to_string()),
@@ -179,16 +179,18 @@ mod tests {
                 pod_ip: Some("".to_string()),
             },
         ];
-        
+
         let filtered: Vec<_> = pods
             .iter()
             .filter(|pod| {
-                pod.name.as_ref().map_or(false, |n| n.starts_with("import-"))
+                pod.name
+                    .as_ref()
+                    .map_or(false, |n| n.starts_with("import-"))
                     && pod.phase.as_deref() == Some("Running")
                     && pod.pod_ip.as_ref().map_or(false, |ip| !ip.is_empty())
             })
             .collect();
-        
+
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name.as_ref().unwrap(), "import-test-1");
     }
@@ -199,7 +201,7 @@ mod tests {
         // This executes the exact code path from get_up_lightnings
         let mut components = HashSet::new();
         let pod_ip = "127.0.0.1".to_string();
-        
+
         // Execute the exact check and creation from get_up_lightnings
         if !pod_ip.is_empty() {
             components.insert(Component {
@@ -209,13 +211,13 @@ mod tests {
                 secondary_port: 8289,
             });
         }
-        
+
         assert_eq!(components.len(), 1);
         let component = components.iter().next().unwrap();
         assert_eq!(component.instance_type, InstanceType::Lightning);
         assert_eq!(component.primary_port, 8289);
         assert_eq!(component.secondary_port, 8289);
-        
+
         // Test with empty pod_ip (should not insert)
         let mut components2 = HashSet::new();
         let pod_ip_empty = "".to_string();
@@ -239,14 +241,12 @@ mod tests {
             Some("import-test-2".to_string()),
             None,
         ];
-        
+
         let filtered: Vec<_> = pod_names
             .iter()
-            .filter(|name| {
-                name.as_ref().map_or(false, |n| n.starts_with("import-"))
-            })
+            .filter(|name| name.as_ref().map_or(false, |n| n.starts_with("import-")))
             .collect();
-        
+
         assert_eq!(filtered.len(), 2);
     }
 
@@ -259,12 +259,12 @@ mod tests {
             Some("Failed".to_string()),
             None,
         ];
-        
+
         let filtered: Vec<_> = phases
             .iter()
             .filter(|phase| phase.as_deref() == Some("Running"))
             .collect();
-        
+
         assert_eq!(filtered.len(), 1);
     }
 
@@ -277,12 +277,12 @@ mod tests {
             Some("192.168.1.1".to_string()),
             None,
         ];
-        
+
         let filtered: Vec<_> = pod_ips
             .iter()
             .filter(|ip| ip.as_ref().map_or(false, |i| !i.is_empty()))
             .collect();
-        
+
         assert_eq!(filtered.len(), 2);
     }
 
@@ -290,6 +290,9 @@ mod tests {
     fn test_get_up_lightnings_namespace_path() {
         // Test namespace file path
         let namespace_path = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
-        assert_eq!(namespace_path, "/var/run/secrets/kubernetes.io/serviceaccount/namespace");
+        assert_eq!(
+            namespace_path,
+            "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+        );
     }
 }

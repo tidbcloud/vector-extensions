@@ -108,11 +108,17 @@ impl<'a> TiDBTopologyFetcher<'a> {
         Ok(topology_resp)
     }
 
-    pub(crate) fn parse_kv(&self, kv: &'_ etcd_client::KeyValue) -> Result<Option<EtcdTopology>, FetchError> {
+    pub(crate) fn parse_kv(
+        &self,
+        kv: &'_ etcd_client::KeyValue,
+    ) -> Result<Option<EtcdTopology>, FetchError> {
         self.parse_kv_impl(kv)
     }
 
-    fn parse_kv_impl(&self, kv: &'_ etcd_client::KeyValue) -> Result<Option<EtcdTopology>, FetchError> {
+    fn parse_kv_impl(
+        &self,
+        kv: &'_ etcd_client::KeyValue,
+    ) -> Result<Option<EtcdTopology>, FetchError> {
         let (key, value) = Self::extract_kv_str(kv)?;
 
         let remaining_key = &key[self.topolgy_prefix.len()..];
@@ -197,7 +203,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        
+
         // TTL that is still valid (within 45 seconds)
         let valid_ttl = now - Duration::from_secs(30).as_nanos();
         assert!(TiDBTopologyFetcher::is_up(valid_ttl).unwrap());
@@ -233,7 +239,10 @@ mod tests {
         let value = "invalid json";
         let result = TiDBTopologyFetcher::parse_info_impl("127.0.0.1:4000", value);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FetchError::TopologyValueJsonFromStr { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            FetchError::TopologyValueJsonFromStr { .. }
+        ));
     }
 
     #[test]
@@ -345,7 +354,7 @@ mod tests {
         // Test the logic of get_up_tidbs
         let mut up_tidbs = HashSet::new();
         let mut tidbs = Vec::new();
-        
+
         // Simulate TTL that is up
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -355,7 +364,7 @@ mod tests {
         if TiDBTopologyFetcher::is_up(valid_ttl).unwrap() {
             up_tidbs.insert("127.0.0.1:4000".to_string());
         }
-        
+
         // Simulate Info
         let (host, port) = utils::parse_host_port("127.0.0.1:4000").unwrap();
         tidbs.push((
@@ -367,7 +376,7 @@ mod tests {
                 secondary_port: 10080,
             },
         ));
-        
+
         // Test filtering logic
         let mut components = HashSet::new();
         for (address, component) in tidbs {
@@ -375,7 +384,7 @@ mod tests {
                 components.insert(component);
             }
         }
-        
+
         assert_eq!(components.len(), 1);
     }
 
@@ -388,11 +397,11 @@ mod tests {
             .unwrap()
             .as_nanos();
         let expired_ttl = now - Duration::from_secs(60).as_nanos();
-        
+
         if TiDBTopologyFetcher::is_up(expired_ttl).unwrap() {
             up_tidbs.insert("127.0.0.1:4000".to_string());
         }
-        
+
         // Should be empty because TTL is expired
         assert_eq!(up_tidbs.len(), 0);
     }
@@ -403,29 +412,35 @@ mod tests {
         let mut up_tidbs = HashSet::new();
         up_tidbs.insert("127.0.0.1:4000".to_string());
         up_tidbs.insert("127.0.0.1:4001".to_string());
-        
+
         let tidbs = vec![
-            ("127.0.0.1:4000".to_string(), Component {
-                instance_type: InstanceType::TiDB,
-                host: "127.0.0.1".to_string(),
-                primary_port: 4000,
-                secondary_port: 10080,
-            }),
-            ("127.0.0.1:4002".to_string(), Component {
-                instance_type: InstanceType::TiDB,
-                host: "127.0.0.1".to_string(),
-                primary_port: 4002,
-                secondary_port: 10080,
-            }),
+            (
+                "127.0.0.1:4000".to_string(),
+                Component {
+                    instance_type: InstanceType::TiDB,
+                    host: "127.0.0.1".to_string(),
+                    primary_port: 4000,
+                    secondary_port: 10080,
+                },
+            ),
+            (
+                "127.0.0.1:4002".to_string(),
+                Component {
+                    instance_type: InstanceType::TiDB,
+                    host: "127.0.0.1".to_string(),
+                    primary_port: 4002,
+                    secondary_port: 10080,
+                },
+            ),
         ];
-        
+
         let mut components = HashSet::new();
         for (address, component) in tidbs {
             if up_tidbs.contains(&address) {
                 components.insert(component);
             }
         }
-        
+
         assert_eq!(components.len(), 1);
     }
 
@@ -445,10 +460,10 @@ mod tests {
         let mut key_labels = remaining_key.splitn(2, '/');
         let address = key_labels.next().unwrap();
         let kind = key_labels.next().unwrap();
-        
+
         assert_eq!(address, "127.0.0.1:4000");
         assert_eq!(kind, "info");
-        
+
         let result = TiDBTopologyFetcher::parse_info_impl(address, value);
         assert!(result.is_ok());
     }
@@ -462,10 +477,10 @@ mod tests {
         let mut key_labels = remaining_key.splitn(2, '/');
         let address = key_labels.next().unwrap();
         let kind = key_labels.next().unwrap();
-        
+
         assert_eq!(address, "127.0.0.1:4000");
         assert_eq!(kind, "ttl");
-        
+
         let result = TiDBTopologyFetcher::parse_ttl_impl(address, value);
         assert!(result.is_ok());
     }
@@ -478,13 +493,13 @@ mod tests {
         let mut key_labels = remaining_key.splitn(2, '/');
         let _address = key_labels.next().unwrap();
         let kind = key_labels.next().unwrap();
-        
+
         let res = match kind {
             "info" => Some(()),
             "ttl" => Some(()),
             _ => None,
         };
-        
+
         assert!(res.is_none());
     }
 
@@ -493,7 +508,7 @@ mod tests {
         // Test get_up_tidbs logic with multiple TTL and Info entries
         let mut up_tidbs = HashSet::new();
         let mut tidbs = Vec::new();
-        
+
         // Add valid TTL
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -504,7 +519,7 @@ mod tests {
             up_tidbs.insert("127.0.0.1:4000".to_string());
             up_tidbs.insert("127.0.0.1:4001".to_string());
         }
-        
+
         // Add Info entries
         let (host1, port1) = utils::parse_host_port("127.0.0.1:4000").unwrap();
         tidbs.push((
@@ -516,7 +531,7 @@ mod tests {
                 secondary_port: 10080,
             },
         ));
-        
+
         let (host2, port2) = utils::parse_host_port("127.0.0.1:4001").unwrap();
         tidbs.push((
             "127.0.0.1:4001".to_string(),
@@ -527,7 +542,7 @@ mod tests {
                 secondary_port: 10080,
             },
         ));
-        
+
         // Add Info without matching TTL
         let (host3, port3) = utils::parse_host_port("127.0.0.1:4002").unwrap();
         tidbs.push((
@@ -539,7 +554,7 @@ mod tests {
                 secondary_port: 10080,
             },
         ));
-        
+
         // Filter components
         let mut components = HashSet::new();
         for (address, component) in tidbs {
@@ -547,7 +562,7 @@ mod tests {
                 components.insert(component);
             }
         }
-        
+
         assert_eq!(components.len(), 2);
     }
 

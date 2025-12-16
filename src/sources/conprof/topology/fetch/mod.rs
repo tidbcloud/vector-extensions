@@ -7,7 +7,9 @@ mod tiproxy;
 mod utils;
 
 use crate::common::features::is_nextgen_mode;
-use crate::common::topology::fetch::tidb_nextgen::{TiDBNextGenTopologyFetcher, FetchError as TiDBNextGenFetchError};
+use crate::common::topology::fetch::tidb_nextgen::{
+    FetchError as TiDBNextGenFetchError, TiDBNextGenTopologyFetcher,
+};
 use crate::sources::conprof::topology::Component;
 
 #[cfg(test)]
@@ -123,12 +125,12 @@ impl TopologyFetcher {
     ) -> Result<Self, FetchError> {
         // Create http_client (this should work without real connections)
         let http_client = Self::build_http_client_impl(None, proxy_config)?;
-        
+
         // For etcd and kube clients, we'll try to create them, but if they fail,
         // we'll create a mock TopologyFetcher that returns the mock components
         let etcd_result = Self::build_etcd_client(&pd_address, &None).await;
         let kube_result = Self::build_kube_client().await;
-        
+
         // If both etcd and kube fail, we can't create a real TopologyFetcher
         // But we can create a mock one that uses the mock components
         let (etcd_client, kube_client) = match (etcd_result, kube_result) {
@@ -137,11 +139,13 @@ impl TopologyFetcher {
                 // Can't create real clients, return error
                 // The caller should use MockTopologyFetcher instead
                 return Err(FetchError::BuildEtcdClient {
-                    source: etcd_client::Error::InvalidArgs("Mock mode: etcd client not available".to_string()),
+                    source: etcd_client::Error::InvalidArgs(
+                        "Mock mode: etcd client not available".to_string(),
+                    ),
                 });
             }
         };
-        
+
         Ok(Self {
             pd_address,
             http_client,
@@ -164,34 +168,39 @@ impl TopologyFetcher {
             // This might need to be passed in or configured differently
             // For now, using a placeholder approach
             let tidb_group = std::env::var("TIDB_GROUP").unwrap_or_default();
-            
+
             // Create temporary HashSet for common::topology::Component
             let mut temp_components = std::collections::HashSet::new();
-            
-            TiDBNextGenTopologyFetcher::new(
-                self.kube_client.clone(),
-                tidb_group,
-            )
-            .get_up_tidbs(&mut temp_components)
-            .await
-            .context(FetchTiDBNextGenTopologySnafu)?;
-            
+
+            TiDBNextGenTopologyFetcher::new(self.kube_client.clone(), tidb_group)
+                .get_up_tidbs(&mut temp_components)
+                .await
+                .context(FetchTiDBNextGenTopologySnafu)?;
+
             // Convert common::topology::Component to conprof::topology::Component
             for common_comp in temp_components {
                 let instance_type = match common_comp.instance_type {
-                    crate::common::topology::InstanceType::PD => crate::sources::conprof::topology::InstanceType::PD,
-                    crate::common::topology::InstanceType::TiDB => crate::sources::conprof::topology::InstanceType::TiDB,
-                    crate::common::topology::InstanceType::TiKV => crate::sources::conprof::topology::InstanceType::TiKV,
-                    crate::common::topology::InstanceType::TiFlash => crate::sources::conprof::topology::InstanceType::TiFlash,
+                    crate::common::topology::InstanceType::PD => {
+                        crate::sources::conprof::topology::InstanceType::PD
+                    }
+                    crate::common::topology::InstanceType::TiDB => {
+                        crate::sources::conprof::topology::InstanceType::TiDB
+                    }
+                    crate::common::topology::InstanceType::TiKV => {
+                        crate::sources::conprof::topology::InstanceType::TiKV
+                    }
+                    crate::common::topology::InstanceType::TiFlash => {
+                        crate::sources::conprof::topology::InstanceType::TiFlash
+                    }
                 };
-                
+
                 let conprof_comp = crate::sources::conprof::topology::Component {
                     instance_type,
                     host: common_comp.host,
                     primary_port: common_comp.primary_port,
                     secondary_port: common_comp.secondary_port,
                 };
-                
+
                 components.insert(conprof_comp);
             }
         } else {
@@ -262,7 +271,6 @@ impl TopologyFetcher {
             HttpClient::new(tls_settings, proxy_config).context(BuildHttpClientSnafu)?;
         Ok(http_client)
     }
-
 
     #[cfg(test)]
     pub(crate) async fn build_etcd_client(
@@ -367,9 +375,9 @@ impl TopologyFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
-    
+    use tempfile::TempDir;
+
     #[test]
     fn test_fetch_error_display() {
         let error = FetchError::ConfigurationError {
@@ -416,7 +424,10 @@ mod tests {
         let address = "!@#$%".to_string();
         let result = TopologyFetcher::polish_address_impl(address, &None);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FetchError::ParseAddress { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            FetchError::ParseAddress { .. }
+        ));
     }
 
     #[test]
@@ -488,17 +499,17 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let crt_file = temp_dir.path().join("client.crt");
         let key_file = temp_dir.path().join("client.key");
-        
+
         fs::write(&crt_file, "cert content").unwrap();
         fs::write(&key_file, "key content").unwrap();
-        
+
         let tls_config = Some(TlsConfig {
             ca_file: None,
             crt_file: Some(crt_file),
             key_file: Some(key_file),
             ..Default::default()
         });
-        
+
         let result = TopologyFetcher::build_etcd_connect_opt_impl(&tls_config);
         // Should succeed - only crt and key, no ca
         assert!(result.is_ok());
@@ -512,17 +523,20 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let key_file = temp_dir.path().join("client.key");
         fs::write(&key_file, "key content").unwrap();
-        
+
         let tls_config = Some(TlsConfig {
             ca_file: None,
             crt_file: Some(std::path::PathBuf::from("/nonexistent/client.crt")),
             key_file: Some(key_file),
             ..Default::default()
         });
-        
+
         let result = TopologyFetcher::build_etcd_connect_opt_impl(&tls_config);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FetchError::ReadCrtFile { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            FetchError::ReadCrtFile { .. }
+        ));
     }
 
     #[test]
@@ -531,17 +545,20 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let crt_file = temp_dir.path().join("client.crt");
         fs::write(&crt_file, "cert content").unwrap();
-        
+
         let tls_config = Some(TlsConfig {
             ca_file: None,
             crt_file: Some(crt_file),
             key_file: Some(std::path::PathBuf::from("/nonexistent/client.key")),
             ..Default::default()
         });
-        
+
         let result = TopologyFetcher::build_etcd_connect_opt_impl(&tls_config);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FetchError::ReadKeyFile { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            FetchError::ReadKeyFile { .. }
+        ));
     }
 
     #[test]
@@ -553,14 +570,14 @@ mod tests {
         let crt_file = temp_dir.path().join("client.crt");
         fs::write(&ca_file, "ca content").unwrap();
         fs::write(&crt_file, "cert content").unwrap();
-        
+
         let tls_config = Some(TlsConfig {
             ca_file: Some(ca_file),
             crt_file: Some(crt_file),
-            key_file: None,  // Missing key_file
+            key_file: None, // Missing key_file
             ..Default::default()
         });
-        
+
         let result = TopologyFetcher::build_etcd_connect_opt_impl(&tls_config);
         // Should succeed with CA only, no identity
         assert!(result.is_ok());
@@ -597,7 +614,7 @@ mod tests {
         // Test the logic of get_up_components by creating mock components
         use crate::sources::conprof::topology::{Component, InstanceType};
         let mut components = HashSet::new();
-        
+
         // Test that we can add different component types
         let pd_component = Component {
             instance_type: InstanceType::PD,
@@ -606,7 +623,7 @@ mod tests {
             secondary_port: 2379,
         };
         components.insert(pd_component);
-        
+
         let tidb_component = Component {
             instance_type: InstanceType::TiDB,
             host: "127.0.0.1".to_string(),
@@ -614,7 +631,7 @@ mod tests {
             secondary_port: 10080,
         };
         components.insert(tidb_component);
-        
+
         let tikv_component = Component {
             instance_type: InstanceType::TiKV,
             host: "127.0.0.1".to_string(),
@@ -622,9 +639,9 @@ mod tests {
             secondary_port: 20180,
         };
         components.insert(tikv_component);
-        
+
         assert_eq!(components.len(), 3);
-        
+
         // Test that HashSet deduplicates
         let duplicate = Component {
             instance_type: InstanceType::TiDB,
@@ -642,7 +659,7 @@ mod tests {
         // Test that get_up_components handles all component types
         use crate::sources::conprof::topology::{Component, InstanceType};
         let mut components = HashSet::new();
-        
+
         // Add all component types
         let component_types = vec![
             InstanceType::PD,
@@ -652,7 +669,7 @@ mod tests {
             InstanceType::TiProxy,
             InstanceType::Lightning,
         ];
-        
+
         for instance_type in component_types {
             components.insert(Component {
                 instance_type,
@@ -661,7 +678,7 @@ mod tests {
                 secondary_port: 10080,
             });
         }
-        
+
         assert_eq!(components.len(), 6);
     }
 
@@ -671,15 +688,24 @@ mod tests {
         // We can't actually test the full flow without real kube client,
         // but we can test the conversion logic
         use crate::sources::conprof::topology::{Component, InstanceType};
-        
+
         // Test instance type conversion - this executes the match statement
         let instance_type_mappings = vec![
             (crate::common::topology::InstanceType::PD, InstanceType::PD),
-            (crate::common::topology::InstanceType::TiDB, InstanceType::TiDB),
-            (crate::common::topology::InstanceType::TiKV, InstanceType::TiKV),
-            (crate::common::topology::InstanceType::TiFlash, InstanceType::TiFlash),
+            (
+                crate::common::topology::InstanceType::TiDB,
+                InstanceType::TiDB,
+            ),
+            (
+                crate::common::topology::InstanceType::TiKV,
+                InstanceType::TiKV,
+            ),
+            (
+                crate::common::topology::InstanceType::TiFlash,
+                InstanceType::TiFlash,
+            ),
         ];
-        
+
         for (common_type, conprof_type) in instance_type_mappings {
             // Execute the match statement from get_up_components
             let instance_type = match common_type {
@@ -689,7 +715,7 @@ mod tests {
                 crate::common::topology::InstanceType::TiFlash => InstanceType::TiFlash,
                 _ => panic!("Unexpected instance type"),
             };
-            
+
             let conprof_comp = Component {
                 instance_type,
                 host: "127.0.0.1".to_string(),
@@ -698,7 +724,7 @@ mod tests {
             };
             assert_eq!(conprof_comp.instance_type, conprof_type);
         }
-        
+
         // Test TIDB_GROUP env var logic
         let tidb_group = std::env::var("TIDB_GROUP").unwrap_or_default();
         let _ = tidb_group;
@@ -710,14 +736,14 @@ mod tests {
         // We can't actually test the full flow without real etcd client,
         // but we can test the structure
         use crate::sources::conprof::topology::{Component, InstanceType};
-        
+
         let component = Component {
             instance_type: InstanceType::TiDB,
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
         };
-        
+
         assert_eq!(component.instance_type, InstanceType::TiDB);
     }
 
@@ -773,16 +799,17 @@ mod tests {
             ("https://127.0.0.1:2379", "https://127.0.0.1:2379"),
             ("http://127.0.0.1:2379/", "http://127.0.0.1:2379"),
         ];
-        
+
         for (input, expected) in test_cases {
             let result = TopologyFetcher::polish_address_impl(input.to_string(), &None);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), expected);
         }
-        
+
         // Test with TLS
         let tls_config = Some(TlsConfig::default());
-        let result = TopologyFetcher::polish_address_impl("127.0.0.1:2379".to_string(), &tls_config);
+        let result =
+            TopologyFetcher::polish_address_impl("127.0.0.1:2379".to_string(), &tls_config);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "https://127.0.0.1:2379");
     }

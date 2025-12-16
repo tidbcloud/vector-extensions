@@ -4,8 +4,8 @@ use std::sync::Arc;
 use chrono::Utc;
 use vector::event::{Event, Metric, MetricKind, MetricTags, MetricValue};
 
-use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::common::features::is_nextgen_mode;
+use crate::sources::topsql::schema_cache::SchemaCache;
 use crate::sources::topsql::upstream::consts::{
     INSTANCE_TYPE_TIDB, INSTANCE_TYPE_TIKV, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_IS_INTERNAL_SQL,
     LABEL_NAME, LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_SQL_DIGEST,
@@ -13,11 +13,11 @@ use crate::sources::topsql::upstream::consts::{
     METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT,
 };
 use crate::sources::topsql::upstream::parser::{truncate_label_value, Buf, UpstreamEventParser};
-use crate::sources::topsql::upstream::utils::make_metric_like_log_event;
 use crate::sources::topsql::upstream::tidb::proto::top_sql_sub_response::RespOneof;
 use crate::sources::topsql::upstream::tidb::proto::{
     PlanMeta, SqlMeta, TopSqlRecord, TopSqlRecordItem, TopSqlSubResponse,
 };
+use crate::sources::topsql::upstream::utils::make_metric_like_log_event;
 
 pub struct TopSqlSubResponseParser;
 
@@ -523,7 +523,14 @@ mod tests {
             }
         }
         top_cpu_time.sort_by(|a, b| b.cmp(a));
-        assert_eq!(top_cpu_time, [90, 60, 50, 50, 50, 40, 40, 40, 40, 40, 40, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 20, 20, 20, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            top_cpu_time,
+            [
+                90, 60, 50, 50, 50, 40, 40, 40, 40, 40, 40, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30,
+                30, 30, 30, 30, 30, 30, 20, 20, 20, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0
+            ]
+        );
         assert_eq!(others_cpu_time, 30000);
     }
 

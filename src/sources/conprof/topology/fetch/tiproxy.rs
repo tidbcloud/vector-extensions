@@ -114,11 +114,17 @@ impl<'a> TiProxyTopologyFetcher<'a> {
         Ok(topology_resp)
     }
 
-    pub(crate) fn parse_kv(&self, kv: &'_ etcd_client::KeyValue) -> Result<Option<EtcdTopology>, FetchError> {
+    pub(crate) fn parse_kv(
+        &self,
+        kv: &'_ etcd_client::KeyValue,
+    ) -> Result<Option<EtcdTopology>, FetchError> {
         self.parse_kv_impl(kv)
     }
 
-    fn parse_kv_impl(&self, kv: &'_ etcd_client::KeyValue) -> Result<Option<EtcdTopology>, FetchError> {
+    fn parse_kv_impl(
+        &self,
+        kv: &'_ etcd_client::KeyValue,
+    ) -> Result<Option<EtcdTopology>, FetchError> {
         let (key, value) = Self::extract_kv_str(kv)?;
 
         let remaining_key = &key[self.topolgy_prefix.len()..];
@@ -198,7 +204,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        
+
         // TTL that is still valid (within 45 seconds)
         let valid_ttl = now - Duration::from_secs(30).as_nanos();
         assert!(TiProxyTopologyFetcher::is_up(valid_ttl).unwrap());
@@ -226,12 +232,16 @@ mod tests {
         let value = "invalid json";
         let result = TiProxyTopologyFetcher::parse_info_impl("127.0.0.1:6000", value);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FetchError::TopologyValueJsonFromStr { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            FetchError::TopologyValueJsonFromStr { .. }
+        ));
     }
 
     #[test]
     fn test_parse_ttl() {
-        let result = TiProxyTopologyFetcher::parse_ttl_impl("127.0.0.1:6000", "1234567890").unwrap();
+        let result =
+            TiProxyTopologyFetcher::parse_ttl_impl("127.0.0.1:6000", "1234567890").unwrap();
         match result {
             EtcdTopology::TTL { address, ttl } => {
                 assert_eq!(address, "127.0.0.1:6000");
@@ -311,7 +321,7 @@ mod tests {
         // Test the logic of get_up_tiproxys
         let mut up_tiproxys = HashSet::new();
         let mut tiproxys = Vec::new();
-        
+
         // Simulate TTL that is up
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -321,7 +331,7 @@ mod tests {
         if TiProxyTopologyFetcher::is_up(valid_ttl).unwrap() {
             up_tiproxys.insert("127.0.0.1:6000".to_string());
         }
-        
+
         // Simulate Info
         let (host, primary_port) = utils::parse_host_port("127.0.0.1:6000").unwrap();
         let secondary_port = "6001".parse::<u16>().unwrap();
@@ -334,7 +344,7 @@ mod tests {
                 secondary_port,
             },
         ));
-        
+
         // Test filtering logic
         let mut components = HashSet::new();
         for (address, component) in tiproxys {
@@ -342,7 +352,7 @@ mod tests {
                 components.insert(component);
             }
         }
-        
+
         assert_eq!(components.len(), 1);
     }
 
@@ -382,10 +392,10 @@ mod tests {
         let mut key_labels = remaining_key.splitn(2, '/');
         let address = key_labels.next().unwrap();
         let kind = key_labels.next().unwrap();
-        
+
         assert_eq!(address, "127.0.0.1:6000");
         assert_eq!(kind, "info");
-        
+
         let result = TiProxyTopologyFetcher::parse_info_impl(address, value);
         assert!(result.is_ok());
     }
@@ -399,10 +409,10 @@ mod tests {
         let mut key_labels = remaining_key.splitn(2, '/');
         let address = key_labels.next().unwrap();
         let kind = key_labels.next().unwrap();
-        
+
         assert_eq!(address, "127.0.0.1:6000");
         assert_eq!(kind, "ttl");
-        
+
         let result = TiProxyTopologyFetcher::parse_ttl_impl(address, value);
         assert!(result.is_ok());
     }
@@ -415,13 +425,13 @@ mod tests {
         let mut key_labels = remaining_key.splitn(2, '/');
         let _address = key_labels.next().unwrap();
         let kind = key_labels.next().unwrap();
-        
+
         let res = match kind {
             "info" => Some(()),
             "ttl" => Some(()),
             _ => None,
         };
-        
+
         assert!(res.is_none());
     }
 
@@ -430,7 +440,7 @@ mod tests {
         // Test get_up_tiproxys logic with multiple TTL and Info entries
         let mut up_tiproxys = HashSet::new();
         let mut tiproxys = Vec::new();
-        
+
         // Add valid TTL
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -440,7 +450,7 @@ mod tests {
         if TiProxyTopologyFetcher::is_up(valid_ttl).unwrap() {
             up_tiproxys.insert("127.0.0.1:6000".to_string());
         }
-        
+
         // Add Info entry
         let (host, primary_port) = utils::parse_host_port("127.0.0.1:6000").unwrap();
         let secondary_port = "6001".parse::<u16>().unwrap();
@@ -453,7 +463,7 @@ mod tests {
                 secondary_port,
             },
         ));
-        
+
         // Filter components
         let mut components = HashSet::new();
         for (address, component) in tiproxys {
@@ -461,7 +471,7 @@ mod tests {
                 components.insert(component);
             }
         }
-        
+
         assert_eq!(components.len(), 1);
     }
 

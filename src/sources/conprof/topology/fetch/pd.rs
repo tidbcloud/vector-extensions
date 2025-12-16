@@ -119,16 +119,16 @@ impl<'a> PDTopologyFetcher<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::conprof::topology::fetch::models;
-    use crate::sources::conprof::topology::fetch::mock::pd::PDResponseGenerator;
     use crate::sources::conprof::topology::fetch::mock;
+    use crate::sources::conprof::topology::fetch::mock::pd::PDResponseGenerator;
+    use crate::sources::conprof::topology::fetch::models;
     use hyper::service::{make_service_fn, service_fn};
     use hyper::{Body, Request, Response, Server, StatusCode};
     use std::convert::Infallible;
     use std::net::SocketAddr;
     use tokio::net::TcpListener;
-    use vector::http::HttpClient;
     use vector::config::ProxyConfig;
+    use vector::http::HttpClient;
 
     #[test]
     fn test_pd_topology_fetcher_new() {
@@ -143,7 +143,7 @@ mod tests {
         // We can't create HttpClient, but we can test the path constants
         let health_path = "/pd/api/v1/health";
         let members_path = "/pd/api/v1/members";
-        
+
         assert_eq!(health_path, "/pd/api/v1/health");
         assert_eq!(members_path, "/pd/api/v1/members");
     }
@@ -154,7 +154,7 @@ mod tests {
         let mut health_members = std::collections::HashSet::new();
         health_members.insert(1);
         health_members.insert(2);
-        
+
         let members = vec![
             models::MemberItem {
                 member_id: 1,
@@ -169,15 +169,15 @@ mod tests {
                 client_urls: vec!["http://127.0.0.1:2381".to_string()],
             },
         ];
-        
+
         // Test filtering logic
         let filtered: Vec<_> = members
             .iter()
             .filter(|m| health_members.contains(&m.member_id))
             .collect();
-        
+
         assert_eq!(filtered.len(), 2);
-        
+
         // Test that we get the first client_url
         for member in &filtered {
             if let Some(url) = member.client_urls.get(0) {
@@ -227,13 +227,13 @@ mod tests {
                 health: true,
             },
         ];
-        
+
         let health_members: std::collections::HashSet<_> = health_resp
             .iter()
             .filter(|h| h.health)
             .map(|h| h.member_id)
             .collect();
-        
+
         assert_eq!(health_members.len(), 2);
         assert!(health_members.contains(&1));
         assert!(health_members.contains(&3));
@@ -266,7 +266,7 @@ mod tests {
             member_id: 1,
             client_urls: vec!["http://127.0.0.1:2379".to_string()],
         };
-        
+
         if let Some(url) = member.client_urls.get(0) {
             let result = utils::parse_host_port(url);
             if let Ok((host, port)) = result {
@@ -278,7 +278,7 @@ mod tests {
                 });
             }
         }
-        
+
         assert_eq!(components.len(), 1);
         let component = components.iter().next().unwrap();
         assert_eq!(component.host, "127.0.0.1");
@@ -293,7 +293,7 @@ mod tests {
             member_id: 1,
             client_urls: vec![],
         };
-        
+
         assert!(member.client_urls.get(0).is_none());
     }
 
@@ -307,7 +307,7 @@ mod tests {
                 "http://127.0.0.1:2380".to_string(),
             ],
         };
-        
+
         let first_url = member.client_urls.get(0);
         assert!(first_url.is_some());
         assert_eq!(first_url.unwrap(), "http://127.0.0.1:2379");
@@ -336,13 +336,11 @@ mod tests {
         // Test get_up_pds with empty health_members
         let mut components = HashSet::new();
         let health_members: HashSet<u64> = HashSet::new();
-        let members = vec![
-            models::MemberItem {
-                member_id: 1,
-                client_urls: vec!["http://127.0.0.1:2379".to_string()],
-            },
-        ];
-        
+        let members = vec![models::MemberItem {
+            member_id: 1,
+            client_urls: vec!["http://127.0.0.1:2379".to_string()],
+        }];
+
         for member in members {
             if health_members.contains(&member.member_id) {
                 if let Some(url) = member.client_urls.get(0) {
@@ -358,16 +356,16 @@ mod tests {
                 }
             }
         }
-        
+
         assert_eq!(components.len(), 0);
     }
 
     async fn mock_http_server(port: u16, health_resp: String, members_resp: String) -> String {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        
+
         let health_resp_clone = health_resp.clone();
         let members_resp_clone = members_resp.clone();
-        
+
         tokio::spawn(async move {
             let make_svc = make_service_fn(move |_conn| {
                 let health_resp = health_resp_clone.clone();
@@ -399,11 +397,11 @@ mod tests {
                     }))
                 }
             });
-            
+
             let server = Server::bind(&addr).serve(make_svc);
             server.await.unwrap();
         });
-        
+
         format!("http://127.0.0.1:{}", port)
     }
 
@@ -420,27 +418,27 @@ mod tests {
                 peer_url: "http://127.0.0.1:2381".to_string(),
             },
         ]);
-        
+
         let health_resp = generator.health_resp();
         let members_resp = generator.members_resp();
-        
+
         // Find an available port
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         let pd_address = mock_http_server(port, health_resp, members_resp).await;
-        
+
         // Wait a bit for server to start
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let proxy_config = ProxyConfig::from_env();
         let http_client = HttpClient::new(None, &proxy_config).unwrap();
         let fetcher = PDTopologyFetcher::new(&pd_address, &http_client);
-        
+
         let mut components = HashSet::new();
         let result = fetcher.get_up_pds(&mut components).await;
-        
+
         // Should succeed and find components
         assert!(result.is_ok());
         assert!(!components.is_empty());
@@ -449,30 +447,28 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_pd_health_with_mock_server() {
         // Test fetch_pd_health with mock HTTP server
-        let generator = PDResponseGenerator::new(vec![
-            mock::pd::PDURL {
-                client_url: "http://127.0.0.1:2379".to_string(),
-                peer_url: "http://127.0.0.1:2380".to_string(),
-            },
-        ]);
-        
+        let generator = PDResponseGenerator::new(vec![mock::pd::PDURL {
+            client_url: "http://127.0.0.1:2379".to_string(),
+            peer_url: "http://127.0.0.1:2380".to_string(),
+        }]);
+
         let health_resp = generator.health_resp();
         let members_resp = generator.members_resp();
-        
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         let pd_address = mock_http_server(port, health_resp, members_resp).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let proxy_config = ProxyConfig::from_env();
         let http_client = HttpClient::new(None, &proxy_config).unwrap();
         let fetcher = PDTopologyFetcher::new(&pd_address, &http_client);
-        
+
         let result = fetcher.fetch_pd_health().await;
-        
+
         assert!(result.is_ok());
         let health = result.unwrap();
         assert!(!health.is_empty());
@@ -481,30 +477,28 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_pd_members_with_mock_server() {
         // Test fetch_pd_members with mock HTTP server
-        let generator = PDResponseGenerator::new(vec![
-            mock::pd::PDURL {
-                client_url: "http://127.0.0.1:2379".to_string(),
-                peer_url: "http://127.0.0.1:2380".to_string(),
-            },
-        ]);
-        
+        let generator = PDResponseGenerator::new(vec![mock::pd::PDURL {
+            client_url: "http://127.0.0.1:2379".to_string(),
+            peer_url: "http://127.0.0.1:2380".to_string(),
+        }]);
+
         let health_resp = generator.health_resp();
         let members_resp = generator.members_resp();
-        
+
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        
+
         let pd_address = mock_http_server(port, health_resp, members_resp).await;
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         let proxy_config = ProxyConfig::from_env();
         let http_client = HttpClient::new(None, &proxy_config).unwrap();
         let fetcher = PDTopologyFetcher::new(&pd_address, &http_client);
-        
+
         let result = fetcher.fetch_pd_members().await;
-        
+
         assert!(result.is_ok());
         let members = result.unwrap();
         assert!(!members.members.is_empty());
@@ -516,14 +510,12 @@ mod tests {
         let mut components = HashSet::new();
         let mut health_members: HashSet<u64> = HashSet::new();
         health_members.insert(2); // Different member_id
-        
-        let members = vec![
-            models::MemberItem {
-                member_id: 1,
-                client_urls: vec!["http://127.0.0.1:2379".to_string()],
-            },
-        ];
-        
+
+        let members = vec![models::MemberItem {
+            member_id: 1,
+            client_urls: vec!["http://127.0.0.1:2379".to_string()],
+        }];
+
         for member in members {
             if health_members.contains(&member.member_id) {
                 if let Some(url) = member.client_urls.get(0) {
@@ -539,7 +531,7 @@ mod tests {
                 }
             }
         }
-        
+
         assert_eq!(components.len(), 0);
     }
 }
