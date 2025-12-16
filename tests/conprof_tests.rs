@@ -1,65 +1,9 @@
-pub mod fetch;
-
-use std::fmt;
-
-pub use fetch::FetchError;
-
-#[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
-pub enum InstanceType {
-    PD,
-    TiDB,
-    TiKV,
-    TiFlash,
-    TiProxy,
-    Lightning,
-}
-
-impl fmt::Display for InstanceType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            InstanceType::PD => write!(f, "pd"),
-            InstanceType::TiDB => write!(f, "tidb"),
-            InstanceType::TiKV => write!(f, "tikv"),
-            InstanceType::TiFlash => write!(f, "tiflash"),
-            InstanceType::TiProxy => write!(f, "tiproxy"),
-            InstanceType::Lightning => write!(f, "lightning"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
-pub struct Component {
-    pub instance_type: InstanceType,
-    pub host: String,
-    pub primary_port: u16,
-    pub secondary_port: u16,
-}
-
-impl Component {
-    pub fn conprof_address(&self) -> Option<String> {
-        match self.instance_type {
-            InstanceType::PD => Some(format!("{}:{}", self.host, self.primary_port)),
-            InstanceType::TiDB
-            | InstanceType::TiKV
-            | InstanceType::TiFlash
-            | InstanceType::TiProxy
-            | InstanceType::Lightning => Some(format!("{}:{}", self.host, self.secondary_port)),
-        }
-    }
-}
-
-impl fmt::Display for Component {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}({}:{}, {}:{})",
-            self.instance_type, self.host, self.primary_port, self.host, self.secondary_port
-        )
-    }
-}
+// We need to make the topology module public to access its components in tests
+use vector_extensions::sources::conprof::topology::fetch::{FetchError, TopologyFetcher};
+use vector_extensions::sources::conprof::topology::{Component, InstanceType};
 
 #[cfg(test)]
-mod tests {
+mod topology_tests {
     use super::*;
 
     #[test]
@@ -73,6 +17,81 @@ mod tests {
     }
 
     #[test]
+    fn test_component_conprof_address() {
+        // Test PD component
+        let pd_component = Component {
+            instance_type: InstanceType::PD,
+            host: "127.0.0.1".to_string(),
+            primary_port: 2379,
+            secondary_port: 2380,
+        };
+        assert_eq!(
+            pd_component.conprof_address(),
+            Some("127.0.0.1:2379".to_string())
+        );
+
+        // Test TiDB component
+        let tidb_component = Component {
+            instance_type: InstanceType::TiDB,
+            host: "127.0.0.1".to_string(),
+            primary_port: 4000,
+            secondary_port: 10080,
+        };
+        assert_eq!(
+            tidb_component.conprof_address(),
+            Some("127.0.0.1:10080".to_string())
+        );
+
+        // Test TiKV component
+        let tikv_component = Component {
+            instance_type: InstanceType::TiKV,
+            host: "127.0.0.1".to_string(),
+            primary_port: 20160,
+            secondary_port: 20180,
+        };
+        assert_eq!(
+            tikv_component.conprof_address(),
+            Some("127.0.0.1:20180".to_string())
+        );
+
+        // Test TiFlash component
+        let tiflash_component = Component {
+            instance_type: InstanceType::TiFlash,
+            host: "127.0.0.1".to_string(),
+            primary_port: 9000,
+            secondary_port: 8123,
+        };
+        assert_eq!(
+            tiflash_component.conprof_address(),
+            Some("127.0.0.1:8123".to_string())
+        );
+
+        // Test TiProxy component
+        let tiproxy_component = Component {
+            instance_type: InstanceType::TiProxy,
+            host: "127.0.0.1".to_string(),
+            primary_port: 6000,
+            secondary_port: 6001,
+        };
+        assert_eq!(
+            tiproxy_component.conprof_address(),
+            Some("127.0.0.1:6001".to_string())
+        );
+
+        // Test Lightning component
+        let lightning_component = Component {
+            instance_type: InstanceType::Lightning,
+            host: "127.0.0.1".to_string(),
+            primary_port: 8287,
+            secondary_port: 8286,
+        };
+        assert_eq!(
+            lightning_component.conprof_address(),
+            Some("127.0.0.1:8286".to_string())
+        );
+    }
+
+    #[test]
     fn test_component_display() {
         let component = Component {
             instance_type: InstanceType::TiDB,
@@ -83,90 +102,6 @@ mod tests {
         assert_eq!(
             component.to_string(),
             "tidb(127.0.0.1:4000, 127.0.0.1:10080)"
-        );
-    }
-
-    #[test]
-    fn test_component_conprof_address_pd() {
-        let component = Component {
-            instance_type: InstanceType::PD,
-            host: "127.0.0.1".to_string(),
-            primary_port: 2379,
-            secondary_port: 10080,
-        };
-        assert_eq!(
-            component.conprof_address(),
-            Some("127.0.0.1:2379".to_string())
-        );
-    }
-
-    #[test]
-    fn test_component_conprof_address_tidb() {
-        let component = Component {
-            instance_type: InstanceType::TiDB,
-            host: "127.0.0.1".to_string(),
-            primary_port: 4000,
-            secondary_port: 10080,
-        };
-        assert_eq!(
-            component.conprof_address(),
-            Some("127.0.0.1:10080".to_string())
-        );
-    }
-
-    #[test]
-    fn test_component_conprof_address_tikv() {
-        let component = Component {
-            instance_type: InstanceType::TiKV,
-            host: "127.0.0.1".to_string(),
-            primary_port: 20160,
-            secondary_port: 20180,
-        };
-        assert_eq!(
-            component.conprof_address(),
-            Some("127.0.0.1:20180".to_string())
-        );
-    }
-
-    #[test]
-    fn test_component_conprof_address_tiflash() {
-        let component = Component {
-            instance_type: InstanceType::TiFlash,
-            host: "127.0.0.1".to_string(),
-            primary_port: 9000,
-            secondary_port: 8123,
-        };
-        assert_eq!(
-            component.conprof_address(),
-            Some("127.0.0.1:8123".to_string())
-        );
-    }
-
-    #[test]
-    fn test_component_conprof_address_tiproxy() {
-        let component = Component {
-            instance_type: InstanceType::TiProxy,
-            host: "127.0.0.1".to_string(),
-            primary_port: 6000,
-            secondary_port: 10080,
-        };
-        assert_eq!(
-            component.conprof_address(),
-            Some("127.0.0.1:10080".to_string())
-        );
-    }
-
-    #[test]
-    fn test_component_conprof_address_lightning() {
-        let component = Component {
-            instance_type: InstanceType::Lightning,
-            host: "127.0.0.1".to_string(),
-            primary_port: 8287,
-            secondary_port: 8286,
-        };
-        assert_eq!(
-            component.conprof_address(),
-            Some("127.0.0.1:8286".to_string())
         );
     }
 

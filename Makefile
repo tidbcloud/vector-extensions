@@ -38,40 +38,96 @@ build:
 	@cargo build --no-default-features --features default
 	@echo "Done building."
 
+.PHONY: build-nextgen
+build-nextgen:
+	@echo "Building nextgen mode..."
+	@cargo build --no-default-features --features default,nextgen
+	@echo "Done building nextgen mode."
+
 .PHONY: build-release
 build-release:
 	@echo "Building release..."
 	@cargo build --release --no-default-features --features default
 	@echo "Done building release."
 
+.PHONY: build-release-nextgen
+build-release-nextgen:
+	@echo "Building release nextgen mode..."
+	@cargo build --release --no-default-features --features default,nextgen
+	@echo "Done building release nextgen mode."
+
 .PHONY: build-x86_64-unknown-linux-gnu
 build-x86_64-unknown-linux-gnu: target/x86_64-unknown-linux-gnu/release/vector
+	@echo "Output to ${<}"
+
+.PHONY: build-x86_64-unknown-linux-gnu-nextgen
+build-x86_64-unknown-linux-gnu-nextgen: target/x86_64-unknown-linux-gnu/release/vector-nextgen
 	@echo "Output to ${<}"
 
 .PHONY: build-aarch64-unknown-linux-gnu
 build-aarch64-unknown-linux-gnu: target/aarch64-unknown-linux-gnu/release/vector
 	@echo "Output to ${<}"
 
+.PHONY: build-aarch64-unknown-linux-gnu-nextgen
+build-aarch64-unknown-linux-gnu-nextgen: target/aarch64-unknown-linux-gnu/release/vector-nextgen
+	@echo "Output to ${<}"
+
 .PHONY: build-armv7-unknown-linux-gnueabihf
 build-armv7-unknown-linux-gnueabihf: target/armv7-unknown-linux-gnueabihf/release/vector
+	@echo "Output to ${<}"
+
+.PHONY: build-armv7-unknown-linux-gnueabihf-nextgen
+build-armv7-unknown-linux-gnueabihf-nextgen: target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
 	@echo "Output to ${<}"
 
 .PHONY: build-x86_64-unknown-linux-musl
 build-x86_64-unknown-linux-musl: target/x86_64-unknown-linux-musl/release/vector
 	@echo "Output to ${<}"
 
+.PHONY: build-x86_64-unknown-linux-musl-nextgen
+build-x86_64-unknown-linux-musl-nextgen: target/x86_64-unknown-linux-musl/release/vector-nextgen
+	@echo "Output to ${<}"
+
 .PHONY: build-aarch64-unknown-linux-musl
 build-aarch64-unknown-linux-musl: target/aarch64-unknown-linux-musl/release/vector
+	@echo "Output to ${<}"
+
+.PHONY: build-aarch64-unknown-linux-musl-nextgen
+build-aarch64-unknown-linux-musl-nextgen: target/aarch64-unknown-linux-musl/release/vector-nextgen
 	@echo "Output to ${<}"
 
 .PHONY: build-armv7-unknown-linux-musleabihf
 build-armv7-unknown-linux-musleabihf: target/armv7-unknown-linux-musleabihf/release/vector
 	@echo "Output to ${<}"
 
+.PHONY: build-armv7-unknown-linux-musleabihf-nextgen
+build-armv7-unknown-linux-musleabihf-nextgen: target/armv7-unknown-linux-musleabihf/release/vector-nextgen
+	@echo "Output to ${<}"
+
+# Auto-detect Docker platform for cross-compilation
+#
+# macOS on Apple Silicon (Darwin arm64) requires --platform linux/amd64 because:
+# 1. macOS runs Darwin kernel, not Linux - containers need Linux environment
+# 2. Rosetta 2 provides efficient x86_64->ARM64 translation for Linux containers
+# 3. Building linux/arm64 containers would require QEMU emulation, which is slower
+#
+# Usage:
+#   Default: Auto-detect platform based on host system
+#   Override: DOCKER_PLATFORM="--platform linux/amd64" make build-aarch64-unknown-linux-gnu
+#   Disable: DOCKER_PLATFORM="" make build-aarch64-unknown-linux-gnu
+DOCKER_PLATFORM ?= $(shell if [ "$$(uname)" = "Darwin" ] && [ "$$(uname -m)" = "arm64" ]; then echo "--platform linux/amd64"; else echo ""; fi)
+
 .PHONY: cross-image-%
 cross-image-%: export TRIPLE =$($(strip @):cross-image-%=%)
 cross-image-%:
+	@echo "Building cross image for ${TRIPLE}..."
+	@if [ -n "$(DOCKER_PLATFORM)" ]; then \
+		echo "Using Docker platform: $(DOCKER_PLATFORM)"; \
+	else \
+		echo "Using default Docker platform"; \
+	fi
 	docker build \
+		$(DOCKER_PLATFORM) \
 		--tag vector-cross-env:${TRIPLE} \
 		--file scripts/cross/${TRIPLE}.dockerfile \
 		scripts/cross
@@ -79,6 +135,7 @@ cross-image-%:
 target/%/vector: export PAIR =$(subst /, ,$(@:target/%/vector=%))
 target/%/vector: export TRIPLE ?=$(word 1,${PAIR})
 target/%/vector: export PROFILE ?=$(word 2,${PAIR})
+target/%/vector: export FEATURES =default
 target/%/vector: export CFLAGS += -g0 -O3
 target/%/vector: cargo-install-cross
 	$(MAKE) -k cross-image-${TRIPLE}
@@ -86,7 +143,20 @@ target/%/vector: cargo-install-cross
 		$(if $(findstring release,$(PROFILE)),--release,) \
 		--target ${TRIPLE} \
 		--no-default-features \
-		--features default
+		--features ${FEATURES}
+
+target/%/vector-nextgen: export PAIR =$(subst /, ,$(@:target/%/vector-nextgen=%))
+target/%/vector-nextgen: export TRIPLE ?=$(word 1,${PAIR})
+target/%/vector-nextgen: export PROFILE ?=$(word 2,${PAIR})
+target/%/vector-nextgen: export FEATURES =default,nextgen
+target/%/vector-nextgen: export CFLAGS += -g0 -O3
+target/%/vector-nextgen: cargo-install-cross
+	$(MAKE) -k cross-image-${TRIPLE}
+	cross build \
+		$(if $(findstring release,$(PROFILE)),--release,) \
+		--target ${TRIPLE} \
+		--no-default-features \
+		--features ${FEATURES}
 
 .PHONY: cargo-install-%
 cargo-install-%: override TOOL = $(@:cargo-install-%=%)
@@ -100,6 +170,14 @@ release-docker: target/aarch64-unknown-linux-gnu/release/vector
 	@echo "Releasing docker image..."
 	@scripts/release-docker.sh
 	@echo "Done releasing docker image."
+
+.PHONY: release-docker-nextgen
+release-docker-nextgen: target/x86_64-unknown-linux-gnu/release/vector-nextgen
+release-docker-nextgen: target/aarch64-unknown-linux-gnu/release/vector-nextgen
+# release-docker-nextgen: target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
+	@echo "Releasing docker image (nextgen mode)..."
+	@NEXTGEN=true scripts/release-docker.sh
+	@echo "Done releasing docker image (nextgen mode)."
 
 .PHONY: test-integration
 test-integration:

@@ -45,7 +45,6 @@ impl TiDBNextGenTopologyFetcher {
                 self.tidb_group
             )
         };
-
         let pod_list = Api::<Pod>::namespaced(self.client.clone(), &namespace)
             .list(&ListParams::default().labels(&label_selector))
             .await

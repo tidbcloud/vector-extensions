@@ -1,6 +1,9 @@
 // Integration test for system_tables source with deltalake sink
 // Tests the complete data pipeline: mock data -> system_tables events -> deltalake -> verify files
 
+#![allow(clippy::print_stdout)]
+#![allow(clippy::print_stderr)]
+
 use std::collections::BTreeMap;
 use std::fs;
 use vector_lib::event::{Event, LogEvent, ObjectMap};

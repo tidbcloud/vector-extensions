@@ -50,6 +50,7 @@ snafu = { version = "0.8.6", default-features = false, features = ["futures"] }
 sqlx = { version = "0.8", features = ["mysql", "runtime-tokio-rustls", "chrono"] }
 tokio = { version = "1.45.1", default-features = false, features = ["full"] }
 tokio-openssl = { version = "0.6.5", default-features = false }
+openssl = { version = "0.10", features = ["vendored"] }
 tokio-stream = { version = "0.1.17", default-features = false, features = ["net", "sync", "time"] }
 tokio-util = { version = "0.7", default-features = false, features = ["io", "time"] }
 toml = { version = "0.9.4", default-features = false }
@@ -65,7 +66,9 @@ xz2 = { version = "0.1.7" }
 
 [dev-dependencies]
 lazy_static = "1.4.0"
+mockall = "0.13"
 regex = "1.10.3"
+tempfile = "3.8.0"
 
 [build-dependencies]
 prost-build = { version = "0.12", default-features = false }
