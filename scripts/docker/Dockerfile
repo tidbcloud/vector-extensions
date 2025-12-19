@@ -1,9 +1,9 @@
-FROM docker.io/debian:bullseye-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata systemd
+FROM docker.io/debian:13-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata systemd curl binutils
 
 ARG TARGETARCH
 COPY vector-$TARGETARCH /usr/bin/vector
-COPY vector.toml /etc/vector/vector.toml
+# COPY vector.toml /etc/vector/vector.toml
 
 ENV VECTOR_LOG="info"
 

@@ -1,4 +1,6 @@
-FROM ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.4
+FROM ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:edge
 
 COPY bootstrap-ubuntu.sh .
+COPY install-protoc.sh .
 RUN ./bootstrap-ubuntu.sh
+RUN ./install-protoc.sh

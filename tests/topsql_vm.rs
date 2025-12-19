@@ -12,6 +12,8 @@ type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 const VM_BASE_URL: &str = "http://127.0.0.1:8428/prometheus/api/v1";
 
 #[tokio::test]
+#[ignore] // This is an integration test that requires external services (VictoriaMetrics, TiDB cluster, etc.)
+          // Run `make test-integration` to set up the environment and run this test.
 async fn topsql_vm() {
     let client = Client::new();
 

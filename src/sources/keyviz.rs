@@ -1,0 +1,540 @@
+use chrono::Utc;
+use rand::Rng;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashSet, sync::Arc, time::Duration};
+use tokio::sync::Mutex;
+use vector::{
+    config::{GenerateConfig, SourceConfig, SourceContext},
+    event::LogEvent,
+    internal_events::StreamClosedError,
+    SourceSender,
+};
+use vector_lib::{
+    config::{DataType, LogNamespace, SourceOutput},
+    configurable::configurable_component,
+    internal_event::InternalEvent,
+    source::Source,
+    tls::TlsConfig,
+};
+
+use crate::common::topology::{InstanceType, TopologyFetcher};
+use crate::utils::http::build_reqwest_client;
+
+/// PLACEHOLDER
+#[configurable_component(source("keyviz"))]
+#[derive(Debug, Clone)]
+pub struct KeyvizConfig {
+    /// PLACEHOLDER
+    pub pd_address: String,
+
+    /// PLACEHOLDER
+    pub tls: Option<TlsConfig>,
+
+    /// PLACEHOLDER
+    pub max_regions_per_pd_request: Option<usize>,
+
+    /// PLACEHOLDER
+    pub max_requests_per_round: Option<usize>,
+}
+
+pub const fn default_max_regions_per_pd_request() -> usize {
+    10240
+}
+
+pub const fn default_max_requests_per_round() -> usize {
+    0
+}
+
+impl GenerateConfig for KeyvizConfig {
+    fn generate_config() -> toml::Value {
+        toml::Value::try_from(Self {
+            pd_address: "127.0.0.1:2379".to_owned(),
+            tls: None,
+            max_regions_per_pd_request: Some(default_max_regions_per_pd_request()),
+            max_requests_per_round: Some(default_max_requests_per_round()),
+        })
+        .unwrap()
+    }
+}
+
+#[async_trait::async_trait]
+#[typetag::serde(name = "keyviz")]
+impl SourceConfig for KeyvizConfig {
+    async fn build(&self, mut cx: SourceContext) -> vector::Result<Source> {
+        use crate::common::features::is_nextgen_mode;
+
+        if is_nextgen_mode() {
+            // Keyviz is not supported in nextgen mode
+            return Err("Keyviz source is not supported in nextgen mode".into());
+        }
+        self.validate_tls()?;
+        let tls = self.tls.clone();
+        let pd_address = if tls.is_some() {
+            format!("https://{}", self.pd_address)
+        } else {
+            format!("http://{}", self.pd_address)
+        };
+
+        let client = match build_reqwest_client(tls.clone(), None, None).await {
+            Ok(client) => client,
+            Err(err) => {
+                error!(message = "Failed to build reqwest client", %err);
+                return Err(format!("Failed to build reqwest client: {}", err).into());
+            }
+        };
+
+        let max_regions_per_pd_request = self.max_regions_per_pd_request;
+        let max_requests_per_round = self.max_requests_per_round;
+        Ok(Box::pin(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await; // protect crash loop
+
+            // Since we already checked is_nextgen_mode() above, we know we're in legacy mode here
+            let topo = TopologyFetcher::new(
+                Some(pd_address.clone()),
+                tls.clone(),
+                &cx.proxy,
+                None, // tidb_group
+                None, // label_k8s_instance
+            )
+            .await
+            .unwrap();
+            let etcd = topo.etcd_client().unwrap().clone();
+            let tidb_instances = Arc::new(Mutex::new(Vec::<String>::new()));
+            {
+                let tidb_instances = tidb_instances.clone();
+                let mut shutdown = cx.shutdown.clone();
+                let mut topo = topo;
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = &mut shutdown => break,
+                            _ = fetch_and_update_tidb_instances(&mut topo, tidb_instances.clone()) => {},
+                        }
+                        tokio::select! {
+                            _ = &mut shutdown => break,
+                            _ = tokio::time::sleep(Duration::from_secs(600)) => {},
+                        }
+                    }
+                });
+            }
+
+            {
+                let tls = tls.clone();
+                let mut shutdown = cx.shutdown.clone();
+                let mut client = client.clone();
+                let mut out = cx.out.clone();
+                let mut etcd = etcd.clone();
+                tokio::spawn(async move {
+                    let mut schema_version = -1;
+                    loop {
+                        tokio::select! {
+                            _ = &mut shutdown => break,
+                            _ = fetch_and_send_tidb_schema(
+                                &mut client,
+                                &tls,
+                                &mut etcd,
+                                &mut schema_version,
+                                &mut out,
+                                tidb_instances.clone(),
+                            ) => {},
+                        }
+                        tokio::select! {
+                            _ = &mut shutdown => break,
+                            _ = tokio::time::sleep(Duration::from_secs(60)) => {},
+                        }
+                    }
+                });
+            }
+
+            loop {
+                let now = Utc::now();
+                let filename = format!("{}.json", now.format("%Y%m%d%H%M").to_string());
+                let mut ts = now.timestamp();
+                ts -= ts % 60;
+                let next_minute_ts = ts + 60;
+                tokio::select! {
+                    _ = &mut cx.shutdown => break,
+                    _ = fetch_and_send_regions(
+                        client.clone(),
+                        &pd_address,
+                        &mut cx.out,
+                        filename,
+                        max_regions_per_pd_request,
+                        max_requests_per_round,
+                    ) => {},
+                }
+                let now = Utc::now().timestamp();
+                if now < next_minute_ts {
+                    tokio::select! {
+                        _ = &mut cx.shutdown => break,
+                        _ = tokio::time::sleep(Duration::from_secs((next_minute_ts - now + 1) as u64)) => {},
+                    }
+                }
+            }
+            Ok(())
+        }))
+    }
+
+    fn outputs(&self, _: LogNamespace) -> Vec<SourceOutput> {
+        vec![SourceOutput {
+            port: None,
+            ty: DataType::Log,
+            schema_definition: None,
+        }]
+    }
+
+    fn can_acknowledge(&self) -> bool {
+        false
+    }
+}
+
+impl KeyvizConfig {
+    fn check_key_file(
+        tag: &str,
+        path: &Option<std::path::PathBuf>,
+    ) -> vector::Result<Option<std::fs::File>> {
+        if path.is_none() {
+            return Ok(None);
+        }
+        match std::fs::File::open(path.as_ref().unwrap()) {
+            Err(e) => Err(format!("failed to open {:?} to load {}: {:?}", path, tag, e).into()),
+            Ok(f) => Ok(Some(f)),
+        }
+    }
+
+    fn validate_tls(&self) -> vector::Result<()> {
+        if self.tls.is_none() {
+            return Ok(());
+        }
+        let tls = self.tls.as_ref().unwrap();
+        if (tls.ca_file.is_some() || tls.crt_file.is_some() || tls.key_file.is_some())
+            && (tls.ca_file.is_none() || tls.crt_file.is_none() || tls.key_file.is_none())
+        {
+            return Err("ca, cert and private key should be all configured.".into());
+        }
+        Self::check_key_file("ca key", &tls.ca_file)?;
+        Self::check_key_file("cert key", &tls.crt_file)?;
+        Self::check_key_file("private key", &tls.key_file)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RegionsInfo {
+    count: usize,
+    regions: Vec<RegionInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RegionInfo {
+    start_key: String,
+    end_key: String,
+    written_bytes: u64,
+    read_bytes: u64,
+    written_keys: u64,
+    read_keys: u64,
+}
+
+async fn fetch_and_send_regions(
+    client: Client,
+    pd_address: &str,
+    out: &mut SourceSender,
+    filename: String,
+    max_regions_per_pd_request: Option<usize>,
+    max_requests_per_round: Option<usize>,
+) {
+    match fetch_regions(
+        client.clone(),
+        pd_address,
+        max_regions_per_pd_request,
+        max_requests_per_round,
+    )
+    .await
+    {
+        Ok(regions) => {
+            let json = match serde_json::to_string(&regions) {
+                Ok(v) => v,
+                Err(err) => {
+                    error!(message = "Failed to serialize regions json", %err);
+                    return;
+                }
+            };
+            let mut event = LogEvent::from_str_legacy(json);
+            event.insert("filename", filename);
+            if out.send_event(event).await.is_err() {
+                StreamClosedError { count: 1 }.emit();
+            }
+        }
+        Err(err) => {
+            error!(message = "Failed to fetch regions", %err);
+            return;
+        }
+    }
+}
+
+async fn fetch_regions(
+    client: Client,
+    pd_address: &str,
+    max_regions_per_pd_request: Option<usize>,
+    max_requests_per_round: Option<usize>,
+) -> reqwest::Result<RegionsInfo> {
+    let mut all = RegionsInfo {
+        count: 0,
+        regions: vec![],
+    };
+    let mut start_key = Vec::new();
+    let mut req_count = max_requests_per_round.unwrap_or(default_max_requests_per_round());
+    if req_count == 0 {
+        req_count = usize::MAX;
+    }
+    let req_limit = max_regions_per_pd_request.unwrap_or(default_max_regions_per_pd_request());
+    while req_count > 0 {
+        let mut regions =
+            fetch_regions_part(client.clone(), pd_address, &start_key, &[], req_limit).await?;
+        let last_key = regions.regions.last().map(|r| r.end_key.clone());
+        all.regions.append(&mut regions.regions);
+        all.count += regions.count;
+        start_key = match last_key {
+            None => break,
+            Some(last_key) => {
+                if last_key == "" {
+                    break;
+                }
+                match hex::decode(&last_key) {
+                    Err(_) => break,
+                    Ok(last_key_bytes) => last_key_bytes,
+                }
+            }
+        };
+        req_count -= 1;
+    }
+    Ok(all)
+}
+
+async fn fetch_regions_part(
+    client: Client,
+    pd_address: &str,
+    key: &[u8],
+    end_key: &[u8],
+    limit: usize,
+) -> reqwest::Result<RegionsInfo> {
+    let encoded_key = url::form_urlencoded::byte_serialize(key).collect::<String>();
+    let encoded_end_key = url::form_urlencoded::byte_serialize(end_key).collect::<String>();
+    let url = format!(
+        "{}/pd/api/v1/regions/key?end_key={}&key={}&limit={}",
+        pd_address, encoded_end_key, encoded_key, limit
+    );
+    info!("sending pd request: {}", url);
+    client.get(url).send().await?.json().await
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct DBTablesInfo {
+    db: DBInfo,
+    tables: Vec<TableInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct DBInfo {
+    id: i64,
+    db_name: CIStr,
+    state: u8,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TableInfo {
+    id: i64,
+    name: CIStr,
+    index_info: Option<Vec<Option<IndexInfo>>>,
+    partition: Option<PartitionInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct IndexInfo {
+    id: i64,
+    idx_name: CIStr,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PartitionInfo {
+    enable: bool,
+    definitions: Option<Vec<Option<PartitionDefinition>>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PartitionDefinition {
+    id: i64,
+    name: CIStr,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CIStr {
+    #[serde(rename = "O")]
+    o: String,
+    #[serde(rename = "L")]
+    l: String,
+}
+
+async fn fetch_and_update_tidb_instances(
+    topo: &mut TopologyFetcher,
+    tidb_instances: Arc<Mutex<Vec<String>>>,
+) {
+    let mut components = HashSet::new();
+    if let Err(err) = topo.get_up_components(&mut components).await {
+        warn!(message = "Failed to fetch topology", %err);
+        return;
+    }
+    let mut tidbs = vec![];
+    for component in components {
+        if component.instance_type == InstanceType::TiDB {
+            tidbs.push(format!("{}:{}", component.host, component.secondary_port));
+        }
+    }
+    *(tidb_instances.lock().await) = tidbs;
+}
+
+async fn fetch_and_send_tidb_schema(
+    client: &mut Client,
+    tls: &Option<TlsConfig>,
+    etcd: &mut etcd_client::Client,
+    schema_version: &mut i32,
+    out: &mut SourceSender,
+    tidb_instances: Arc<Mutex<Vec<String>>>,
+) {
+    let resp = match etcd.get("/tidb/ddl/global_schema_version", None).await {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(message = "Failed to fetch tidb schema version", %err);
+            return;
+        }
+    };
+    let kvs = resp.kvs();
+    if kvs.len() != 1 {
+        warn!(message = "Failed to fetch tidb schema version, invalid response");
+        return;
+    }
+    let value = match String::from_utf8(kvs[0].value().to_owned()) {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(message = "Failed to parse tidb schema version", %err);
+            return;
+        }
+    };
+    let new_schema_version = match value.parse::<i32>() {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(message = "Failed to parse tidb schema version", %err);
+            return;
+        }
+    };
+    if new_schema_version == *schema_version {
+        return;
+    }
+    let tidb_instance = {
+        let tidb_instances = tidb_instances.lock().await;
+        if tidb_instances.is_empty() {
+            return;
+        }
+        let idx = rand::rng().random_range(0..tidb_instances.len());
+        tidb_instances[idx].clone()
+    };
+    let dbinfos = match fetch_tidb_dbinfos(client, tls, &tidb_instance).await {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(message = "Failed to fetch tidb db info", %err);
+            return;
+        }
+    };
+    let mut db_tables = Vec::with_capacity(dbinfos.len());
+    let mut update_success = true;
+    for dbinfo in dbinfos {
+        if dbinfo.state == 0 {
+            continue;
+        }
+        let tableinfos =
+            match fetch_tidb_tableinfos(client, tls, &tidb_instance, &dbinfo.db_name.o).await {
+                Ok(v) => v,
+                Err(err) => {
+                    update_success = false;
+                    warn!(message = "Failed to fetch tidb table info", %err);
+                    continue;
+                }
+            };
+        db_tables.push(DBTablesInfo {
+            db: dbinfo,
+            tables: tableinfos,
+        })
+    }
+    if update_success {
+        *schema_version = new_schema_version;
+    }
+    let json = match serde_json::to_string(&db_tables) {
+        Ok(v) => v,
+        Err(err) => {
+            error!(message = "Failed to serialize tidb schema json", %err);
+            return;
+        }
+    };
+    let mut event = LogEvent::from_str_legacy(json);
+    event.insert("filename", "tidb-schema");
+    if out.send_event(event).await.is_err() {
+        StreamClosedError { count: 1 }.emit();
+    }
+}
+
+async fn fetch_tidb_dbinfos(
+    client: &mut Client,
+    tls: &Option<TlsConfig>,
+    tidb_instance: &str,
+) -> reqwest::Result<Vec<DBInfo>> {
+    let schema = if tidb_instance.starts_with("http") {
+        ""
+    } else if tls.is_some() {
+        "https://"
+    } else {
+        "http://"
+    };
+
+    client
+        .get(format!("{}{}/schema", schema, tidb_instance))
+        .send()
+        .await?
+        .json()
+        .await
+}
+
+async fn fetch_tidb_tableinfos(
+    client: &mut Client,
+    tls: &Option<TlsConfig>,
+    tidb_instance: &str,
+    dbname: &str,
+) -> reqwest::Result<Vec<TableInfo>> {
+    let schema = if tidb_instance.starts_with("http") {
+        ""
+    } else if tls.is_some() {
+        "https://"
+    } else {
+        "http://"
+    };
+
+    client
+        .get(format!(
+            "{}{}/schema/{}?id_name_only=true",
+            schema, tidb_instance, dbname
+        ))
+        .send()
+        .await?
+        .json()
+        .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_config() {
+        vector::test_util::test_generate_config::<KeyvizConfig>();
+    }
+}

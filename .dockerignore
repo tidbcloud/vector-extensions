@@ -1,9 +1,12 @@
 *
-!packages
-!extensions
-!scripts
+!benches
+!lib
+!proto
 !src
 !tests
+!build.rs
 !Cargo.lock
 !Cargo.toml
-!rust-toolchain
+!rust-toolchain.toml
+!scripts
+!vdev
