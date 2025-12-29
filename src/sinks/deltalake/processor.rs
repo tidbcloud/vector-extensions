@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use vector_lib::event::Event;
 use vector_lib::sink::StreamSink;
 
-use crate::sinks::deltalake::{writer::DeltaLakeWriter, DeltaTableConfig, WriteConfig};
+use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
 
 /// Delta Lake sink processor
 pub struct DeltaLakeSink {

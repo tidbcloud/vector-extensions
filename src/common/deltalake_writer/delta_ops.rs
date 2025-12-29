@@ -7,6 +7,7 @@ use deltalake::operations::create::CreateBuilder;
 use deltalake::operations::write::WriteBuilder;
 use deltalake::DeltaOps;
 use tracing::{error, info, warn};
+use url::Url;
 
 use super::schema::SchemaManager;
 use super::types::TypeConverter;
@@ -30,7 +31,7 @@ impl DeltaOpsManager {
     /// Create DeltaOps from URI with optional storage options
     pub async fn create_delta_ops(
         &self,
-        table_uri: &str,
+        table_uri: &Url,
     ) -> Result<DeltaOps, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(storage_options) = &self.storage_options {
             // Create redacted version for logging
@@ -49,12 +50,12 @@ impl DeltaOpsManager {
                 redacted_options
             );
             Ok(
-                DeltaOps::try_from_uri_with_storage_options(table_uri, storage_options.clone())
+                DeltaOps::try_from_uri_with_storage_options(table_uri.as_str(), storage_options.clone())
                     .await?,
             )
         } else {
             info!("No storage options provided, using default credential chain");
-            Ok(DeltaOps::try_from_uri(table_uri).await?)
+            Ok(DeltaOps::try_from_uri(table_uri.as_str()).await?)
         }
     }
 
@@ -78,7 +79,7 @@ impl DeltaOpsManager {
     /// Create a new Delta table
     pub async fn create_table(
         &self,
-        table_uri: &str,
+        table_uri: &Url,
         table_name: &str,
         schema: &arrow::datatypes::Schema,
         partition_by: Option<&Vec<String>>,
@@ -89,7 +90,7 @@ impl DeltaOpsManager {
             table_uri, table_name
         );
 
-        let mut create_builder = CreateBuilder::new().with_location(table_uri).with_columns(
+        let mut create_builder = CreateBuilder::new().with_location(table_uri.to_string()).with_columns(
             schema
                 .fields()
                 .iter()
@@ -156,13 +157,37 @@ impl DeltaOpsManager {
         schema_manager: &SchemaManager,
         storage_options: Option<&HashMap<String, String>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // For local paths, ensure table directory exists
-        if !table_path.to_string_lossy().starts_with("s3://") {
-            std::fs::create_dir_all(table_path)?;
-        }
+        // Build Delta table URI as url::Url
+        // For non-S3 paths, add file:// protocol prefix (only absolute paths are supported)
+        let table_uri = {
+            let path_str = table_path.to_string_lossy();
+            if path_str.starts_with("s3://") {
+                // S3 paths already have protocol prefix
+                Url::parse(&path_str)?
+            } else if path_str.starts_with("file://") {
+                // Already has file:// prefix
+                Url::parse(&path_str)?
+            } else {
+                // For local paths, only absolute paths are supported
+                if !table_path.is_absolute() {
+                    return Err(format!(
+                        "Only absolute paths are supported for local file system. Got: {}",
+                        path_str
+                    )
+                    .into());
+                }
+                // For absolute paths: file:///path (three slashes)
+                let file_url = format!("file://{}", path_str);
+                Url::parse(&file_url)?
+            }
+        };
 
-        // Build Delta table URI
-        let table_uri = table_path.to_string_lossy().to_string();
+        // For local paths, ensure table directory exists
+        if table_uri.scheme() == "file" {
+            if let Ok(path) = table_uri.to_file_path() {
+                std::fs::create_dir_all(&path)?;
+            }
+        }
 
         info!("Writing to Delta Lake table at: {}", table_uri);
 
@@ -234,17 +259,20 @@ impl DeltaOpsManager {
     #[allow(dead_code)]
     pub async fn table_exists(
         &self,
-        table_uri: &str,
+        table_uri: &Url,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        if table_uri.starts_with("s3://") {
+        if table_uri.scheme() == "s3" {
             // For S3, we need to check if _delta_log exists
             // This is a simplified check - in practice you'd use the Delta Lake APIs
             // For now, we'll always return false for S3 to trigger table creation logic
             Ok(false)
         } else {
             // For local filesystem
-            let path = PathBuf::from(table_uri);
-            Ok(path.join("_delta_log").exists())
+            if let Ok(path) = table_uri.to_file_path() {
+                Ok(path.join("_delta_log").exists())
+            } else {
+                Ok(false)
+            }
         }
     }
 }

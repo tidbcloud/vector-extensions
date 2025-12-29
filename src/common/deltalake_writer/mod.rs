@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use arrow::datatypes::Schema;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 use vector_lib::event::Event;
-
-use crate::sinks::deltalake::{DeltaTableConfig, WriteConfig};
 
 // Module declarations
 pub mod converter;
@@ -18,6 +17,36 @@ pub use converter::EventConverter;
 pub use delta_ops::DeltaOpsManager;
 pub use schema::SchemaManager;
 pub use types::TypeConverter;
+
+/// Delta table configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaTableConfig {
+    /// Table name
+    pub name: String,
+
+    /// Enable schema evolution
+    pub schema_evolution: Option<bool>,
+}
+
+/// Write configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WriteConfig {
+    /// Batch size for writing
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+
+    /// Write timeout in seconds
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+pub const fn default_batch_size() -> usize {
+    1000
+}
+
+pub const fn default_timeout_secs() -> u64 {
+    30
+}
 
 /// Delta Lake table writer (refactored version)
 pub struct DeltaLakeWriter {
