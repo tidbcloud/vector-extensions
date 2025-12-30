@@ -3,16 +3,22 @@ use std::sync::Arc;
 
 use prost::Message;
 use vector::event::Event;
+use vector_lib::event::{LogEvent, Value as LogValue};
 
-use crate::sources::topsql::schema_cache::SchemaCache;
-use crate::sources::topsql::upstream::consts::{
+use crate::sources::topsql_v2::schema_cache::SchemaCache;
+use crate::sources::topsql_v2::upstream::consts::{
     INSTANCE_TYPE_TIKV, KV_TAG_LABEL_INDEX, KV_TAG_LABEL_ROW, KV_TAG_LABEL_UNKNOWN,
-    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_READ_KEYS, METRIC_NAME_WRITE_KEYS,
+    LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_PARTITION_KEY, LABEL_INSTANCE_TYPE,
+    LABEL_PLAN_DIGEST, LABEL_REGION_ID, LABEL_SQL_DIGEST, LABEL_KEYSPACE,
+    LABEL_SOURCE_TABLE, LABEL_TAG_LABEL, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TIMESTAMPS,
+    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_LOGICAL_READ_BYTES, METRIC_NAME_LOGICAL_WRITE_BYTES, METRIC_NAME_NETWORK_IN_BYTES,
+    METRIC_NAME_NETWORK_OUT_BYTES, METRIC_NAME_READ_KEYS, METRIC_NAME_WRITE_KEYS,
+    SOURCE_TABLE_TIKV_TOPSQL, SOURCE_TABLE_TIKV_TOPREGION,
 };
-use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser};
-use crate::sources::topsql::upstream::tidb::proto::ResourceGroupTag;
-use crate::sources::topsql::upstream::tikv::proto::resource_usage_record::RecordOneof;
-use crate::sources::topsql::upstream::tikv::proto::{
+use crate::sources::topsql_v2::upstream::parser::UpstreamEventParser;
+use crate::sources::topsql_v2::upstream::tidb::proto::ResourceGroupTag;
+use crate::sources::topsql_v2::upstream::tikv::proto::resource_usage_record::RecordOneof;
+use crate::sources::topsql_v2::upstream::tikv::proto::{
     GroupTagRecord, GroupTagRecordItem, RegionRecord, ResourceUsageRecord,
 };
 
@@ -25,23 +31,17 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         response: Self::UpstreamEvent,
         instance: String,
         schema_cache: Arc<SchemaCache>,
-        sharedpool_id: Option<String>,
-        keyspace_to_vmtenants: HashMap<String, (String, String)>,
-    ) -> Vec<Event> {
+    ) -> Vec<LogEvent> {
         match response.record_oneof {
             Some(RecordOneof::Record(record)) => Self::parse_tikv_record(
                 record,
                 instance,
                 schema_cache,
-                sharedpool_id,
-                keyspace_to_vmtenants,
             ),
             Some(RecordOneof::RegionRecord(record)) => Self::parse_tikv_region_record(
                 record,
                 instance,
                 schema_cache,
-                sharedpool_id,
-                keyspace_to_vmtenants,
             ),
             None => vec![],
         }
@@ -53,6 +53,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
             cpu_time_ms: u32,
             read_keys: u32,
             write_keys: u32,
+            network_in_bytes: u64,
+            network_out_bytes: u64,
+            logical_read_bytes: u64,
+            logical_write_bytes: u64,
         }
 
         let mut new_responses = vec![];
@@ -75,6 +79,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                             cpu_time_ms: item.cpu_time_ms,
                             read_keys: item.read_keys,
                             write_keys: item.write_keys,
+                            network_in_bytes: item.network_in_bytes,
+                            network_out_bytes: item.network_out_bytes,
+                            logical_read_bytes: item.logical_read_bytes,
+                            logical_write_bytes: item.logical_write_bytes,
                         };
                         match ts_digests.get_mut(&item.timestamp_sec) {
                             None => {
@@ -103,7 +111,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                 others.cpu_time_ms += e.cpu_time_ms;
                 others.read_keys += e.read_keys;
                 others.write_keys += e.write_keys;
-                // Note: network and logical bytes fields are set to default (0)
+                others.network_in_bytes += e.network_in_bytes;
+                others.network_out_bytes += e.network_out_bytes;
+                others.logical_read_bytes += e.logical_read_bytes;
+                others.logical_write_bytes += e.logical_write_bytes;
             }
             v.truncate(top_n);
             match ts_others.get_mut(&ts) {
@@ -114,7 +125,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                     existed_others.cpu_time_ms += others.cpu_time_ms;
                     existed_others.read_keys += others.read_keys;
                     existed_others.write_keys += others.write_keys;
-                    // Note: network and logical bytes fields are set to default (0)
+                    existed_others.network_in_bytes += others.network_in_bytes;
+                    existed_others.network_out_bytes += others.network_out_bytes;
+                    existed_others.logical_read_bytes += others.logical_read_bytes;
+                    existed_others.logical_write_bytes += others.logical_write_bytes;
                 }
             }
         }
@@ -127,10 +141,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                     cpu_time_ms: psd.cpu_time_ms,
                     read_keys: psd.read_keys,
                     write_keys: psd.write_keys,
-                    network_in_bytes: 0, // Not supported in topsql v1
-                    network_out_bytes: 0, // Not supported in topsql v1
-                    logical_read_bytes: 0, // Not supported in topsql v1
-                    logical_write_bytes: 0, // Not supported in topsql v1
+                    network_in_bytes: psd.network_in_bytes,
+                    network_out_bytes: psd.network_out_bytes,
+                    logical_read_bytes: psd.logical_read_bytes,
+                    logical_write_bytes: psd.logical_write_bytes,
                 };
                 match digest_items.get_mut(&psd.resource_group_tag) {
                     None => {
@@ -180,7 +194,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                             new_item.cpu_time_ms += item.cpu_time_ms;
                             new_item.read_keys += item.read_keys;
                             new_item.write_keys += item.write_keys;
-                            // Note: network and logical bytes fields are not aggregated
+                            new_item.network_in_bytes += item.network_in_bytes;
+                            new_item.network_out_bytes += item.network_out_bytes;
+                            new_item.logical_read_bytes += item.logical_read_bytes;
+                            new_item.logical_write_bytes += item.logical_write_bytes;
                             new_items.insert(new_ts, new_item);
                         }
                     }
@@ -196,9 +213,7 @@ impl ResourceUsageRecordParser {
         record: GroupTagRecord,
         instance: String,
         schema_cache: Arc<SchemaCache>,
-        sharedpool_id: Option<String>,
-        keyspace_to_vmtenants: HashMap<String, (String, String)>,
-    ) -> Vec<Event> {
+    ) -> Vec<LogEvent> {
         // Log schema cache info
         debug!(
             message = "Schema cache available in parse_tikv_record",
@@ -210,9 +225,6 @@ impl ResourceUsageRecordParser {
         if decoded.is_none() {
             return vec![];
         }
-
-        let mut logs = vec![];
-
         let (sql_digest, plan_digest, tag_label, table_id, keyspace_name) = decoded.unwrap();
 
         let mut db_name = "".to_string();
@@ -233,65 +245,97 @@ impl ResourceUsageRecordParser {
                 keyspace_name_str = ks;
             }
         }
+        let mut events = vec![];
+        let instance_partition_key = format!("topsql_tikv_{}", instance);
+        for item in &record.items {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
 
-        let mut buf = Buf::default();
-        buf.instance(instance)
-            .instance_type(INSTANCE_TYPE_TIKV)
-            .sql_digest(sql_digest)
-            .plan_digest(plan_digest)
-            .tag_label(tag_label)
-            .db_name(db_name)
-            .table_name(table_name)
-            .table_id(table_id_str)
-            .keyspace_name(keyspace_name_str.clone());
-        if let Some(sharedpool_id) = sharedpool_id {
-            buf.sharedpool_id(sharedpool_id);
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TIKV_TOPSQL);
+            log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec));
+            log.insert(LABEL_INSTANCE_TYPE, INSTANCE_TYPE_TIKV.to_string());
+            log.insert(LABEL_INSTANCE, instance.clone());
+            log.insert(LABEL_INSTANCE_PARTITION_KEY, instance_partition_key.clone());
+            if !keyspace_name_str.is_empty() {
+                log.insert(LABEL_KEYSPACE, keyspace_name_str.clone());
+            }
+            log.insert(LABEL_SQL_DIGEST, sql_digest.clone());
+            log.insert(LABEL_PLAN_DIGEST, plan_digest.clone());
+            log.insert(LABEL_TAG_LABEL, tag_label.clone());
+            log.insert(LABEL_DB_NAME, db_name.clone());
+            log.insert(LABEL_TABLE_NAME, table_name.clone());
+            log.insert(LABEL_TABLE_ID, table_id_str.clone());
+            log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
+            log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
+            log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys));
+            log.insert(
+                METRIC_NAME_NETWORK_IN_BYTES,
+                LogValue::from(item.network_in_bytes),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_OUT_BYTES,
+                LogValue::from(item.network_out_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_READ_BYTES,
+                LogValue::from(item.logical_read_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_WRITE_BYTES,
+                LogValue::from(item.logical_write_bytes),
+            );
+            events.push(event.into_log());
         }
-        if let Some((vm_account_id, vm_project_id)) = keyspace_to_vmtenants.get(&keyspace_name_str)
-        {
-            buf.vm_account_id(vm_account_id.clone())
-                .vm_project_id(vm_project_id.clone());
-        }
-
-        macro_rules! append {
-            ($( ($label_name:expr, $item_name:tt), )* ) => {
-                $(
-                    buf.label_name($label_name)
-                        .points(record.items.iter().filter_map(|item| {
-                            if item.$item_name > 0 {
-                                Some((item.timestamp_sec, item.$item_name as f64))
-                            } else {
-                                None
-                            }
-                        }));
-                    if let Some(mut e) = buf.build_events() {
-                        logs.append(&mut e);
-                    }
-                )*
-            };
-        }
-        append!(
-            // cpu_time_ms
-            (METRIC_NAME_CPU_TIME_MS, cpu_time_ms),
-            // read_keys
-            (METRIC_NAME_READ_KEYS, read_keys),
-            // write_keys
-            (METRIC_NAME_WRITE_KEYS, write_keys),
-        );
-
-        logs
+        events
     }
 
     fn parse_tikv_region_record(
-        _record: RegionRecord,
-        _instance: String,
-        _schema_cache: Arc<SchemaCache>,
-        _sharedpool_id: Option<String>,
-        _keyspace_to_vmtenants: HashMap<String, (String, String)>,
-    ) -> Vec<Event> {
-        // RegionRecord is not fully supported in topsql v1
-        // Return empty vector for now
-        vec![]
+        record: RegionRecord,
+        instance: String,
+        schema_cache: Arc<SchemaCache>,
+    ) -> Vec<LogEvent> {
+        // Log schema cache info
+        debug!(
+            message = "Schema cache available in parse_tikv_record",
+            entries = schema_cache.entry_count(),
+            schema_version = schema_cache.schema_version()
+        );
+        let mut events = vec![];
+        let instance_partition_key = format!("topsql_tikv_{}", instance);
+        for item in &record.items {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
+
+            // Add metadata with Vector prefix (ensure all fields have values)
+            log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TIKV_TOPREGION);
+            log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec as i64));
+            log.insert(LABEL_INSTANCE_TYPE, INSTANCE_TYPE_TIKV.to_string());
+            log.insert(LABEL_INSTANCE, instance.clone());
+            log.insert(LABEL_INSTANCE_PARTITION_KEY, instance_partition_key.clone());
+            log.insert(LABEL_REGION_ID, record.region_id.to_string());          
+            log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
+            log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
+            log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys));
+            log.insert(
+                METRIC_NAME_NETWORK_IN_BYTES,
+                LogValue::from(item.network_in_bytes),
+            );
+            log.insert(
+                METRIC_NAME_NETWORK_OUT_BYTES,
+                LogValue::from(item.network_out_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_READ_BYTES,
+                LogValue::from(item.logical_read_bytes),
+            );
+            log.insert(
+                METRIC_NAME_LOGICAL_WRITE_BYTES,
+                LogValue::from(item.logical_write_bytes),
+            );
+            events.push(event.into_log());
+        }
+        events
     }
 
     fn decode_tag(tag: &[u8]) -> Option<(String, String, String, Option<i64>, Option<Vec<u8>>)> {
@@ -344,7 +388,7 @@ impl ResourceUsageRecordParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::topsql::upstream::tikv::proto::GroupTagRecordItem;
+    use crate::sources::topsql_v2::upstream::tikv::proto::GroupTagRecordItem;
 
     const MOCK_RECORDS: &'static str = include_str!("testdata/mock-records.json");
 
@@ -476,6 +520,10 @@ mod tests {
             sum_old.cpu_time_ms += item.cpu_time_ms;
             sum_old.read_keys += item.read_keys;
             sum_old.write_keys += item.write_keys;
+            sum_old.network_in_bytes += item.network_in_bytes;
+            sum_old.network_out_bytes += item.network_out_bytes;
+            sum_old.logical_read_bytes += item.logical_read_bytes;
+            sum_old.logical_write_bytes += item.logical_write_bytes;
         }
 
         ResourceUsageRecordParser::downsampling(&mut records, 15);
@@ -505,10 +553,18 @@ mod tests {
             sum_new.cpu_time_ms += item.cpu_time_ms;
             sum_new.read_keys += item.read_keys;
             sum_new.write_keys += item.write_keys;
+            sum_new.network_in_bytes += item.network_in_bytes;
+            sum_new.network_out_bytes += item.network_out_bytes;
+            sum_new.logical_read_bytes += item.logical_read_bytes;
+            sum_new.logical_write_bytes += item.logical_write_bytes;
         }
 
         assert_eq!(sum_old.cpu_time_ms, sum_new.cpu_time_ms);
         assert_eq!(sum_old.read_keys, sum_new.read_keys);
         assert_eq!(sum_old.write_keys, sum_new.write_keys);
+        assert_eq!(sum_old.network_in_bytes, sum_new.network_in_bytes);
+        assert_eq!(sum_old.network_out_bytes, sum_new.network_out_bytes);
+        assert_eq!(sum_old.logical_read_bytes, sum_new.logical_read_bytes);
+        assert_eq!(sum_old.logical_write_bytes, sum_new.logical_write_bytes);
     }
 }
