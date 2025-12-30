@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
 use vector::{
     aws::{AwsAuthentication, RegionOrEndpoint},
     config::{GenerateConfig, SinkConfig, SinkContext},
@@ -26,8 +25,12 @@ use serde_json::Value;
 use tracing::{error, info, warn};
 
 mod processor;
-// Refactored writer module structure
-pub mod writer;
+
+// Import default functions from common module
+use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
+
+// Re-export types from common module
+pub use crate::common::deltalake_writer::{DeltaTableConfig, WriteConfig};
 
 /// Configuration for the deltalake sink
 #[configurable_component(sink("deltalake"))]
@@ -77,36 +80,6 @@ pub struct DeltaLakeConfig {
         skip_serializing_if = "vector::serde::is_default"
     )]
     pub acknowledgements: AcknowledgementsConfig,
-}
-
-/// Delta table configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeltaTableConfig {
-    /// Table name
-    pub name: String,
-
-    /// Enable schema evolution
-    pub schema_evolution: Option<bool>,
-}
-
-/// Write configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WriteConfig {
-    /// Batch size for writing
-    #[serde(default = "default_batch_size")]
-    pub batch_size: usize,
-
-    /// Write timeout in seconds
-    #[serde(default = "default_timeout_secs")]
-    pub timeout_secs: u64,
-}
-
-pub const fn default_batch_size() -> usize {
-    1000
-}
-
-pub const fn default_timeout_secs() -> u64 {
-    30
 }
 
 pub fn default_force_path_style() -> Option<bool> {
@@ -934,8 +907,12 @@ mod tests {
             timeout_secs: 30,
         };
 
-        let mut writer =
-            writer::DeltaLakeWriter::new(base_path.clone(), table_config, write_config, None);
+        let mut writer = crate::common::deltalake_writer::DeltaLakeWriter::new(
+            base_path.clone(),
+            table_config,
+            write_config,
+            None,
+        );
 
         // Write events
         let write_result = writer.write_events(events).await;
