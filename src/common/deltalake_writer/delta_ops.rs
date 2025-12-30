@@ -50,12 +50,12 @@ impl DeltaOpsManager {
                 redacted_options
             );
             Ok(
-                DeltaOps::try_from_uri_with_storage_options(table_uri.as_str(), storage_options.clone())
+                DeltaOps::try_from_uri_with_storage_options(table_uri.clone(), storage_options.clone())
                     .await?,
             )
         } else {
             info!("No storage options provided, using default credential chain");
-            Ok(DeltaOps::try_from_uri(table_uri.as_str()).await?)
+            Ok(DeltaOps::try_from_uri(table_uri.clone()).await?)
         }
     }
 
