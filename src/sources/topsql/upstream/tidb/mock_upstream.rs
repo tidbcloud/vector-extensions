@@ -50,6 +50,8 @@ impl TopSqlPubSub for MockTopSqlPubSubServer {
                     .collect(),
                 stmt_duration_sum_ns: 30,
                 stmt_duration_count: 20,
+                stmt_network_in_bytes: 0,
+                stmt_network_out_bytes: 0,
             }],
             keyspace_name: vec![],
         };
