@@ -5,8 +5,7 @@ use vector::event::Event;
 use vector_lib::event::{LogEvent, Value as LogValue};
 use crate::sources::topsql_v2::schema_cache::SchemaCache;
 use crate::sources::topsql_v2::upstream::consts::{
-    INSTANCE_TYPE_TIDB, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_INSTANCE,
-    LABEL_INSTANCE_PARTITION_KEY, LABEL_INSTANCE_TYPE,
+    LABEL_ENCODED_NORMALIZED_PLAN, LABEL_INSTANCE_KEY,
     LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST,
     LABEL_SQL_DIGEST, LABEL_SOURCE_TABLE, LABEL_TIMESTAMPS, LABEL_KEYSPACE,
     METRIC_NAME_CPU_TIME_MS, METRIC_NAME_NETWORK_IN_BYTES, METRIC_NAME_NETWORK_OUT_BYTES,
@@ -281,7 +280,7 @@ impl TopSqlSubResponseParser {
             }
         }
         let mut events = vec![];
-        let instance_partition_key = format!("topsql_tidb_{}", instance);
+        let instance_key = format!("topsql_tidb_{}", instance);
         for item in &record.items {
             let mut event = Event::Log(LogEvent::default());
             let log = event.as_mut_log();
@@ -289,9 +288,7 @@ impl TopSqlSubResponseParser {
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TIDB_TOPSQL);
             log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec));
-            log.insert(LABEL_INSTANCE_TYPE, INSTANCE_TYPE_TIDB.to_string());
-            log.insert(LABEL_INSTANCE, instance.clone());
-            log.insert(LABEL_INSTANCE_PARTITION_KEY, instance_partition_key.clone());
+            log.insert(LABEL_INSTANCE_KEY, instance_key.clone());
             if !keyspace_name_str.is_empty() {
                 log.insert(LABEL_KEYSPACE, keyspace_name_str.clone());
             }
@@ -356,7 +353,7 @@ impl TopSqlSubResponseParser {
         log.insert(LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan);
         log.insert(
             LABEL_ENCODED_NORMALIZED_PLAN,
-            encoded_normalized_plan.clone(),
+            encoded_normalized_plan,
         );
         events.push(event.into_log());
         events

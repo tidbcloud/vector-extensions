@@ -7,8 +7,8 @@ use vector_lib::event::{LogEvent, Value as LogValue};
 
 use crate::sources::topsql_v2::schema_cache::SchemaCache;
 use crate::sources::topsql_v2::upstream::consts::{
-    INSTANCE_TYPE_TIKV, KV_TAG_LABEL_INDEX, KV_TAG_LABEL_ROW, KV_TAG_LABEL_UNKNOWN,
-    LABEL_DB_NAME, LABEL_INSTANCE, LABEL_INSTANCE_PARTITION_KEY, LABEL_INSTANCE_TYPE,
+    KV_TAG_LABEL_INDEX, KV_TAG_LABEL_ROW, KV_TAG_LABEL_UNKNOWN,
+    LABEL_DB_NAME, LABEL_INSTANCE_KEY,
     LABEL_PLAN_DIGEST, LABEL_REGION_ID, LABEL_SQL_DIGEST, LABEL_KEYSPACE,
     LABEL_SOURCE_TABLE, LABEL_TAG_LABEL, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TIMESTAMPS,
     METRIC_NAME_CPU_TIME_MS, METRIC_NAME_LOGICAL_READ_BYTES, METRIC_NAME_LOGICAL_WRITE_BYTES, METRIC_NAME_NETWORK_IN_BYTES,
@@ -41,7 +41,6 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
             Some(RecordOneof::RegionRecord(record)) => Self::parse_tikv_region_record(
                 record,
                 instance,
-                schema_cache,
             ),
             None => vec![],
         }
@@ -246,7 +245,7 @@ impl ResourceUsageRecordParser {
             }
         }
         let mut events = vec![];
-        let instance_partition_key = format!("topsql_tikv_{}", instance);
+        let instance_key = format!("topsql_tikv_{}", instance);
         for item in &record.items {
             let mut event = Event::Log(LogEvent::default());
             let log = event.as_mut_log();
@@ -254,9 +253,7 @@ impl ResourceUsageRecordParser {
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TIKV_TOPSQL);
             log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec));
-            log.insert(LABEL_INSTANCE_TYPE, INSTANCE_TYPE_TIKV.to_string());
-            log.insert(LABEL_INSTANCE, instance.clone());
-            log.insert(LABEL_INSTANCE_PARTITION_KEY, instance_partition_key.clone());
+            log.insert(LABEL_INSTANCE_KEY, instance_key.clone());
             if !keyspace_name_str.is_empty() {
                 log.insert(LABEL_KEYSPACE, keyspace_name_str.clone());
             }
@@ -293,16 +290,9 @@ impl ResourceUsageRecordParser {
     fn parse_tikv_region_record(
         record: RegionRecord,
         instance: String,
-        schema_cache: Arc<SchemaCache>,
     ) -> Vec<LogEvent> {
-        // Log schema cache info
-        debug!(
-            message = "Schema cache available in parse_tikv_record",
-            entries = schema_cache.entry_count(),
-            schema_version = schema_cache.schema_version()
-        );
         let mut events = vec![];
-        let instance_partition_key = format!("topsql_tikv_{}", instance);
+        let instance_key = format!("topsql_tikv_{}", instance);
         for item in &record.items {
             let mut event = Event::Log(LogEvent::default());
             let log = event.as_mut_log();
@@ -310,10 +300,8 @@ impl ResourceUsageRecordParser {
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TIKV_TOPREGION);
             log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec as i64));
-            log.insert(LABEL_INSTANCE_TYPE, INSTANCE_TYPE_TIKV.to_string());
-            log.insert(LABEL_INSTANCE, instance.clone());
-            log.insert(LABEL_INSTANCE_PARTITION_KEY, instance_partition_key.clone());
-            log.insert(LABEL_REGION_ID, record.region_id.to_string());          
+            log.insert(LABEL_INSTANCE_KEY, instance_key.clone());
+            log.insert(LABEL_REGION_ID, record.region_id.to_string());
             log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
             log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
             log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys));

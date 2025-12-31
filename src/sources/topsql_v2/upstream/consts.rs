@@ -1,12 +1,7 @@
-pub const INSTANCE_TYPE_TIDB: &str = "tidb";
-pub const INSTANCE_TYPE_TIKV: &str = "tikv";
-
-pub const LABEL_INSTANCE: &str = "instance";
 pub const LABEL_DB_NAME: &str = "db";
 pub const LABEL_TABLE_NAME: &str = "table";
 pub const LABEL_TABLE_ID: &str = "table_id";
 pub const LABEL_KEYSPACE: &str = "keyspace";
-pub const LABEL_INSTANCE_TYPE: &str = "instance_type";
 pub const LABEL_SQL_DIGEST: &str = "sql_digest";
 pub const LABEL_PLAN_DIGEST: &str = "plan_digest";
 pub const LABEL_TAG_LABEL: &str = "tag_label";
@@ -15,7 +10,7 @@ pub const LABEL_NORMALIZED_PLAN: &str = "normalized_plan";
 pub const LABEL_ENCODED_NORMALIZED_PLAN: &str = "encoded_normalized_plan";
 pub const LABEL_SOURCE_TABLE: &str = "source_table";
 pub const LABEL_TIMESTAMPS: &str = "timestamps";
-pub const LABEL_INSTANCE_PARTITION_KEY: &str = "instance_partition_key";
+pub const LABEL_INSTANCE_KEY: &str = "instance_key";
 pub const LABEL_REGION_ID: &str = "region_id";
 
 pub const METRIC_NAME_CPU_TIME_MS: &str = "topsql_cpu_time_ms";
