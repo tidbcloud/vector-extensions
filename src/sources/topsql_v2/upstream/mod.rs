@@ -4,7 +4,6 @@ pub mod tikv;
 
 mod consts;
 mod tls_proxy;
-mod utils;
 
 use std::time::Duration;
 use std::sync::Arc;
@@ -31,7 +30,6 @@ use crate::sources::topsql_v2::{
         parser::UpstreamEventParser,
         tidb::TiDBUpstream,
         tikv::TiKVUpstream,
-        utils::instance_event,
     },
 };
 
@@ -116,20 +114,19 @@ impl BaseTopSQLSource {
         }
     }
 
-    async fn run_loop<H: InstanceEventHandler>(
+    async fn run_loop(
         &mut self,
         shutdown_subscriber: ShutdownSubscriber,
-        handler: &H,
     ) {
         loop {
             let shutdown_subscriber = shutdown_subscriber.clone();
             let state = match self.instance_type {
                 InstanceType::TiDB => {
-                    self.run_once::<TiDBUpstream, H>(shutdown_subscriber, handler)
+                    self.run_once::<TiDBUpstream>(shutdown_subscriber)
                         .await
                 }
                 InstanceType::TiKV => {
-                    self.run_once::<TiKVUpstream, H>(shutdown_subscriber, handler)
+                    self.run_once::<TiKVUpstream>(shutdown_subscriber)
                         .await
                 }
                 _ => unreachable!(),
@@ -152,10 +149,9 @@ impl BaseTopSQLSource {
         }
     }
 
-    async fn run_once<U: Upstream, H: InstanceEventHandler>(
+    async fn run_once<U: Upstream>(
         &mut self,
         shutdown_subscriber: ShutdownSubscriber,
-        handler: &H,
     ) -> State {
         let response_stream = self.build_stream::<U>(shutdown_subscriber).await;
         let mut response_stream = match response_stream {
@@ -165,7 +161,6 @@ impl BaseTopSQLSource {
         self.on_connected();
 
         let mut tick_stream = IntervalStream::new(time::interval(Duration::from_secs(1)));
-        let mut instance_stream = IntervalStream::new(time::interval(Duration::from_secs(30)));
         let mut responses = vec![];
         let mut last_event_recv_ts = chrono::Local::now().timestamp();
         loop {
@@ -195,7 +190,6 @@ impl BaseTopSQLSource {
                         }
                     }
                 }
-                _ = instance_stream.next() => handler.handle_instance_event(self).await,
             }
         }
     }
@@ -272,33 +266,9 @@ impl BaseTopSQLSource {
     }
 }
 
-// Trait for handling instance events
-#[async_trait::async_trait]
-trait InstanceEventHandler: Send + Sync {
-    async fn handle_instance_event(&self, base: &mut BaseTopSQLSource);
-}
-
-// Unified implementation
-struct UnifiedInstanceEventHandler;
-
-#[async_trait::async_trait]
-impl InstanceEventHandler for UnifiedInstanceEventHandler {
-    async fn handle_instance_event(&self, base: &mut BaseTopSQLSource) {
-        // Emit basic instance event
-        let event = instance_event(
-            base.instance.clone(),
-            base.instance_type.to_string(),
-        );
-        if base.out.send_event(event).await.is_err() {
-            StreamClosedError { count: 1 }.emit();
-        }
-    }
-}
-
-// TopSQL source - uses unified handler with compile-time branching
+// TopSQL source
 pub struct TopSQLSource {
     base: BaseTopSQLSource,
-    handler: UnifiedInstanceEventHandler,
 }
 
 impl TopSQLSource {
@@ -322,14 +292,13 @@ impl TopSQLSource {
         )?;
         Some(TopSQLSource {
             base,
-            handler: UnifiedInstanceEventHandler,
         })
     }
 
     pub async fn run(mut self, mut shutdown: ShutdownSubscriber) {
         let shutdown_subscriber = shutdown.clone();
         tokio::select! {
-            _ = self.base.run_loop(shutdown_subscriber, &self.handler) => {}
+            _ = self.base.run_loop(shutdown_subscriber) => {}
             _ = shutdown.done() => {}
         }
     }

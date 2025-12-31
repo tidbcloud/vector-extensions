@@ -28,7 +28,6 @@ pub const METRIC_NAME_LOGICAL_WRITE_BYTES: &str = "topsql_logical_write_bytes";
 pub const METRIC_NAME_STMT_EXEC_COUNT: &str = "topsql_stmt_exec_count";
 pub const METRIC_NAME_STMT_DURATION_SUM_NS: &str = "topsql_stmt_duration_sum_ns";
 pub const METRIC_NAME_STMT_DURATION_COUNT: &str = "topsql_stmt_duration_count";
-pub const METRIC_NAME_INSTANCE: &str = "topsql_instance";
 
 pub const KV_TAG_LABEL_ROW: &str = "row";
 pub const KV_TAG_LABEL_INDEX: &str = "index";
