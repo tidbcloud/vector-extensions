@@ -57,11 +57,11 @@ pub const fn default_topology_fetch_interval() -> f64 {
 }
 
 pub const fn default_top_n() -> usize {
-    0
+    100
 }
 
 pub const fn default_downsampling_interval() -> u32 {
-    0
+    60
 }
 
 impl GenerateConfig for TopSQLConfig {

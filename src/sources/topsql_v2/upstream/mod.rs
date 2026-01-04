@@ -229,17 +229,17 @@ impl BaseTopSQLSource {
         Ok(response_stream)
     }
 
-    async fn handle_responses<U: Upstream>(&mut self, responses: Vec<U::UpstreamEvent>) {
-        // truncate top n
-        let mut responses = if self.top_n > 0 {
-            U::UpstreamEventParser::keep_top_n(responses, self.top_n)
-        } else {
-            responses
-        };
+    async fn handle_responses<U: Upstream>(&mut self, mut responses: Vec<U::UpstreamEvent>) {
         // downsample
         if self.downsampling_interval > 1 {
             U::UpstreamEventParser::downsampling(&mut responses, self.downsampling_interval);
         }
+        // truncate top n
+        let responses = if self.top_n > 0 {
+            U::UpstreamEventParser::keep_top_n(responses, self.top_n)
+        } else {
+            responses
+        };        
         // parse
         let mut batch: Vec<vector::event::Event> = vec![];
         for response in responses {

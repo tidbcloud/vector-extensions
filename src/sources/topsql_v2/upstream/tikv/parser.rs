@@ -24,6 +24,266 @@ use crate::sources::topsql_v2::upstream::tikv::proto::{
 
 pub struct ResourceUsageRecordParser;
 
+#[derive(Clone)]
+struct PerPeriodData {
+    resource_group_tag: Vec<u8>,
+    cpu_time_ms: u32,
+    read_keys: u32,
+    write_keys: u32,
+    network_in_bytes: u64,
+    network_out_bytes: u64,
+    logical_read_bytes: u64,
+    logical_write_bytes: u64,
+}
+
+#[derive(Clone)]
+struct PerPeriodRegionData {
+    region_id: u64,
+    cpu_time_ms: u32,
+    read_keys: u32,
+    write_keys: u32,
+    network_in_bytes: u64,
+    network_out_bytes: u64,
+    logical_read_bytes: u64,
+    logical_write_bytes: u64,
+}
+
+/// Trait for extracting metrics from records types
+trait MetricsData {
+    fn cpu_time_ms(&self) -> u32;
+    fn network_in_bytes(&self) -> u64;
+    fn network_out_bytes(&self) -> u64;
+    fn logical_read_bytes(&self) -> u64;
+    fn logical_write_bytes(&self) -> u64;
+    fn read_keys(&self) -> u32;
+    fn write_keys(&self) -> u32;
+}
+
+impl MetricsData for PerPeriodData {
+    #[inline]
+    fn cpu_time_ms(&self) -> u32 {
+        self.cpu_time_ms
+    }
+    #[inline]
+    fn network_in_bytes(&self) -> u64 {
+        self.network_in_bytes
+    }
+    #[inline]
+    fn network_out_bytes(&self) -> u64 {
+        self.network_out_bytes
+    }
+    #[inline]
+    fn logical_read_bytes(&self) -> u64 {
+        self.logical_read_bytes
+    }
+    #[inline]
+    fn logical_write_bytes(&self) -> u64 {
+        self.logical_write_bytes
+    }
+    #[inline]
+    fn read_keys(&self) -> u32 {
+        self.read_keys
+    }
+    #[inline]
+    fn write_keys(&self) -> u32 {
+        self.write_keys
+    }
+}
+
+impl MetricsData for PerPeriodRegionData {
+    #[inline]
+    fn cpu_time_ms(&self) -> u32 {
+        self.cpu_time_ms
+    }
+    #[inline]
+    fn network_in_bytes(&self) -> u64 {
+        self.network_in_bytes
+    }
+    #[inline]
+    fn network_out_bytes(&self) -> u64 {
+        self.network_out_bytes
+    }
+    #[inline]
+    fn logical_read_bytes(&self) -> u64 {
+        self.logical_read_bytes
+    }
+    #[inline]
+    fn logical_write_bytes(&self) -> u64 {
+        self.logical_write_bytes
+    }
+    #[inline]
+    fn read_keys(&self) -> u32 {
+        self.read_keys
+    }
+    #[inline]
+    fn write_keys(&self) -> u32 {
+        self.write_keys
+    }
+}
+
+impl ResourceUsageRecordParser {
+    /// Generic function to process records: filter records by top_n and convert to items.
+    /// 
+    /// # Type Parameters
+    /// - `D`: The record type that implements `MetricsData` and `Clone`
+    /// - `K`: The key type for the result HashMap (must implement `Eq + Hash + Clone`)
+    /// 
+    /// # Parameters
+    /// - `ts_picked`: Time-series digests grouped by timestamp
+    /// - `ts_others`: Time-series others for records that don't make top_n
+    /// - `top_n`: Number of top records to keep
+    /// - `get_key`: Function to extract the key from a digest
+    /// - `others_key`: Key to use for others in the result HashMap
+    fn process_records_generic<D, K>(
+        mut ts_picked: BTreeMap<u64, Vec<D>>,
+        mut ts_others: BTreeMap<u64, GroupTagRecordItem>,
+        top_n: usize,
+        get_key: impl Fn(&D) -> K,
+        others_key: K,
+    ) -> HashMap<K, Vec<GroupTagRecordItem>>
+    where
+        D: MetricsData + Clone,
+        K: std::hash::Hash + Eq + Clone,
+    {
+        // Process digests: keep records that rank top_n in any metric
+        for (ts, v) in &mut ts_picked {
+            if v.len() <= top_n {
+                continue;
+            }
+            
+            // If top_n is 0, merge all records to ts_others and continue
+            if top_n == 0 {
+                let others = ts_others.entry(*ts).or_insert_with(|| {
+                    let mut item = GroupTagRecordItem::default();
+                    item.timestamp_sec = *ts;
+                    item
+                });
+                for psd in v.iter() {
+                    others.cpu_time_ms += psd.cpu_time_ms();
+                    others.read_keys += psd.read_keys();
+                    others.write_keys += psd.write_keys();
+                    others.network_in_bytes += psd.network_in_bytes();
+                    others.network_out_bytes += psd.network_out_bytes();
+                    others.logical_read_bytes += psd.logical_read_bytes();
+                    others.logical_write_bytes += psd.logical_write_bytes();
+                }
+                continue;
+            }
+            
+            // Calculate metrics for each record
+            let records_with_metrics: Vec<(usize, u32, u64, u64)> = v.iter()
+                .enumerate()
+                .map(|(idx, psd)| {
+                    let network = psd.network_in_bytes() + psd.network_out_bytes();
+                    let logical = psd.logical_read_bytes() + psd.logical_write_bytes();
+                    (idx, psd.cpu_time_ms(), network, logical)
+                })
+                .collect();
+            
+            let (cpu_threshold, network_threshold, logical_threshold) = 
+                Self::calculate_thresholds(&records_with_metrics, top_n);
+            
+            // Filter and separate records in a single pass
+            let mut kept: Vec<D> = Vec::new();
+            for (_, psd) in v.iter().enumerate() {
+                let cpu_time_ms = psd.cpu_time_ms();
+                let network = psd.network_in_bytes() + psd.network_out_bytes();
+                let logical = psd.logical_read_bytes() + psd.logical_write_bytes();
+                
+                if cpu_time_ms >= cpu_threshold 
+                    || network >= network_threshold 
+                    || logical >= logical_threshold {
+                    kept.push(psd.clone());
+                } else {
+                    let others = ts_others.entry(*ts).or_insert_with(|| {
+                        let mut item = GroupTagRecordItem::default();
+                        item.timestamp_sec = *ts;
+                        item
+                    });
+                    others.cpu_time_ms += psd.cpu_time_ms();
+                    others.read_keys += psd.read_keys();
+                    others.write_keys += psd.write_keys();
+                    others.network_in_bytes += psd.network_in_bytes();
+                    others.network_out_bytes += psd.network_out_bytes();
+                    others.logical_read_bytes += psd.logical_read_bytes();
+                    others.logical_write_bytes += psd.logical_write_bytes();
+                }
+            }
+            *v = kept;
+        }
+
+        let mut result_items = HashMap::new();
+        for (ts, v) in ts_picked {
+            for psd in v {
+                let item = GroupTagRecordItem {
+                    timestamp_sec: ts,
+                    cpu_time_ms: psd.cpu_time_ms(),
+                    read_keys: psd.read_keys(),
+                    write_keys: psd.write_keys(),
+                    network_in_bytes: psd.network_in_bytes(),
+                    network_out_bytes: psd.network_out_bytes(),
+                    logical_read_bytes: psd.logical_read_bytes(),
+                    logical_write_bytes: psd.logical_write_bytes(),
+                };
+                let key = get_key(&psd);
+                match result_items.get_mut(&key) {
+                    None => {
+                        result_items.insert(key, vec![item]);
+                    }
+                    Some(items) => {
+                        items.push(item);
+                    }
+                }
+            }
+        }
+        if !ts_others.is_empty() {
+            result_items.insert(others_key, ts_others.into_values().collect());
+        }
+        
+        result_items
+    }
+
+    /// Calculate thresholds for top_n filtering based on metrics.
+    /// Returns (cpu_threshold, network_threshold, logical_threshold).
+    fn calculate_thresholds(
+        records_with_metrics: &[(usize, u32, u64, u64)],
+        top_n: usize,
+    ) -> (u32, u64, u64) {
+        // Find thresholds at position top_n - 1 (0-indexed) for each metric using select_nth_unstable
+        let cpu_threshold = if records_with_metrics.len() > top_n {
+            let mut cpu_time_ms_values: Vec<u32> = records_with_metrics.iter().map(|r| r.1).collect();
+            // select_nth_unstable finds the element at index k, placing smaller elements before and larger after
+            // For descending order (top N), we need to find the element at index top_n - 1
+            let target_idx = top_n - 1;
+            cpu_time_ms_values.select_nth_unstable_by(target_idx, |a, b| b.cmp(a));
+            cpu_time_ms_values[target_idx]
+        } else {
+            // If records count <= top_n, keep all records by setting threshold to 0
+            0
+        };
+        
+        let network_threshold = if records_with_metrics.len() > top_n {
+            let mut network_values: Vec<u64> = records_with_metrics.iter().map(|r| r.2).collect();
+            let target_idx = top_n - 1;
+            network_values.select_nth_unstable_by(target_idx, |a, b| b.cmp(a));
+            network_values[target_idx]
+        } else {
+            0
+        };
+        
+        let logical_threshold = if records_with_metrics.len() > top_n {
+            let mut logical_values: Vec<u64> = records_with_metrics.iter().map(|r| r.3).collect();
+            let target_idx = top_n - 1;
+            logical_values.select_nth_unstable_by(target_idx, |a, b| b.cmp(a));
+            logical_values[target_idx]
+        } else {
+            0
+        };
+        
+        (cpu_threshold, network_threshold, logical_threshold)
+    }
+}
+
 impl UpstreamEventParser for ResourceUsageRecordParser {
     type UpstreamEvent = ResourceUsageRecord;
 
@@ -47,33 +307,36 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
     }
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent> {
-        struct PerSecondDigest {
-            resource_group_tag: Vec<u8>,
-            cpu_time_ms: u32,
-            read_keys: u32,
-            write_keys: u32,
-            network_in_bytes: u64,
-            network_out_bytes: u64,
-            logical_read_bytes: u64,
-            logical_write_bytes: u64,
-        }
-
         let mut new_responses = vec![];
         let mut ts_others = BTreeMap::new();
         let mut ts_digests = BTreeMap::new();
+        let mut ts_region_others = BTreeMap::new();
+        let mut ts_region_digests = BTreeMap::new();
+        
         for response in responses {
             if let Some(RecordOneof::Record(record)) = response.record_oneof {
-                let (sql_digest, _, _, _, _) = match Self::decode_tag(&record.resource_group_tag) {
-                    Some(tag) => tag,
-                    None => continue,
-                };
-                if sql_digest.is_empty() {
+                // Use record.resource_group_tag as the aggregation key
+                if record.resource_group_tag.is_empty() {
+                    // If key is empty, record to others
                     for item in record.items {
-                        ts_others.insert(item.timestamp_sec, item);
+                        match ts_others.get_mut(&item.timestamp_sec) {
+                            None => {
+                                ts_others.insert(item.timestamp_sec, item);
+                            }
+                            Some(existed_item) => {
+                                existed_item.cpu_time_ms += item.cpu_time_ms;
+                                existed_item.read_keys += item.read_keys;
+                                existed_item.write_keys += item.write_keys;
+                                existed_item.network_in_bytes += item.network_in_bytes;
+                                existed_item.network_out_bytes += item.network_out_bytes;
+                                existed_item.logical_read_bytes += item.logical_read_bytes;
+                                existed_item.logical_write_bytes += item.logical_write_bytes;
+                            }
+                        }
                     }
                 } else {
                     for item in &record.items {
-                        let psd = PerSecondDigest {
+                        let psd = PerPeriodData {
                             resource_group_tag: record.resource_group_tag.clone(),
                             cpu_time_ms: item.cpu_time_ms,
                             read_keys: item.read_keys,
@@ -93,72 +356,58 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                         }
                     }
                 }
-            } else {
-                new_responses.push(response);
-            }
-        }
-
-        for (ts, v) in &mut ts_digests {
-            if v.len() <= top_n {
-                continue;
-            }
-            v.sort_by(|psd1, psd2| psd2.cpu_time_ms.cmp(&psd1.cpu_time_ms));
-            let evicted = v.split_at(top_n).1;
-            let mut others = GroupTagRecordItem::default();
-            for e in evicted {
-                others.timestamp_sec = *ts;
-                others.cpu_time_ms += e.cpu_time_ms;
-                others.read_keys += e.read_keys;
-                others.write_keys += e.write_keys;
-                others.network_in_bytes += e.network_in_bytes;
-                others.network_out_bytes += e.network_out_bytes;
-                others.logical_read_bytes += e.logical_read_bytes;
-                others.logical_write_bytes += e.logical_write_bytes;
-            }
-            v.truncate(top_n);
-            match ts_others.get_mut(&ts) {
-                None => {
-                    ts_others.insert(*ts, others);
-                }
-                Some(existed_others) => {
-                    existed_others.cpu_time_ms += others.cpu_time_ms;
-                    existed_others.read_keys += others.read_keys;
-                    existed_others.write_keys += others.write_keys;
-                    existed_others.network_in_bytes += others.network_in_bytes;
-                    existed_others.network_out_bytes += others.network_out_bytes;
-                    existed_others.logical_read_bytes += others.logical_read_bytes;
-                    existed_others.logical_write_bytes += others.logical_write_bytes;
-                }
-            }
-        }
-
-        let mut digest_items = HashMap::new();
-        for (ts, v) in ts_digests {
-            for psd in v {
-                let item = GroupTagRecordItem {
-                    timestamp_sec: ts,
-                    cpu_time_ms: psd.cpu_time_ms,
-                    read_keys: psd.read_keys,
-                    write_keys: psd.write_keys,
-                    network_in_bytes: psd.network_in_bytes,
-                    network_out_bytes: psd.network_out_bytes,
-                    logical_read_bytes: psd.logical_read_bytes,
-                    logical_write_bytes: psd.logical_write_bytes,
-                };
-                match digest_items.get_mut(&psd.resource_group_tag) {
-                    None => {
-                        digest_items.insert(psd.resource_group_tag, vec![item]);
+            } else if let Some(RecordOneof::RegionRecord(record)) = response.record_oneof {
+                // Use record.region_id as the aggregation key
+                if record.region_id == 0 {
+                    // If region_id is 0, record to others
+                    for item in record.items {
+                        match ts_region_others.get_mut(&item.timestamp_sec) {
+                            None => {
+                                ts_region_others.insert(item.timestamp_sec, item);
+                            }
+                            Some(existed_item) => {
+                                existed_item.cpu_time_ms += item.cpu_time_ms;
+                                existed_item.read_keys += item.read_keys;
+                                existed_item.write_keys += item.write_keys;
+                                existed_item.network_in_bytes += item.network_in_bytes;
+                                existed_item.network_out_bytes += item.network_out_bytes;
+                                existed_item.logical_read_bytes += item.logical_read_bytes;
+                                existed_item.logical_write_bytes += item.logical_write_bytes;
+                            }
+                        }
                     }
-                    Some(items) => {
-                        items.push(item);
+                } else {
+                    for item in &record.items {
+                        let psd = PerPeriodRegionData {
+                            region_id: record.region_id,
+                            cpu_time_ms: item.cpu_time_ms,
+                            read_keys: item.read_keys,
+                            write_keys: item.write_keys,
+                            network_in_bytes: item.network_in_bytes,
+                            network_out_bytes: item.network_out_bytes,
+                            logical_read_bytes: item.logical_read_bytes,
+                            logical_write_bytes: item.logical_write_bytes,
+                        };
+                        match ts_region_digests.get_mut(&item.timestamp_sec) {
+                            None => {
+                                ts_region_digests.insert(item.timestamp_sec, vec![psd]);
+                            }
+                            Some(v) => {
+                                v.push(psd);
+                            }
+                        }
                     }
                 }
             }
         }
-        if !ts_others.is_empty() {
-            let others_k = Self::encode_tag(vec![], vec![], None, None, None);
-            digest_items.insert(others_k.clone(), ts_others.into_values().collect());
-        }
+
+        let digest_items = Self::process_records_generic(
+            ts_digests,
+            ts_others,
+            top_n,
+            |psd| psd.resource_group_tag.clone(),
+            vec![],
+        );
 
         for (digest, items) in digest_items {
             new_responses.push(ResourceUsageRecord {
@@ -168,6 +417,24 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                 })),
             })
         }
+
+        let region_items = Self::process_records_generic(
+            ts_region_digests,
+            ts_region_others,
+            top_n,
+            |psd| psd.region_id,
+            0,
+        );
+
+        for (region_id, items) in region_items {
+            new_responses.push(ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::RegionRecord(RegionRecord {
+                    region_id,
+                    items,
+                })),
+            })
+        }
+        
         new_responses
     }
 
@@ -178,36 +445,41 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
         let interval_sec = interval_sec as u64;
         for response in responses {
             if let Some(RecordOneof::Record(record)) = &mut response.record_oneof {
-                let mut new_items = BTreeMap::new();
-                for item in &record.items {
-                    let new_ts =
-                        item.timestamp_sec + (interval_sec - item.timestamp_sec % interval_sec);
-                    match new_items.get(&new_ts) {
-                        None => {
-                            let mut new_item = item.clone();
-                            new_item.timestamp_sec = new_ts;
-                            new_items.insert(new_ts, new_item);
-                        }
-                        Some(existed_item) => {
-                            let mut new_item = existed_item.clone();
-                            new_item.cpu_time_ms += item.cpu_time_ms;
-                            new_item.read_keys += item.read_keys;
-                            new_item.write_keys += item.write_keys;
-                            new_item.network_in_bytes += item.network_in_bytes;
-                            new_item.network_out_bytes += item.network_out_bytes;
-                            new_item.logical_read_bytes += item.logical_read_bytes;
-                            new_item.logical_write_bytes += item.logical_write_bytes;
-                            new_items.insert(new_ts, new_item);
-                        }
-                    }
-                }
-                record.items = new_items.into_values().collect();
+                record.items = Self::downsample_items(&record.items, interval_sec);
+            } else if let Some(RecordOneof::RegionRecord(record)) = &mut response.record_oneof {
+                record.items = Self::downsample_items(&record.items, interval_sec);
             }
         }
     }
 }
 
 impl ResourceUsageRecordParser {
+    /// Downsample items by merging items within the same time interval.
+    /// This is a generic helper function that works for both Record and RegionRecord.
+    fn downsample_items(items: &[GroupTagRecordItem], interval_sec: u64) -> Vec<GroupTagRecordItem> {
+        let mut new_items = BTreeMap::new();
+        for item in items {
+            let new_ts = item.timestamp_sec + (interval_sec - item.timestamp_sec % interval_sec);
+            match new_items.get_mut(&new_ts) {
+                None => {
+                    let mut new_item = item.clone();
+                    new_item.timestamp_sec = new_ts;
+                    new_items.insert(new_ts, new_item);
+                }
+                Some(existed_item) => {
+                    existed_item.cpu_time_ms += item.cpu_time_ms;
+                    existed_item.read_keys += item.read_keys;
+                    existed_item.write_keys += item.write_keys;
+                    existed_item.network_in_bytes += item.network_in_bytes;
+                    existed_item.network_out_bytes += item.network_out_bytes;
+                    existed_item.logical_read_bytes += item.logical_read_bytes;
+                    existed_item.logical_write_bytes += item.logical_write_bytes;
+                }
+            }
+        }
+        new_items.into_values().collect()
+    }
+
     fn parse_tikv_record(
         record: GroupTagRecord,
         instance: String,
@@ -356,6 +628,7 @@ impl ResourceUsageRecordParser {
         }
     }
 
+    #[allow(dead_code)]
     fn encode_tag(
         sql_digest: Vec<u8>,
         plan_digest: Vec<u8>,
@@ -554,5 +827,779 @@ mod tests {
         assert_eq!(sum_old.network_out_bytes, sum_new.network_out_bytes);
         assert_eq!(sum_old.logical_read_bytes, sum_new.logical_read_bytes);
         assert_eq!(sum_old.logical_write_bytes, sum_new.logical_write_bytes);
+    }
+
+    #[test]
+    fn test_downsampling_region_record() {
+        // Create test RegionRecord with multiple items at different timestamps
+        let mut records = vec![ResourceUsageRecord {
+            record_oneof: Some(RecordOneof::RegionRecord(RegionRecord {
+                region_id: 1001,
+                items: vec![
+                    GroupTagRecordItem {
+                        timestamp_sec: 1709654611,
+                        cpu_time_ms: 10,
+                        read_keys: 5,
+                        write_keys: 3,
+                        network_in_bytes: 100,
+                        network_out_bytes: 200,
+                        logical_read_bytes: 300,
+                        logical_write_bytes: 400,
+                    },
+                    GroupTagRecordItem {
+                        timestamp_sec: 1709654612,
+                        cpu_time_ms: 20,
+                        read_keys: 10,
+                        write_keys: 6,
+                        network_in_bytes: 200,
+                        network_out_bytes: 300,
+                        logical_read_bytes: 400,
+                        logical_write_bytes: 500,
+                    },
+                    GroupTagRecordItem {
+                        timestamp_sec: 1709654613,
+                        cpu_time_ms: 15,
+                        read_keys: 8,
+                        write_keys: 4,
+                        network_in_bytes: 150,
+                        network_out_bytes: 250,
+                        logical_read_bytes: 350,
+                        logical_write_bytes: 450,
+                    },
+                    GroupTagRecordItem {
+                        timestamp_sec: 1709654625,
+                        cpu_time_ms: 30,
+                        read_keys: 15,
+                        write_keys: 9,
+                        network_in_bytes: 300,
+                        network_out_bytes: 400,
+                        logical_read_bytes: 500,
+                        logical_write_bytes: 600,
+                    },
+                ],
+            })),
+        }];
+
+        // Calculate sum before downsampling
+        let mut sum_old = GroupTagRecordItem::default();
+        for record in &records {
+            if let Some(RecordOneof::RegionRecord(region_record)) = &record.record_oneof {
+                for item in &region_record.items {
+                    sum_old.cpu_time_ms += item.cpu_time_ms;
+                    sum_old.read_keys += item.read_keys;
+                    sum_old.write_keys += item.write_keys;
+                    sum_old.network_in_bytes += item.network_in_bytes;
+                    sum_old.network_out_bytes += item.network_out_bytes;
+                    sum_old.logical_read_bytes += item.logical_read_bytes;
+                    sum_old.logical_write_bytes += item.logical_write_bytes;
+                }
+            }
+        }
+
+        // Apply downsampling with 15 second interval
+        ResourceUsageRecordParser::downsampling(&mut records, 15);
+
+        // Verify downsampling results
+        let mut items = vec![];
+        for record in &records {
+            if let Some(RecordOneof::RegionRecord(region_record)) = &record.record_oneof {
+                assert_eq!(region_record.region_id, 1001);
+                items = region_record.items.clone();
+            }
+        }
+
+        // Verify timestamps are aligned to 15 second intervals
+        let timestamps: Vec<u64> = items.clone().into_iter().map(|i| i.timestamp_sec).collect();
+        assert_eq!(
+            timestamps,
+            [
+                1709654625, // 00:03:45 (first 3 items merged)
+                1709654640, // 00:04:00 (last item)
+            ]
+        );
+
+        // Calculate sum after downsampling
+        let mut sum_new = GroupTagRecordItem::default();
+        for item in items {
+            sum_new.cpu_time_ms += item.cpu_time_ms;
+            sum_new.read_keys += item.read_keys;
+            sum_new.write_keys += item.write_keys;
+            sum_new.network_in_bytes += item.network_in_bytes;
+            sum_new.network_out_bytes += item.network_out_bytes;
+            sum_new.logical_read_bytes += item.logical_read_bytes;
+            sum_new.logical_write_bytes += item.logical_write_bytes;
+        }
+
+        // Verify that sums are preserved
+        assert_eq!(sum_old.cpu_time_ms, sum_new.cpu_time_ms);
+        assert_eq!(sum_old.read_keys, sum_new.read_keys);
+        assert_eq!(sum_old.write_keys, sum_new.write_keys);
+        assert_eq!(sum_old.network_in_bytes, sum_new.network_in_bytes);
+        assert_eq!(sum_old.network_out_bytes, sum_new.network_out_bytes);
+        assert_eq!(sum_old.logical_read_bytes, sum_new.logical_read_bytes);
+        assert_eq!(sum_old.logical_write_bytes, sum_new.logical_write_bytes);
+    }
+
+    #[test]
+    fn test_keep_top_n_group_tag_and_region_records() {
+        // Test that both GroupTagRecord and RegionRecord are handled correctly
+        let records = vec![
+            // GroupTagRecord with tag1
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql1".to_vec(),
+                        b"plan1".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 100,
+                            read_keys: 10,
+                            write_keys: 5,
+                            network_in_bytes: 1000,
+                            network_out_bytes: 2000,
+                            logical_read_bytes: 3000,
+                            logical_write_bytes: 4000,
+                        },
+                    ],
+                })),
+            },
+            // GroupTagRecord with tag2
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql2".to_vec(),
+                        b"plan2".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 200,
+                            read_keys: 20,
+                            write_keys: 10,
+                            network_in_bytes: 2000,
+                            network_out_bytes: 3000,
+                            logical_read_bytes: 4000,
+                            logical_write_bytes: 5000,
+                        },
+                    ],
+                })),
+            },
+            // RegionRecord with region_id 1001
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::RegionRecord(RegionRecord {
+                    region_id: 1001,
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 150,
+                            read_keys: 15,
+                            write_keys: 8,
+                            network_in_bytes: 1500,
+                            network_out_bytes: 2500,
+                            logical_read_bytes: 3500,
+                            logical_write_bytes: 4500,
+                        },
+                    ],
+                })),
+            },
+            // RegionRecord with region_id 1002
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::RegionRecord(RegionRecord {
+                    region_id: 1002,
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 250,
+                            read_keys: 25,
+                            write_keys: 12,
+                            network_in_bytes: 2500,
+                            network_out_bytes: 3500,
+                            logical_read_bytes: 4500,
+                            logical_write_bytes: 5500,
+                        },
+                    ],
+                })),
+            },
+        ];
+
+        let result = ResourceUsageRecordParser::keep_top_n(records, 1);
+
+        // Verify both GroupTagRecord and RegionRecord are in the result
+        let mut found_group_tag = false;
+        let mut found_region = false;
+
+        for record in &result {
+            match &record.record_oneof {
+                Some(RecordOneof::Record(_)) => found_group_tag = true,
+                Some(RecordOneof::RegionRecord(_)) => found_region = true,
+                None => {}
+            }
+        }
+
+        assert!(found_group_tag, "Should contain GroupTagRecord");
+        assert!(found_region, "Should contain RegionRecord");
+    }
+
+    #[test]
+    fn test_keep_top_n_different_timestamps() {
+        // Test that records with different timestamps are handled correctly
+        let records = vec![
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql1".to_vec(),
+                        b"plan1".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 100,
+                            read_keys: 10,
+                            write_keys: 5,
+                            network_in_bytes: 1000,
+                            network_out_bytes: 2000,
+                            logical_read_bytes: 3000,
+                            logical_write_bytes: 4000,
+                        },
+                        GroupTagRecordItem {
+                            timestamp_sec: 1001,
+                            cpu_time_ms: 150,
+                            read_keys: 15,
+                            write_keys: 8,
+                            network_in_bytes: 1500,
+                            network_out_bytes: 2500,
+                            logical_read_bytes: 3500,
+                            logical_write_bytes: 4500,
+                        },
+                    ],
+                })),
+            },
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql2".to_vec(),
+                        b"plan2".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 200,
+                            read_keys: 20,
+                            write_keys: 10,
+                            network_in_bytes: 2000,
+                            network_out_bytes: 3000,
+                            logical_read_bytes: 4000,
+                            logical_write_bytes: 5000,
+                        },
+                        GroupTagRecordItem {
+                            timestamp_sec: 1002,
+                            cpu_time_ms: 300,
+                            read_keys: 30,
+                            write_keys: 15,
+                            network_in_bytes: 3000,
+                            network_out_bytes: 4000,
+                            logical_read_bytes: 5000,
+                            logical_write_bytes: 6000,
+                        },
+                    ],
+                })),
+            },
+        ];
+
+        let result = ResourceUsageRecordParser::keep_top_n(records, 1);
+
+        // Collect all timestamps from result
+        let mut timestamps = std::collections::HashSet::new();
+        for record in &result {
+            if let Some(RecordOneof::Record(group_record)) = &record.record_oneof {
+                for item in &group_record.items {
+                    timestamps.insert(item.timestamp_sec);
+                }
+            }
+        }
+
+        // Verify all timestamps are preserved
+        assert!(timestamps.contains(&1000), "Should contain timestamp 1000");
+        assert!(timestamps.contains(&1001), "Should contain timestamp 1001");
+        assert!(timestamps.contains(&1002), "Should contain timestamp 1002");
+    }
+
+    #[test]
+    fn test_keep_top_n_less_than_top_n() {
+        // Test case where number of records is less than top_n
+        // All records should be kept
+        let records = vec![
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql1".to_vec(),
+                        b"plan1".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 100,
+                            read_keys: 10,
+                            write_keys: 5,
+                            network_in_bytes: 1000,
+                            network_out_bytes: 2000,
+                            logical_read_bytes: 3000,
+                            logical_write_bytes: 4000,
+                        },
+                    ],
+                })),
+            },
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql2".to_vec(),
+                        b"plan2".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 200,
+                            read_keys: 20,
+                            write_keys: 10,
+                            network_in_bytes: 2000,
+                            network_out_bytes: 3000,
+                            logical_read_bytes: 4000,
+                            logical_write_bytes: 5000,
+                        },
+                    ],
+                })),
+            },
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql3".to_vec(),
+                        b"plan3".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 50,
+                            read_keys: 5,
+                            write_keys: 2,
+                            network_in_bytes: 500,
+                            network_out_bytes: 1000,
+                            logical_read_bytes: 1500,
+                            logical_write_bytes: 2000,
+                        },
+                    ],
+                })),
+            },
+        ];
+
+        // top_n is 10, but we only have 3 records, so all should be kept
+        let result = ResourceUsageRecordParser::keep_top_n(records.clone(), 10);
+
+        // Count records in result
+        let mut result_count = 0;
+        let mut total_cpu_time = 0;
+        for record in &result {
+            if let Some(RecordOneof::Record(group_record)) = &record.record_oneof {
+                result_count += 1;
+                for item in &group_record.items {
+                    total_cpu_time += item.cpu_time_ms;
+                }
+            }
+        }
+
+        // All 3 records should be kept
+        assert_eq!(result_count, 3, "All records should be kept when count < top_n");
+        
+        // Verify total CPU time is preserved (100 + 200 + 50 = 350)
+        assert_eq!(total_cpu_time, 350, "Total CPU time should be preserved");
+    }
+
+    #[test]
+    fn test_keep_top_n_all_same_values() {
+        // Test case where all records have the same metric values
+        // All records should be selected (they all meet the threshold)
+        let records = vec![
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql1".to_vec(),
+                        b"plan1".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 100,
+                            read_keys: 10,
+                            write_keys: 5,
+                            network_in_bytes: 1000,
+                            network_out_bytes: 2000,
+                            logical_read_bytes: 3000,
+                            logical_write_bytes: 4000,
+                        },
+                    ],
+                })),
+            },
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql2".to_vec(),
+                        b"plan2".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 100,
+                            read_keys: 10,
+                            write_keys: 5,
+                            network_in_bytes: 1000,
+                            network_out_bytes: 2000,
+                            logical_read_bytes: 3000,
+                            logical_write_bytes: 4000,
+                        },
+                    ],
+                })),
+            },
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql3".to_vec(),
+                        b"plan3".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 100,
+                            read_keys: 10,
+                            write_keys: 5,
+                            network_in_bytes: 1000,
+                            network_out_bytes: 2000,
+                            logical_read_bytes: 3000,
+                            logical_write_bytes: 4000,
+                        },
+                    ],
+                })),
+            },
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql4".to_vec(),
+                        b"plan4".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 100,
+                            read_keys: 10,
+                            write_keys: 5,
+                            network_in_bytes: 1000,
+                            network_out_bytes: 2000,
+                            logical_read_bytes: 3000,
+                            logical_write_bytes: 4000,
+                        },
+                    ],
+                })),
+            },
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql5".to_vec(),
+                        b"plan5".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 100,
+                            read_keys: 10,
+                            write_keys: 5,
+                            network_in_bytes: 1000,
+                            network_out_bytes: 2000,
+                            logical_read_bytes: 3000,
+                            logical_write_bytes: 4000,
+                        },
+                    ],
+                })),
+            },
+        ];
+
+        // top_n is 3, but all records have the same values, so all should be kept
+        let result = ResourceUsageRecordParser::keep_top_n(records.clone(), 3);
+
+        // Count records in result
+        let mut result_count = 0;
+        let mut total_cpu_time = 0;
+        for record in &result {
+            if let Some(RecordOneof::Record(group_record)) = &record.record_oneof {
+                result_count += 1;
+                for item in &group_record.items {
+                    total_cpu_time += item.cpu_time_ms;
+                }
+            }
+        }
+
+        // All 5 records should be kept because they all have the same values
+        // and meet the threshold (which is 100 for cpu_time_ms when all are 100)
+        assert_eq!(result_count, 5, "All records with same values should be kept");
+        
+        // Verify total CPU time is preserved (100 * 5 = 500)
+        assert_eq!(total_cpu_time, 500, "Total CPU time should be preserved");
+    }
+
+    #[test]
+    fn test_keep_top_n_partial_selection_by_dimensions() {
+        // Test case: single timestamp, top_n=3, with records selected by different dimensions
+        // and some merged into others
+        let records = vec![
+            // record1: High CPU (500), high network (10000), low logical (2000)
+            // Should be kept (CPU and network both meet threshold)
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql1".to_vec(),
+                        b"plan1".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 500,
+                            read_keys: 50,
+                            write_keys: 25,
+                            network_in_bytes: 5000,
+                            network_out_bytes: 5000,
+                            logical_read_bytes: 1000,
+                            logical_write_bytes: 1000,
+                        },
+                    ],
+                })),
+            },
+            // record2: Medium CPU (400), medium network (4000), medium logical (4000)
+            // Should be kept (all dimensions meet threshold)
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql2".to_vec(),
+                        b"plan2".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 400,
+                            read_keys: 40,
+                            write_keys: 20,
+                            network_in_bytes: 2000,
+                            network_out_bytes: 2000,
+                            logical_read_bytes: 2000,
+                            logical_write_bytes: 2000,
+                        },
+                    ],
+                })),
+            },
+            // record3: Low CPU (300), low network (2000), high logical (6000)
+            // Should be kept (CPU and logical meet threshold)
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql3".to_vec(),
+                        b"plan3".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 300,
+                            read_keys: 30,
+                            write_keys: 15,
+                            network_in_bytes: 1000,
+                            network_out_bytes: 1000,
+                            logical_read_bytes: 3000,
+                            logical_write_bytes: 3000,
+                        },
+                    ],
+                })),
+            },
+            // record4: Low CPU (50), high network (6000), high logical (10000)
+            // Should be kept (network and logical meet threshold)
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql4".to_vec(),
+                        b"plan4".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 50,
+                            read_keys: 5,
+                            write_keys: 2,
+                            network_in_bytes: 3000,
+                            network_out_bytes: 3000,
+                            logical_read_bytes: 5000,
+                            logical_write_bytes: 5000,
+                        },
+                    ],
+                })),
+            },
+            // record5: Very low CPU (10), very low network (200), very low logical (200)
+            // Should be merged into others (none of the dimensions meet threshold)
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag: ResourceUsageRecordParser::encode_tag(
+                        b"sql5".to_vec(),
+                        b"plan5".to_vec(),
+                        None,
+                        None,
+                        None,
+                    ),
+                    items: vec![
+                        GroupTagRecordItem {
+                            timestamp_sec: 1000,
+                            cpu_time_ms: 10,
+                            read_keys: 1,
+                            write_keys: 1,
+                            network_in_bytes: 100,
+                            network_out_bytes: 100,
+                            logical_read_bytes: 100,
+                            logical_write_bytes: 100,
+                        },
+                    ],
+                })),
+            },
+        ];
+
+        // top_n=3, so thresholds should be:
+        // - cpu_threshold: 3rd largest = 300 (from [500, 400, 300, 50, 10])
+        // - network_threshold: 3rd largest = 4000 (from [10000, 6000, 4000, 2000, 200])
+        // - logical_threshold: 3rd largest = 4000 (from [10000, 6000, 4000, 2000, 200])
+        let result = ResourceUsageRecordParser::keep_top_n(records, 3);
+
+        // Collect kept records by tag (excluding others which have empty resource_group_tag)
+        let mut kept_records: std::collections::HashMap<Vec<u8>, GroupTagRecordItem> = std::collections::HashMap::new();
+
+        for record in &result {
+            if let Some(RecordOneof::Record(group_record)) = &record.record_oneof {
+                // Skip others (empty resource_group_tag)
+                if group_record.resource_group_tag.is_empty() {
+                    continue;
+                }
+                // Valid kept record
+                if group_record.items.len() == 1 {
+                    kept_records.insert(group_record.resource_group_tag.clone(), group_record.items[0].clone());
+                }
+            }
+        }
+
+        // Verify we have 4 kept records (record1, record2, record3, record4)
+        assert_eq!(kept_records.len(), 4, "Should have 4 kept records");
+
+        // Verify record1 is kept (high CPU and network)
+        let tag1 = ResourceUsageRecordParser::encode_tag(b"sql1".to_vec(), b"plan1".to_vec(), None, None, None);
+        assert!(kept_records.contains_key(&tag1), "record1 should be kept (high CPU and network)");
+        let record1_item = kept_records.get(&tag1).unwrap();
+        assert_eq!(record1_item.cpu_time_ms, 500);
+        assert_eq!(record1_item.network_in_bytes + record1_item.network_out_bytes, 10000);
+        assert_eq!(record1_item.logical_read_bytes + record1_item.logical_write_bytes, 2000);
+
+        // Verify record2 is kept (all dimensions meet threshold)
+        let tag2 = ResourceUsageRecordParser::encode_tag(b"sql2".to_vec(), b"plan2".to_vec(), None, None, None);
+        assert!(kept_records.contains_key(&tag2), "record2 should be kept (all dimensions meet threshold)");
+        let record2_item = kept_records.get(&tag2).unwrap();
+        assert_eq!(record2_item.cpu_time_ms, 400);
+        assert_eq!(record2_item.network_in_bytes + record2_item.network_out_bytes, 4000);
+        assert_eq!(record2_item.logical_read_bytes + record2_item.logical_write_bytes, 4000);
+
+        // Verify record3 is kept (CPU and logical meet threshold)
+        let tag3 = ResourceUsageRecordParser::encode_tag(b"sql3".to_vec(), b"plan3".to_vec(), None, None, None);
+        assert!(kept_records.contains_key(&tag3), "record3 should be kept (CPU and logical meet threshold)");
+        let record3_item = kept_records.get(&tag3).unwrap();
+        assert_eq!(record3_item.cpu_time_ms, 300);
+        assert_eq!(record3_item.network_in_bytes + record3_item.network_out_bytes, 2000);
+        assert_eq!(record3_item.logical_read_bytes + record3_item.logical_write_bytes, 6000);
+
+        // Verify record4 is kept (network and logical meet threshold)
+        let tag4 = ResourceUsageRecordParser::encode_tag(b"sql4".to_vec(), b"plan4".to_vec(), None, None, None);
+        assert!(kept_records.contains_key(&tag4), "record4 should be kept (network and logical meet threshold)");
+        let record4_item = kept_records.get(&tag4).unwrap();
+        assert_eq!(record4_item.cpu_time_ms, 50);
+        assert_eq!(record4_item.network_in_bytes + record4_item.network_out_bytes, 6000);
+        assert_eq!(record4_item.logical_read_bytes + record4_item.logical_write_bytes, 10000);
+
+        // Verify record5 is merged into others
+        // Others are stored with empty resource_group_tag (vec![])
+        let mut found_others = false;
+        let mut others_cpu = 0;
+        let mut others_network = 0;
+        let mut others_logical = 0;
+        let mut others_read_keys = 0;
+        let mut others_write_keys = 0;
+
+        for record in &result {
+            if let Some(RecordOneof::Record(group_record)) = &record.record_oneof {
+                // Others are stored with empty resource_group_tag
+                if group_record.resource_group_tag.is_empty() {
+                    found_others = true;
+                    for item in &group_record.items {
+                        others_cpu += item.cpu_time_ms;
+                        others_network += item.network_in_bytes + item.network_out_bytes;
+                        others_logical += item.logical_read_bytes + item.logical_write_bytes;
+                        others_read_keys += item.read_keys;
+                        others_write_keys += item.write_keys;
+                    }
+                }
+            }
+        }
+
+        assert!(found_others, "Should have others record");
+        assert_eq!(others_cpu, 10, "Others should contain record5's CPU time (10)");
+        assert_eq!(others_network, 200, "Others should contain record5's network (100+100=200)");
+        assert_eq!(others_logical, 200, "Others should contain record5's logical (100+100=200)");
+        assert_eq!(others_read_keys, 1, "Others should contain record5's read_keys (1)");
+        assert_eq!(others_write_keys, 1, "Others should contain record5's write_keys (1)");
     }
 }
