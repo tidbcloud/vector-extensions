@@ -81,7 +81,7 @@ impl GenerateConfig for TopSQLConfig {
 }
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "topsql")]
+#[typetag::serde(name = "topsql_v2")]
 impl SourceConfig for TopSQLConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
         self.validate_tls()?;
