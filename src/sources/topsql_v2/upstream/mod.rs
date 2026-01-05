@@ -2,7 +2,7 @@ pub mod parser;
 pub mod tidb;
 pub mod tikv;
 
-mod consts;
+pub mod consts;
 mod tls_proxy;
 
 use std::time::Duration;

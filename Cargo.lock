@@ -6129,6 +6129,15 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
+dependencies = [
+ "ahash 0.8.12",
+]
+
+[[package]]
+name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
@@ -6161,6 +6170,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "hashlru"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2c782df656366ccb42fbbac7c7c180535a43d906a138ffb491ec3ed56a239ab"
+dependencies = [
+ "hashbrown 0.13.2",
 ]
 
 [[package]]
@@ -13880,6 +13898,7 @@ dependencies = [
  "futures 0.3.31",
  "futures-util",
  "goauth",
+ "hashlru",
  "hex",
  "http 0.2.12",
  "hyper 0.14.32",

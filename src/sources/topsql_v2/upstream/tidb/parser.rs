@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use chrono::Utc;
 use vector::event::Event;
 use vector_lib::event::{LogEvent, Value as LogValue};
 use crate::sources::topsql_v2::schema_cache::SchemaCache;
 use crate::sources::topsql_v2::upstream::consts::{
-    LABEL_ENCODED_NORMALIZED_PLAN, LABEL_INSTANCE_KEY,
+    LABEL_DATE, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_INSTANCE_KEY,
     LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST,
     LABEL_SQL_DIGEST, LABEL_SOURCE_TABLE, LABEL_TIMESTAMPS, LABEL_KEYSPACE,
     METRIC_NAME_CPU_TIME_MS, METRIC_NAME_NETWORK_IN_BYTES, METRIC_NAME_NETWORK_OUT_BYTES,
@@ -96,40 +97,23 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             if v.len() <= top_n {
                 continue;
             }
-            // Handle top_n = 0 case: all records go to others
-            if top_n == 0 {
-                for psd in v.iter() {
-                    let others = ts_others.entry(*ts).or_insert_with(|| {
-                        let mut item = TopSqlRecordItem::default();
-                        item.timestamp_sec = *ts;
-                        item
-                    });
-                    others.cpu_time_ms += psd.cpu_time_ms;
-                    others.stmt_exec_count = psd.stmt_exec_count;
-                    others.stmt_duration_sum_ns = psd.stmt_duration_sum_ns;
-                    others.stmt_duration_count = psd.stmt_duration_count;
-                    others.stmt_network_in_bytes += psd.stmt_network_in_bytes;
-                    others.stmt_network_out_bytes += psd.stmt_network_out_bytes;
-                }
-                continue;
-            }
             // Find top_n threshold for cpu_time_ms using partial selection
             let mut cpu_values: Vec<u32> = v.iter().map(|psd| psd.cpu_time_ms).collect();
-            cpu_values.select_nth_unstable_by(top_n - 1, |a, b| b.cmp(a));
-            let cpu_threshold = cpu_values[top_n - 1];
+            cpu_values.select_nth_unstable_by(top_n, |a, b| b.cmp(a));
+            let cpu_threshold = cpu_values[top_n];
             
             // Find top_n threshold for network bytes using partial selection
             let mut network_values: Vec<u64> = v.iter()
                 .map(|psd| psd.stmt_network_in_bytes + psd.stmt_network_out_bytes)
                 .collect();
-            network_values.select_nth_unstable_by(top_n - 1, |a, b| b.cmp(a));
-            let network_threshold = network_values[top_n - 1];
+            network_values.select_nth_unstable_by(top_n, |a, b| b.cmp(a));
+            let network_threshold = network_values[top_n];
             
             // Keep records that meet either threshold
             let mut kept = Vec::new();
             for psd in v.iter() {
                 let network_bytes = psd.stmt_network_in_bytes + psd.stmt_network_out_bytes;
-                if psd.cpu_time_ms >= cpu_threshold || network_bytes >= network_threshold {
+                if psd.cpu_time_ms > cpu_threshold || network_bytes > network_threshold {
                     kept.push(psd.clone());
                 } else {
                     // Directly update ts_others for evicted records
@@ -241,6 +225,7 @@ impl TopSqlSubResponseParser {
         }
         let mut events = vec![];
         let instance_key = format!("topsql_tidb_{}", instance);
+        let mut date = String::new();
         for item in &record.items {
             let mut event = Event::Log(LogEvent::default());
             let log = event.as_mut_log();
@@ -248,6 +233,12 @@ impl TopSqlSubResponseParser {
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TIDB_TOPSQL);
             log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec));
+            if date.is_empty() {
+                date = chrono::DateTime::from_timestamp(item.timestamp_sec as i64, 0)
+                .map(|dt| dt.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "1970-01-01".to_string());
+            }
+            log.insert(LABEL_DATE, LogValue::from(date.clone()));
             log.insert(LABEL_INSTANCE_KEY, instance_key.clone());
             if !keyspace_name_str.is_empty() {
                 log.insert(LABEL_KEYSPACE, keyspace_name_str.clone());
@@ -295,6 +286,8 @@ impl TopSqlSubResponseParser {
         log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPSQL_SQL_META);
         log.insert(LABEL_SQL_DIGEST, sql_digest);
         log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql);
+        let date_str = Utc::now().format("%Y-%m-%d").to_string();
+        log.insert(LABEL_DATE, LogValue::from(date_str));
         events.push(event.into_log());
         events
     }
@@ -315,6 +308,8 @@ impl TopSqlSubResponseParser {
             LABEL_ENCODED_NORMALIZED_PLAN,
             encoded_normalized_plan,
         );
+        let date_str = Utc::now().format("%Y-%m-%d").to_string();
+        log.insert(LABEL_DATE, LogValue::from(date_str));
         events.push(event.into_log());
         events
     }
@@ -469,14 +464,16 @@ mod tests {
         });
         
         // top_n = 5, all values are same
-        // Current logic: when all values are same, threshold equals the value,
-        // so all records satisfy >= threshold condition and are kept
+        // New logic: threshold equals the value (top_n-th largest, which is the same value),
+        // so no records satisfy > threshold condition, all should go to others
         let result = TopSqlSubResponseParser::keep_top_n(responses, 5);
         
-        // Verify all records are kept
+        // Verify all records go to others
         let mut total_cpu_kept = 0u32;
         let mut total_network_kept = 0u64;
         let mut kept_count = 0;
+        let mut total_cpu_others = 0u32;
+        let mut total_network_others = 0u64;
         
         for response in result {
             if let Some(RespOneof::Record(record)) = response.resp_oneof {
@@ -488,7 +485,11 @@ mod tests {
                 );
                 
                 if record.sql_digest.is_empty() {
-                    // This is others (should be empty in this case)
+                    // This is others
+                    for item in record.items {
+                        total_cpu_others += item.cpu_time_ms;
+                        total_network_others += item.stmt_network_in_bytes + item.stmt_network_out_bytes;
+                    }
                 } else {
                     kept_count += record.items.len();
                     for item in record.items {
@@ -499,11 +500,12 @@ mod tests {
             }
         }
         
-        // Current behavior: all records are kept (all satisfy >= threshold)
-        // This test documents the current behavior when all values are same
-        assert_eq!(kept_count, 10);
-        assert_eq!(total_cpu_kept, 1000); // 10 * 100
-        assert_eq!(total_network_kept, 3000); // 10 * 300
+        // New behavior: all records go to others (none satisfy > threshold when all values are same)
+        assert_eq!(kept_count, 0);
+        assert_eq!(total_cpu_kept, 0);
+        assert_eq!(total_network_kept, 0);
+        assert_eq!(total_cpu_others, 1000); // 10 * 100
+        assert_eq!(total_network_others, 3000); // 10 * 300
     }
 
     #[test]
@@ -516,19 +518,19 @@ mod tests {
         let test_keyspace_name = b"test_keyspace_timestamps".to_vec();
         
         // Timestamp 1000: 8 records mixing high CPU/low network, low CPU/high network, both high, both low
-        // Expected: Keep records that meet either CPU threshold (>=60) OR network threshold (>=120)
-        // Top 3 CPU: 100, 90, 80 -> threshold = 80
-        // Top 3 Network: 400, 350, 300 -> threshold = 300
+        // Expected: Keep records that meet either CPU threshold (>20) OR network threshold (>40)
+        // Top 3 CPU: 100, 90, 80 -> threshold = 20 (4th largest)
+        // Top 3 Network: 400, 350, 300 -> threshold = 40 (4th largest)
         let timestamp1 = 1000u64;
         let test_cases_ts1 = vec![
             // (sql_id, plan_id, cpu_time_ms, network_in_bytes, network_out_bytes, reason)
-            (1, 1, 100, 10, 10),   // High CPU (100), low network (20) -> keep (CPU threshold)
-            (2, 2, 90, 10, 10),   // High CPU (90), low network (20) -> keep (CPU threshold)
-            (3, 3, 80, 10, 10),   // High CPU (80), low network (20) -> keep (CPU threshold)
-            (4, 4, 10, 200, 200), // Low CPU (10), high network (400) -> keep (network threshold)
-            (5, 5, 10, 175, 175), // Low CPU (10), high network (350) -> keep (network threshold)
-            (6, 6, 10, 150, 150), // Low CPU (10), high network (300) -> keep (network threshold)
-            (7, 7, 20, 20, 20),   // Low CPU (20), low network (40) -> evict
+            (1, 1, 100, 10, 10),   // High CPU (100), low network (20) -> keep (CPU > 20)
+            (2, 2, 90, 10, 10),   // High CPU (90), low network (20) -> keep (CPU > 20)
+            (3, 3, 80, 10, 10),   // High CPU (80), low network (20) -> keep (CPU > 20)
+            (4, 4, 10, 200, 200), // Low CPU (10), high network (400) -> keep (network > 40)
+            (5, 5, 10, 175, 175), // Low CPU (10), high network (350) -> keep (network > 40)
+            (6, 6, 10, 150, 150), // Low CPU (10), high network (300) -> keep (network > 40)
+            (7, 7, 20, 20, 20),   // Low CPU (20), low network (40) -> evict (CPU == 20, network == 40)
             (8, 8, 15, 15, 15),   // Low CPU (15), low network (30) -> evict
         ];
         
@@ -555,18 +557,18 @@ mod tests {
         }
         
         // Timestamp 2000: 7 records mixing different combinations
-        // Expected: Keep records that meet either CPU threshold (>=70) OR network threshold (>=140)
-        // Top 3 CPU: 100, 90, 70 -> threshold = 70
-        // Top 3 Network: 380, 360, 140 -> threshold = 140
+        // Expected: Keep records that meet either CPU threshold (>20) OR network threshold (>60)
+        // Top 3 CPU: 100, 90, 70 -> threshold = 20 (4th largest)
+        // Top 3 Network: 380, 360, 140 -> threshold = 60 (4th largest)
         let timestamp2 = 2000u64;
         let test_cases_ts2 = vec![
-            (9, 9, 100, 10, 10),   // High CPU (100), low network (20) -> keep (CPU threshold)
-            (10, 10, 90, 10, 10),  // High CPU (90), low network (20) -> keep (CPU threshold)
-            (11, 11, 70, 10, 10),  // High CPU (70), low network (20) -> keep (CPU threshold)
-            (12, 12, 10, 190, 190), // Low CPU (10), high network (380) -> keep (network threshold)
-            (13, 13, 10, 180, 180), // Low CPU (10), high network (360) -> keep (network threshold)
-            (14, 14, 10, 70, 70),   // Low CPU (10), high network (140) -> keep (network threshold)
-            (15, 15, 20, 30, 30),   // Low CPU (20), low network (60) -> evict
+            (9, 9, 100, 10, 10),   // High CPU (100), low network (20) -> keep (CPU > 20)
+            (10, 10, 90, 10, 10),  // High CPU (90), low network (20) -> keep (CPU > 20)
+            (11, 11, 70, 10, 10),  // High CPU (70), low network (20) -> keep (CPU > 20)
+            (12, 12, 10, 190, 190), // Low CPU (10), high network (380) -> keep (network > 60)
+            (13, 13, 10, 180, 180), // Low CPU (10), high network (360) -> keep (network > 60)
+            (14, 14, 10, 70, 70),   // Low CPU (10), high network (140) -> keep (network > 60)
+            (15, 15, 20, 30, 30),   // Low CPU (20), low network (60) -> evict (CPU == 20, network == 60)
         ];
         
         for (sql_id, plan_id, cpu_time, net_in, net_out) in test_cases_ts2.iter() {
@@ -657,8 +659,8 @@ mod tests {
         }
         
         // Verify timestamp 1000: should keep 6 records (3 high CPU + 3 high network), evict 2
-        // CPU threshold = 80 (top 3: 100, 90, 80)
-        // Network threshold = 300 (top 3: 400, 350, 300)
+        // CPU threshold = 20 (4th largest), keep records with CPU > 20
+        // Network threshold = 40 (4th largest), keep records with network > 40
         let ts1_kept: Vec<u8> = results_by_timestamp
             .get(&timestamp1)
             .map(|records| records.iter().map(|r| r.0).collect())
@@ -678,11 +680,11 @@ mod tests {
         
         // Verify kept records meet at least one threshold
         if let Some(records) = results_by_timestamp.get(&timestamp1) {
-            let cpu_threshold = 80u32;
-            let network_threshold = 300u64;
+            let cpu_threshold = 20u32;
+            let network_threshold = 40u64;
             for (sql_id, cpu, network) in records {
-                let meets_cpu = *cpu >= cpu_threshold;
-                let meets_network = *network >= network_threshold;
+                let meets_cpu = *cpu > cpu_threshold;
+                let meets_network = *network > network_threshold;
                 assert!(
                     meets_cpu || meets_network,
                     "Record sql_id={} (cpu={}, network={}) should meet at least one threshold (cpu_threshold={}, network_threshold={})",
@@ -699,8 +701,8 @@ mod tests {
         }
         
         // Verify timestamp 2000: should keep 6 records (3 high CPU + 3 high network), evict 1
-        // CPU threshold = 70 (top 3: 100, 90, 70)
-        // Network threshold = 140 (top 3: 380, 360, 140)
+        // CPU threshold = 20 (4th largest), keep records with CPU > 20
+        // Network threshold = 60 (4th largest), keep records with network > 60
         let ts2_kept: Vec<u8> = results_by_timestamp
             .get(&timestamp2)
             .map(|records| records.iter().map(|r| r.0).collect())
@@ -719,11 +721,11 @@ mod tests {
         
         // Verify kept records meet at least one threshold
         if let Some(records) = results_by_timestamp.get(&timestamp2) {
-            let cpu_threshold = 70u32;
-            let network_threshold = 140u64;
+            let cpu_threshold = 20u32;
+            let network_threshold = 60u64;
             for (sql_id, cpu, network) in records {
-                let meets_cpu = *cpu >= cpu_threshold;
-                let meets_network = *network >= network_threshold;
+                let meets_cpu = *cpu > cpu_threshold;
+                let meets_network = *network > network_threshold;
                 assert!(
                     meets_cpu || meets_network,
                     "Record sql_id={} (cpu={}, network={}) should meet at least one threshold (cpu_threshold={}, network_threshold={})",

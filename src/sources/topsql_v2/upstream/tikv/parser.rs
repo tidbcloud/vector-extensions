@@ -8,7 +8,7 @@ use vector_lib::event::{LogEvent, Value as LogValue};
 use crate::sources::topsql_v2::schema_cache::SchemaCache;
 use crate::sources::topsql_v2::upstream::consts::{
     KV_TAG_LABEL_INDEX, KV_TAG_LABEL_ROW, KV_TAG_LABEL_UNKNOWN,
-    LABEL_DB_NAME, LABEL_INSTANCE_KEY,
+    LABEL_DB_NAME, LABEL_INSTANCE_KEY, LABEL_DATE,
     LABEL_PLAN_DIGEST, LABEL_REGION_ID, LABEL_SQL_DIGEST, LABEL_KEYSPACE,
     LABEL_SOURCE_TABLE, LABEL_TAG_LABEL, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TIMESTAMPS,
     METRIC_NAME_CPU_TIME_MS, METRIC_NAME_LOGICAL_READ_BYTES, METRIC_NAME_LOGICAL_WRITE_BYTES, METRIC_NAME_NETWORK_IN_BYTES,
@@ -190,9 +190,9 @@ impl ResourceUsageRecordParser {
                 let network = psd.network_in_bytes() + psd.network_out_bytes();
                 let logical = psd.logical_read_bytes() + psd.logical_write_bytes();
                 
-                if cpu_time_ms >= cpu_threshold 
-                    || network >= network_threshold 
-                    || logical >= logical_threshold {
+                if cpu_time_ms > cpu_threshold 
+                    || network > network_threshold 
+                    || logical > logical_threshold {
                     kept.push(psd.clone());
                 } else {
                     let others = ts_others.entry(*ts).or_insert_with(|| {
@@ -249,12 +249,12 @@ impl ResourceUsageRecordParser {
         records_with_metrics: &[(usize, u32, u64, u64)],
         top_n: usize,
     ) -> (u32, u64, u64) {
-        // Find thresholds at position top_n - 1 (0-indexed) for each metric using select_nth_unstable
+        // Find thresholds at position top_n (0-indexed) for each metric using select_nth_unstable
         let cpu_threshold = if records_with_metrics.len() > top_n {
             let mut cpu_time_ms_values: Vec<u32> = records_with_metrics.iter().map(|r| r.1).collect();
             // select_nth_unstable finds the element at index k, placing smaller elements before and larger after
-            // For descending order (top N), we need to find the element at index top_n - 1
-            let target_idx = top_n - 1;
+            // For descending order (top N), we need to find the element at index top_n
+            let target_idx = top_n;
             cpu_time_ms_values.select_nth_unstable_by(target_idx, |a, b| b.cmp(a));
             cpu_time_ms_values[target_idx]
         } else {
@@ -264,7 +264,7 @@ impl ResourceUsageRecordParser {
         
         let network_threshold = if records_with_metrics.len() > top_n {
             let mut network_values: Vec<u64> = records_with_metrics.iter().map(|r| r.2).collect();
-            let target_idx = top_n - 1;
+            let target_idx = top_n;
             network_values.select_nth_unstable_by(target_idx, |a, b| b.cmp(a));
             network_values[target_idx]
         } else {
@@ -273,7 +273,7 @@ impl ResourceUsageRecordParser {
         
         let logical_threshold = if records_with_metrics.len() > top_n {
             let mut logical_values: Vec<u64> = records_with_metrics.iter().map(|r| r.3).collect();
-            let target_idx = top_n - 1;
+            let target_idx = top_n;
             logical_values.select_nth_unstable_by(target_idx, |a, b| b.cmp(a));
             logical_values[target_idx]
         } else {
@@ -518,6 +518,7 @@ impl ResourceUsageRecordParser {
         }
         let mut events = vec![];
         let instance_key = format!("topsql_tikv_{}", instance);
+        let mut date = String::new();
         for item in &record.items {
             let mut event = Event::Log(LogEvent::default());
             let log = event.as_mut_log();
@@ -525,6 +526,12 @@ impl ResourceUsageRecordParser {
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TIKV_TOPSQL);
             log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec));
+            if date.is_empty() {
+                date = chrono::DateTime::from_timestamp(item.timestamp_sec as i64, 0)
+                .map(|dt| dt.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "1970-01-01".to_string());
+            }
+            log.insert(LABEL_DATE, LogValue::from(date.clone()));
             log.insert(LABEL_INSTANCE_KEY, instance_key.clone());
             if !keyspace_name_str.is_empty() {
                 log.insert(LABEL_KEYSPACE, keyspace_name_str.clone());
@@ -564,6 +571,7 @@ impl ResourceUsageRecordParser {
         instance: String,
     ) -> Vec<LogEvent> {
         let mut events = vec![];
+        let mut date = String::new();
         let instance_key = format!("topsql_tikv_{}", instance);
         for item in &record.items {
             let mut event = Event::Log(LogEvent::default());
@@ -572,6 +580,12 @@ impl ResourceUsageRecordParser {
             // Add metadata with Vector prefix (ensure all fields have values)
             log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TIKV_TOPREGION);
             log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec as i64));
+            if date.is_empty() {
+                date = chrono::DateTime::from_timestamp(item.timestamp_sec as i64, 0)
+                .map(|dt| dt.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "1970-01-01".to_string());
+            }
+            log.insert(LABEL_DATE, LogValue::from(date.clone()));
             log.insert(LABEL_INSTANCE_KEY, instance_key.clone());
             log.insert(LABEL_REGION_ID, record.region_id.to_string());
             log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
@@ -1358,27 +1372,35 @@ mod tests {
             },
         ];
 
-        // top_n is 3, but all records have the same values, so all should be kept
+        // top_n is 3, but all records have the same values
+        // New logic: threshold equals the value (top_n-th largest, which is the same value),
+        // so no records satisfy > threshold condition, all should go to others
         let result = ResourceUsageRecordParser::keep_top_n(records.clone(), 3);
 
         // Count records in result
         let mut result_count = 0;
         let mut total_cpu_time = 0;
+        let mut others_cpu_time = 0;
         for record in &result {
             if let Some(RecordOneof::Record(group_record)) = &record.record_oneof {
-                result_count += 1;
-                for item in &group_record.items {
-                    total_cpu_time += item.cpu_time_ms;
+                // Check if this is others (empty resource_group_tag)
+                if group_record.resource_group_tag.is_empty() {
+                    for item in &group_record.items {
+                        others_cpu_time += item.cpu_time_ms;
+                    }
+                } else {
+                    result_count += 1;
+                    for item in &group_record.items {
+                        total_cpu_time += item.cpu_time_ms;
+                    }
                 }
             }
         }
 
-        // All 5 records should be kept because they all have the same values
-        // and meet the threshold (which is 100 for cpu_time_ms when all are 100)
-        assert_eq!(result_count, 5, "All records with same values should be kept");
-        
-        // Verify total CPU time is preserved (100 * 5 = 500)
-        assert_eq!(total_cpu_time, 500, "Total CPU time should be preserved");
+        // New behavior: all records go to others (none satisfy > threshold when all values are same)
+        assert_eq!(result_count, 0, "No records should be kept when all values are same");
+        assert_eq!(total_cpu_time, 0, "No CPU time should be in kept records");
+        assert_eq!(others_cpu_time, 500, "All CPU time should be in others (100 * 5 = 500)");
     }
 
     #[test]
@@ -1514,9 +1536,10 @@ mod tests {
         ];
 
         // top_n=3, so thresholds should be:
-        // - cpu_threshold: 3rd largest = 300 (from [500, 400, 300, 50, 10])
-        // - network_threshold: 3rd largest = 4000 (from [10000, 6000, 4000, 2000, 200])
-        // - logical_threshold: 3rd largest = 4000 (from [10000, 6000, 4000, 2000, 200])
+        // - cpu_threshold: 4th largest = 50 (from [500, 400, 300, 50, 10])
+        // - network_threshold: 4th largest = 2000 (from [10000, 6000, 4000, 2000, 200])
+        // - logical_threshold: 4th largest = 2000 (from [10000, 6000, 4000, 2000, 200])
+        // Records are kept if cpu > 50 OR network > 2000 OR logical > 2000
         let result = ResourceUsageRecordParser::keep_top_n(records, 3);
 
         // Collect kept records by tag (excluding others which have empty resource_group_tag)
@@ -1536,6 +1559,11 @@ mod tests {
         }
 
         // Verify we have 4 kept records (record1, record2, record3, record4)
+        // record1: cpu=500 > 50 ✓, network=10000 > 2000 ✓, logical=2000 > 2000 ✗ -> kept
+        // record2: cpu=400 > 50 ✓, network=4000 > 2000 ✓, logical=4000 > 2000 ✓ -> kept
+        // record3: cpu=300 > 50 ✓, network=2000 > 2000 ✗, logical=6000 > 2000 ✓ -> kept
+        // record4: cpu=50 > 50 ✗, network=6000 > 2000 ✓, logical=10000 > 2000 ✓ -> kept
+        // record5: cpu=10 > 50 ✗, network=200 > 2000 ✗, logical=200 > 2000 ✗ -> evicted
         assert_eq!(kept_records.len(), 4, "Should have 4 kept records");
 
         // Verify record1 is kept (high CPU and network)

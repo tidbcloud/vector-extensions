@@ -75,6 +75,17 @@ impl DeltaLakeWriter {
         write_config: WriteConfig,
         storage_options: Option<HashMap<String, String>>,
     ) -> Self {
+        Self::new_with_options(table_path, table_config, write_config, storage_options, true)
+    }
+
+    /// Create a new Delta Lake writer with options
+    pub fn new_with_options(
+        table_path: PathBuf,
+        table_config: DeltaTableConfig,
+        write_config: WriteConfig,
+        storage_options: Option<HashMap<String, String>>,
+        enable_standard_fields: bool,
+    ) -> Self {
         // Initialize S3 handlers if this is an S3 path
         if table_path.to_string_lossy().starts_with("s3://") {
             deltalake::aws::register_handlers(None);
@@ -85,7 +96,7 @@ impl DeltaLakeWriter {
         }
 
         let type_converter = TypeConverter::new();
-        let schema_manager = SchemaManager::new(type_converter);
+        let schema_manager = SchemaManager::new_with_options(type_converter, enable_standard_fields);
         let delta_ops_manager = DeltaOpsManager::new(storage_options.clone());
 
         Self {
@@ -125,6 +136,7 @@ impl DeltaLakeWriter {
             &mut self.schema_manager,
             events,
             &self.fixed_arrow_schema,
+            Some(&self.table_config.name),
         )?;
 
         // Cache the schema if not already cached

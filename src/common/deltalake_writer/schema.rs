@@ -21,25 +21,33 @@ pub struct SchemaManager {
     cached_arrow_schemas: HashMap<String, Schema>,
     /// Type converter
     type_converter: TypeConverter,
+    /// Whether to add system fields to the schema
+    enable_standard_fields: bool,
 }
 
 impl SchemaManager {
+    #[allow(dead_code)]
     pub fn new(type_converter: TypeConverter) -> Self {
+        Self::new_with_options(type_converter, true)
+    }
+
+    pub fn new_with_options(type_converter: TypeConverter, enable_standard_fields: bool) -> Self {
         Self {
             cached_schemas: HashMap::new(),
             cached_arrow_schemas: HashMap::new(),
             type_converter,
+            enable_standard_fields,
         }
     }
 
     /// Extract and cache schema metadata from event
-    pub fn extract_and_cache(&mut self, log_event: &LogEvent) -> Option<SchemaMetadata> {
+    pub fn extract_and_cache(&mut self, log_event: &LogEvent, default_table_name: Option<&str>) -> Option<SchemaMetadata> {
         // Get table name for schema cache key
         let table_name = log_event
             .get("_vector_table")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| "unknown_table".to_string());
+            .unwrap_or_else(|| default_table_name.unwrap_or("unknown_table").to_string());
 
         // Only extract if not already cached
         if !self.cached_schemas.contains_key(&table_name) {
@@ -102,27 +110,30 @@ impl SchemaManager {
     pub fn build_arrow_schema(
         &mut self,
         event: &Event,
+        default_table_name: Option<&str>,
     ) -> Result<Schema, Box<dyn std::error::Error + Send + Sync>> {
         if let Event::Log(log_event) = event {
             let mut fields = Vec::new();
             let mut added_fields = std::collections::HashSet::new();
 
             // First, extract and cache the MySQL schema metadata from the event
-            self.extract_and_cache(log_event);
+            self.extract_and_cache(log_event, default_table_name);
 
             // Get table name for schema lookup
             let table_name = log_event
                 .get("_vector_table")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| "unknown_table".to_string());
+                .unwrap_or_else(|| default_table_name.unwrap_or("unknown_table").to_string());
 
             // Build fixed field list based on cached MySQL schema and Vector system fields
 
-            // 1. Add Vector system fields first
-            fields.extend(self.add_system_fields());
-            for field in &fields {
-                added_fields.insert(field.name().to_string());
+            // 1. Add Vector system fields first (if enabled)
+            if self.enable_standard_fields {
+                fields.extend(self.add_system_fields());
+                for field in &fields {
+                    added_fields.insert(field.name().to_string());
+                }
             }
 
             // 2. Add date field for partitioning (derived from _vector_timestamp)
@@ -302,7 +313,7 @@ mod tests {
         log.insert("_schema_metadata", LogValue::Object(schema_meta));
 
         // Extract and cache
-        let metadata = manager.extract_and_cache(&log);
+        let metadata = manager.extract_and_cache(&log, None);
         assert!(metadata.is_some());
 
         let metadata = metadata.unwrap();
@@ -338,7 +349,7 @@ mod tests {
         log.insert("_schema_metadata", LogValue::Object(schema_meta));
 
         // Extract and cache
-        let metadata = manager.extract_and_cache(&log);
+        let metadata = manager.extract_and_cache(&log, None);
         assert!(metadata.is_some());
 
         let metadata = metadata.unwrap();
@@ -367,7 +378,7 @@ mod tests {
         log.insert("_schema_metadata", LogValue::Object(schema_meta));
 
         // Extract and cache
-        manager.extract_and_cache(&log);
+        manager.extract_and_cache(&log, None);
 
         // Get partition_by
         let partition_by = manager.get_partition_by("test_table");

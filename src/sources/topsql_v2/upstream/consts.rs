@@ -10,6 +10,7 @@ pub const LABEL_NORMALIZED_PLAN: &str = "normalized_plan";
 pub const LABEL_ENCODED_NORMALIZED_PLAN: &str = "encoded_normalized_plan";
 pub const LABEL_SOURCE_TABLE: &str = "source_table";
 pub const LABEL_TIMESTAMPS: &str = "timestamps";
+pub const LABEL_DATE: &str = "date";
 pub const LABEL_INSTANCE_KEY: &str = "instance_key";
 pub const LABEL_REGION_ID: &str = "region_id";
 

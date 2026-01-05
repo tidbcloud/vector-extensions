@@ -23,6 +23,7 @@ impl EventConverter {
         schema_manager: &mut SchemaManager,
         events: Vec<Event>,
         fixed_schema: &Option<Schema>,
+        default_table_name: Option<&str>,
     ) -> Result<(RecordBatch, Schema), Box<dyn std::error::Error + Send + Sync>> {
         if events.is_empty() {
             return Err("No events to convert".into());
@@ -34,14 +35,14 @@ impl EventConverter {
         } else {
             // Build fixed schema from first event and cache it
             let first_event = &events[0];
-            schema_manager.build_arrow_schema(first_event)?
+            schema_manager.build_arrow_schema(first_event, default_table_name)?
         };
 
         // Convert events to columns
         let mut columns: Vec<ArrayRef> = Vec::new();
 
         for field in &schema.fields {
-            let column = Self::create_column(field, &events)?;
+            let column = Self::create_column(field, &events, default_table_name)?;
             columns.push(column);
         }
 
@@ -54,9 +55,10 @@ impl EventConverter {
     fn create_column(
         field: &Field,
         events: &[Event],
+        default_table_name: Option<&str>,
     ) -> Result<ArrayRef, Box<dyn std::error::Error + Send + Sync>> {
         match field.data_type() {
-            DataType::Utf8 => Self::build_string_column(field, events),
+            DataType::Utf8 => Self::build_string_column(field, events, default_table_name),
             DataType::Int64 => Self::build_int64_column(field, events),
             DataType::Int32 => Self::build_int32_column(field, events),
             DataType::UInt32 => Self::build_uint32_column(field, events),
@@ -79,16 +81,20 @@ impl EventConverter {
     fn build_string_column(
         field: &Field,
         events: &[Event],
+        default_table_name: Option<&str>,
     ) -> Result<ArrayRef, Box<dyn std::error::Error + Send + Sync>> {
         let mut builder = StringBuilder::with_capacity(events.len(), events.len() * 8);
 
         for event in events.iter() {
             if let Event::Log(log_event) = event {
                 let value_opt = match field.name().as_str() {
-                    "_vector_table" => log_event
-                        .get("_vector_table")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
+                    "_vector_table" => {
+                        if let Some(table_name) = log_event.get("_vector_table").and_then(|v| v.as_str()) {
+                            Some(table_name.to_string())
+                        } else {
+                            default_table_name.map(|s| s.to_string())
+                        }
+                    },
                     "_vector_source_table" => log_event
                         .get("_vector_source_table")
                         .and_then(|v| v.as_str())
@@ -621,7 +627,7 @@ mod tests {
         let events = vec![Event::Log(create_test_log_event())];
         let field = Field::new("_vector_table", DataType::Utf8, false);
 
-        let result = EventConverter::build_string_column(&field, &events);
+        let result = EventConverter::build_string_column(&field, &events, None);
         assert!(result.is_ok());
 
         let array = result.unwrap();
