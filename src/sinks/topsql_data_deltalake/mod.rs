@@ -18,7 +18,7 @@ use vector_lib::{
     tls::TlsConfig,
 };
 
-use crate::sinks::topsql_deltalake::processor::TopSQLDeltaLakeSink;
+use crate::sinks::topsql_data_deltalake::processor::TopSQLDeltaLakeSink;
 
 use reqwest::Client;
 use serde_json::Value;
@@ -37,7 +37,7 @@ pub const fn default_max_delay_secs() -> u64 {
 pub use crate::common::deltalake_writer::{DeltaTableConfig, WriteConfig};
 
 /// Configuration for the deltalake sink
-#[configurable_component(sink("topsql_deltalake"))]
+#[configurable_component(sink("topsql_data_deltalake"))]
 #[derive(Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct DeltaLakeConfig {
@@ -228,7 +228,7 @@ impl GenerateConfig for DeltaLakeConfig {
 }
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "topsql_deltalake")]
+#[typetag::serde(name = "topsql_data_deltalake")]
 impl SinkConfig for DeltaLakeConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
         error!(

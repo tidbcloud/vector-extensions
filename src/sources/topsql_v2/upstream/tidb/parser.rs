@@ -286,7 +286,9 @@ impl TopSqlSubResponseParser {
         log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPSQL_SQL_META);
         log.insert(LABEL_SQL_DIGEST, sql_digest);
         log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql);
-        let date_str = Utc::now().format("%Y-%m-%d").to_string();
+        let now = Utc::now();
+        log.insert(LABEL_TIMESTAMPS, LogValue::from(now.timestamp()));
+        let date_str = now.format("%Y-%m-%d").to_string();
         log.insert(LABEL_DATE, LogValue::from(date_str));
         events.push(event.into_log());
         events
@@ -308,7 +310,9 @@ impl TopSqlSubResponseParser {
             LABEL_ENCODED_NORMALIZED_PLAN,
             encoded_normalized_plan,
         );
-        let date_str = Utc::now().format("%Y-%m-%d").to_string();
+        let now = Utc::now();
+        log.insert(LABEL_TIMESTAMPS, LogValue::from(now.timestamp()));
+        let date_str = now.format("%Y-%m-%d").to_string();
         log.insert(LABEL_DATE, LogValue::from(date_str));
         events.push(event.into_log());
         events

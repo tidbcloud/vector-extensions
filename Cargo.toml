@@ -65,6 +65,7 @@ vector-lib = { git = "https://github.com/vectordotdev/vector", tag = "v0.49.0", 
 xz2 = { version = "0.1.7" }
 hashlru = "0.11.1"
 lazy_static = "1.4.0"
+lru = "0.12.5"
 
 [dev-dependencies]
 lazy_static = "1.4.0"

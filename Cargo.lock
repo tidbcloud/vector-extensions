@@ -13906,6 +13906,7 @@ dependencies = [
  "k8s-openapi 0.25.0",
  "kube 1.1.0",
  "lazy_static",
+ "lru 0.12.5",
  "md-5",
  "metrics",
  "mockall",
