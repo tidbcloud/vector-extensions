@@ -4,3 +4,4 @@ pub mod keyviz;
 pub mod system_tables;
 pub mod topsql;
 pub mod topsql_v2;
+pub mod mocked_topsql;
