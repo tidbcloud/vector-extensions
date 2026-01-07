@@ -312,7 +312,6 @@ impl TopSQLDeltaLakeSink {
                 }
             }
         }
-
         // Write table's events
         for (table_name, mut events) in table_events {
             self.add_schema_info(&mut events);
@@ -404,7 +403,6 @@ impl StreamSink<Event> for TopSQLDeltaLakeSink {
             "Delta Lake sink starting with batch_size: {}",
             sink.write_config.batch_size
         );
-
         // Use the channel sender from the sink
         let tx = Arc::clone(&sink.tx);
 

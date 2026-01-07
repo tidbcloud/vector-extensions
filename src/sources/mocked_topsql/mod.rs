@@ -15,8 +15,8 @@ pub mod shutdown;
 #[derive(Debug, Clone)]
 pub struct MockedTopSQLConfig {
     /// Top N queries to collect
-    #[serde(default = "default_top_n")]
-    pub top_n: usize,
+    #[serde(default = "default_keep_top_n")]
+    pub keep_top_n: usize,
 
     /// Downsampling interval
     #[serde(default = "default_downsampling_interval")]
@@ -29,12 +29,12 @@ pub struct MockedTopSQLConfig {
     pub tikv_number: usize,
 }
 
-pub const fn default_top_n() -> usize {
-    0
+pub const fn default_keep_top_n() -> usize {
+    100
 }
 
 pub const fn default_downsampling_interval() -> u32 {
-    0
+    60
 }
 
 pub const fn default_tidb_number() -> usize {
@@ -48,7 +48,7 @@ pub const fn default_tikv_number() -> usize {
 impl GenerateConfig for MockedTopSQLConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
-            top_n: default_top_n(),
+            keep_top_n: default_keep_top_n(),
             downsampling_interval: default_downsampling_interval(),
             tidb_number: default_tidb_number(),
             tikv_number: default_tikv_number(),
@@ -61,14 +61,14 @@ impl GenerateConfig for MockedTopSQLConfig {
 #[typetag::serde(name = "mocked_topsql")]
 impl SourceConfig for MockedTopSQLConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
-        let top_n = self.top_n;
+        let keep_top_n = self.keep_top_n;
         let downsampling_interval = self.downsampling_interval;
         let tidb_number = self.tidb_number;
         let tikv_number = self.tikv_number;
 
         Ok(Box::pin(async move {
             let controller = Controller::new(
-                top_n,
+                keep_top_n,
                 downsampling_interval,
                 tidb_number,
                 tikv_number,

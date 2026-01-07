@@ -196,7 +196,6 @@ fn create_event_for_tidb_sql(index: usize, timestamp: i64, sql_digest_vec: &Vec<
     let event_count = top_n + top_n / 2;
     // Batch generate random indices
     let digest_indices = generate_random_indices(event_count, digest_count);
-    
     for (i, &digest_idx) in digest_indices.iter().enumerate() {
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
@@ -389,6 +388,7 @@ impl Controller {
                     if self.downsampling_interval != 0 {
                         loop_count = 60 / self.downsampling_interval;
                     }
+        
                     for _ in 0..loop_count {
                         for index in 0..self.tidb_number {
                             let mut batch = vec![];
