@@ -130,7 +130,7 @@ fn generate_random_string(num_strings: i32, string_length: usize) -> Vec<String>
     random_strings
 }
 fn generate_random_digest() -> Vec<String> {
-    generate_random_string(8000, 64)
+    generate_random_string(800000, 64)
 }
 
 /// Generate a batch of random indices within the given range
