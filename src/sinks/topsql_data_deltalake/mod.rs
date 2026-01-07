@@ -434,6 +434,13 @@ impl DeltaLakeConfig {
             }
         }
 
+        // Determine if we're using OSS (Alibaba Cloud Object Storage Service)
+        let is_oss = self.region.as_ref().and_then(|r| r.endpoint()).map_or(false, |endpoint| {
+            let endpoint_lower = endpoint.to_lowercase();
+            // Check if endpoint contains OSS indicators
+            endpoint_lower.contains("aliyuncs.com") || endpoint_lower.contains("oss-")
+        });
+
         // Set addressing style - OSS requires virtual hosted style
         if let Some(force_path_style) = self.force_path_style {
             if force_path_style {
@@ -455,12 +462,17 @@ impl DeltaLakeConfig {
             );
         }
 
-        // Add OSS-specific options when using virtual hosted style
-        if storage_options.get("AWS_S3_ADDRESSING_STYLE") == Some(&"virtual".to_string()) {
+        // Add OSS-specific options only when using OSS
+        // AWS S3 supports conditional put natively, so we should not use copy_if_not_exists
+        // for AWS S3 to avoid the warning and use the more performant conditional put
+        if is_oss && storage_options.get("AWS_S3_ADDRESSING_STYLE") == Some(&"virtual".to_string()) {
+            info!("Detected OSS endpoint, adding OSS-specific options");
             storage_options.insert(
                 "AWS_COPY_IF_NOT_EXISTS".to_string(),
                 "header-with-status:x-oss-forbid-overwrite:true:409".to_string(),
             );
+        } else if !is_oss {
+            info!("Using AWS S3, skipping AWS_COPY_IF_NOT_EXISTS to use native conditional put (more performant)");
         }
 
         // Configure AWS authentication for Delta Lake using storage_options
