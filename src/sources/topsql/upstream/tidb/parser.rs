@@ -100,7 +100,6 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                 others.stmt_exec_count = e.stmt_exec_count;
                 others.stmt_duration_sum_ns = e.stmt_duration_sum_ns;
                 others.stmt_duration_count = e.stmt_duration_count;
-                // Note: stmt_network_in_bytes and stmt_network_out_bytes are set to default (0)
                 for (k, v) in &e.stmt_kv_exec_count {
                     match others.stmt_kv_exec_count.get(k) {
                         None => {
@@ -122,7 +121,6 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                     existed_others.stmt_exec_count += others.stmt_exec_count;
                     existed_others.stmt_duration_sum_ns += others.stmt_duration_sum_ns;
                     existed_others.stmt_duration_count += others.stmt_duration_count;
-                    // Note: stmt_network_in_bytes and stmt_network_out_bytes are set to default (0)
                     for (k, v) in &others.stmt_kv_exec_count {
                         match existed_others.stmt_kv_exec_count.get(k) {
                             None => {
@@ -277,7 +275,6 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                             new_item.stmt_exec_count += item.stmt_exec_count;
                             new_item.stmt_duration_count += item.stmt_duration_count;
                             new_item.stmt_duration_sum_ns += item.stmt_duration_sum_ns;
-                            // Note: stmt_network_in_bytes and stmt_network_out_bytes are not aggregated
                             for (k, v) in &item.stmt_kv_exec_count {
                                 match new_item.stmt_kv_exec_count.get(k) {
                                     None => {

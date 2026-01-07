@@ -103,7 +103,6 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                 others.cpu_time_ms += e.cpu_time_ms;
                 others.read_keys += e.read_keys;
                 others.write_keys += e.write_keys;
-                // Note: network and logical bytes fields are set to default (0)
             }
             v.truncate(top_n);
             match ts_others.get_mut(&ts) {
@@ -114,7 +113,6 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                     existed_others.cpu_time_ms += others.cpu_time_ms;
                     existed_others.read_keys += others.read_keys;
                     existed_others.write_keys += others.write_keys;
-                    // Note: network and logical bytes fields are set to default (0)
                 }
             }
         }
@@ -180,7 +178,6 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                             new_item.cpu_time_ms += item.cpu_time_ms;
                             new_item.read_keys += item.read_keys;
                             new_item.write_keys += item.write_keys;
-                            // Note: network and logical bytes fields are not aggregated
                             new_items.insert(new_ts, new_item);
                         }
                     }
