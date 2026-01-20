@@ -6,6 +6,10 @@ readme = "README.md"
 publish = false
 default-run = "vector"
 
+[profile.release]
+codegen-units = 1
+lto = "fat"
+
 [[bin]]
 name = "vector"
 path = "src/main.rs"
@@ -63,6 +67,8 @@ vector = { git = "https://github.com/vectordotdev/vector", tag = "v0.49.0", defa
 vector-config = { git = "https://github.com/vectordotdev/vector", tag = "v0.49.0", default-features = false }
 vector-lib = { git = "https://github.com/vectordotdev/vector", tag = "v0.49.0", default-features = false }
 xz2 = { version = "0.1.7" }
+lazy_static = "1.4.0"
+lru = "0.12.5"
 
 [dev-dependencies]
 lazy_static = "1.4.0"

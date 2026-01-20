@@ -164,11 +164,14 @@ mod tests {
             let expected_json = serde_json::json!({
                 "metric": {
                     "__name__": "topsql_cpu_time_ms",
+                    "db": "",
                     "instance": "db:10080",
                     "instance_type": "tidb",
                     "sql_digest": "DEAD",
                     "plan_digest": "BEEF",
                     "tag_label": "",
+                    "table": "",
+                    "table_id": "",
                     "cluster_id": "10086",
                 },
                 "timestamps": [1661396787000u64, 1661396788000u64],

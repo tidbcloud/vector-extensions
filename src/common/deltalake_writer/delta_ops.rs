@@ -191,41 +191,81 @@ impl DeltaOpsManager {
 
         info!("Writing to Delta Lake table at: {}", table_uri);
 
-        // Use DeltaOps for improved S3 support, following the successful test pattern
-        let table_ops = self.create_delta_ops(&table_uri).await?;
-
         // Get partition columns from schema manager
         let partition_by = schema_manager.get_partition_by(table_name);
 
         // Try to write directly first (avoid load() which can panic in deltalake-core 0.28.1)
-        info!("Attempting to write to Delta table at {}", table_uri);
-
-        let write_builder =
-            self.configure_write_builder(table_ops, record_batch.clone(), partition_by);
-        let write_result = write_builder.await;
-
-        match write_result {
-            Ok(table) => {
-                info!("✅ Successfully wrote to Delta table at {}", table_uri);
-                info!("Table version: {:?}", table.version());
-                return Ok(());
+        // Retry logic for transaction conflicts (concurrent writes)
+        const MAX_RETRIES: u32 = 3;
+        const INITIAL_RETRY_DELAY_MS: u64 = 100;
+        
+        for attempt in 0..MAX_RETRIES {
+            if attempt > 0 {
+                // Exponential backoff: 100ms, 200ms, 400ms
+                let delay_ms = INITIAL_RETRY_DELAY_MS * (1 << (attempt - 1));
+                let delay = std::time::Duration::from_millis(delay_ms);
+                info!(
+                    "Retrying write to Delta table (attempt {}/{}) after {:?} delay",
+                    attempt + 1, MAX_RETRIES, delay
+                );
+                tokio::time::sleep(delay).await;
             }
-            Err(e) => {
-                // Check if error is due to table not existing
-                let error_str = e.to_string();
-                if error_str.contains("does not exist")
-                    || error_str.contains("not found")
-                    || error_str.contains("Not a Delta table")
-                {
-                    info!(
-                        "Table doesn't exist, will create it. Error was: {}",
-                        error_str
-                    );
-                    // Fall through to table creation below
-                } else {
-                    // Other error, fail immediately
-                    error!("Failed to write to Delta table: {}", e);
-                    return Err(e.into());
+            
+            // Reload table_ops on each attempt to get latest table state
+            // Use DeltaOps for improved S3 support, following the successful test pattern
+            let table_ops = self.create_delta_ops(&table_uri).await?;
+            
+            info!("Attempting to write to Delta table at {} (attempt {}/{})", table_uri, attempt + 1, MAX_RETRIES);
+
+            let write_builder =
+                self.configure_write_builder(table_ops, record_batch.clone(), partition_by);
+            let write_result = write_builder.await;
+
+            match write_result {
+                Ok(table) => {
+                    info!("✅ Successfully wrote to Delta table at {}", table_uri);
+                    info!("Table version: {:?}", table.version());
+                    return Ok(());
+                }
+                Err(e) => {
+                    let error_str = e.to_string();
+                    
+                    // Check if error is due to table not existing
+                    if error_str.contains("does not exist")
+                        || error_str.contains("not found")
+                        || error_str.contains("Not a Delta table")
+                    {
+                        info!(
+                            "Table doesn't exist, will create it. Error was: {}",
+                            error_str
+                        );
+                        // Fall through to table creation below
+                        break;
+                    }
+                    // Check if error is due to transaction conflict (retryable)
+                    else if error_str.contains("conflict detected")
+                        || error_str.contains("Metadata changed since last commit")
+                        || error_str.contains("concurrent modification")
+                    {
+                        if attempt < MAX_RETRIES - 1 {
+                            warn!(
+                                "Transaction conflict detected (attempt {}/{}): {}. Will retry...",
+                                attempt + 1, MAX_RETRIES, error_str
+                            );
+                            // Continue to retry
+                            continue;
+                        } else {
+                            error!(
+                                "Transaction conflict after {} retries: {}",
+                                MAX_RETRIES, error_str
+                            );
+                            return Err(e.into());
+                        }
+                    } else {
+                        // Other error, fail immediately
+                        error!("Failed to write to Delta table: {}", e);
+                        return Err(e.into());
+                    }
                 }
             }
         }

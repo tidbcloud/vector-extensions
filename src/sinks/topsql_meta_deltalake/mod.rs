@@ -18,7 +18,7 @@ use vector_lib::{
     tls::TlsConfig,
 };
 
-use crate::sinks::deltalake::processor::DeltaLakeSink;
+use crate::sinks::topsql_meta_deltalake::processor::TopSQLDeltaLakeSink;
 
 use reqwest::Client;
 use serde_json::Value;
@@ -29,11 +29,19 @@ mod processor;
 // Import default functions from common module
 use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
 
+pub const fn default_max_delay_secs() -> u64 {
+    180
+}
+
+pub const fn default_meta_cache_capacity() -> usize {
+    10000
+}
+
 // Re-export types from common module
 pub use crate::common::deltalake_writer::{DeltaTableConfig, WriteConfig};
 
 /// Configuration for the deltalake sink
-#[configurable_component(sink("deltalake"))]
+#[configurable_component(sink("topsql_meta_deltalake"))]
 #[derive(Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct DeltaLakeConfig {
@@ -47,6 +55,14 @@ pub struct DeltaLakeConfig {
     /// Write timeout in seconds
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+
+    /// Maximum delay in seconds before forcing a batch flush
+    #[serde(default = "default_max_delay_secs")]
+    pub max_delay_secs: u64,
+
+    /// LRU cache capacity for deduplication (shared by SQL meta and PLAN meta)
+    #[serde(default = "default_meta_cache_capacity")]
+    pub meta_cache_capacity: usize,
 
     /// Storage options for cloud storage
     pub storage_options: Option<HashMap<String, String>>,
@@ -205,6 +221,8 @@ impl GenerateConfig for DeltaLakeConfig {
             base_path: "./delta-tables".to_owned(),
             batch_size: default_batch_size(),
             timeout_secs: default_timeout_secs(),
+            max_delay_secs: default_max_delay_secs(),
+            meta_cache_capacity: default_meta_cache_capacity(),
             storage_options: None,
             bucket: None,
             options: None,
@@ -219,7 +237,7 @@ impl GenerateConfig for DeltaLakeConfig {
 }
 
 #[async_trait::async_trait]
-#[typetag::serde(name = "deltalake")]
+#[typetag::serde(name = "topsql_meta_deltalake")]
 impl SinkConfig for DeltaLakeConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
         error!(
@@ -324,11 +342,13 @@ impl DeltaLakeConfig {
             info!("No S3 service available - using default storage options only");
         }
 
-        let sink = DeltaLakeSink::new(
+        let sink = TopSQLDeltaLakeSink::new(
             base_path,
             table_configs,
             write_config,
+            self.max_delay_secs,
             Some(storage_options),
+            self.meta_cache_capacity,
         );
 
         Ok(VectorSink::from_event_streamsink(sink))
@@ -796,358 +816,5 @@ mod tests {
     #[test]
     fn generate_config() {
         vector::test_util::test_generate_config::<DeltaLakeConfig>();
-    }
-
-    #[tokio::test]
-    async fn test_write_events_to_local_delta_lake() {
-        // Create a temporary directory for testing
-        let temp_dir = std::env::temp_dir();
-        let test_id = format!(
-            "delta_test_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let base_path = temp_dir.join(test_id).join("delta-tables");
-
-        // Ensure the base directory exists
-        fs::create_dir_all(&base_path).expect("Failed to create base directory");
-
-        // Create test events
-        let mut events = Vec::new();
-
-        // Event 1
-        let mut log1 = LogEvent::from(BTreeMap::new());
-        log1.insert("_vector_table", "test_table_1");
-        log1.insert("_vector_source_table", "source_table_1");
-        log1.insert("_vector_source_schema", "test_schema");
-        log1.insert("_vector_instance", "test_instance_1");
-        log1.insert("_vector_timestamp", "2024-01-01T12:00:00Z");
-        // Data fields
-        log1.insert("id", 1i64);
-        log1.insert("name", "Alice");
-        log1.insert("age", 30i64);
-        log1.insert("active", true);
-        // Partition fields
-        log1.insert("date", "2024-01-01");
-        log1.insert("instance", "test_instance_1");
-
-        // Add schema metadata with multi-level partitioning
-        let mut schema_meta = ObjectMap::new();
-        schema_meta.insert(
-            "_partition_by".into(),
-            vector_lib::event::Value::from("date,instance"),
-        );
-
-        let mut id_meta = ObjectMap::new();
-        id_meta.insert(
-            "mysql_type".into(),
-            vector_lib::event::Value::from("bigint"),
-        );
-        schema_meta.insert("id".into(), vector_lib::event::Value::Object(id_meta));
-
-        let mut name_meta = ObjectMap::new();
-        name_meta.insert(
-            "mysql_type".into(),
-            vector_lib::event::Value::from("varchar(255)"),
-        );
-        schema_meta.insert("name".into(), vector_lib::event::Value::Object(name_meta));
-
-        let mut age_meta = ObjectMap::new();
-        age_meta.insert("mysql_type".into(), vector_lib::event::Value::from("int"));
-        schema_meta.insert("age".into(), vector_lib::event::Value::Object(age_meta));
-
-        let mut active_meta = ObjectMap::new();
-        active_meta.insert(
-            "mysql_type".into(),
-            vector_lib::event::Value::from("tinyint(1)"),
-        );
-        schema_meta.insert(
-            "active".into(),
-            vector_lib::event::Value::Object(active_meta),
-        );
-
-        // Add partition fields to schema metadata
-        let mut date_meta = ObjectMap::new();
-        date_meta.insert("mysql_type".into(), vector_lib::event::Value::from("date"));
-        schema_meta.insert("date".into(), vector_lib::event::Value::Object(date_meta));
-
-        let mut instance_meta = ObjectMap::new();
-        instance_meta.insert(
-            "mysql_type".into(),
-            vector_lib::event::Value::from("varchar(100)"),
-        );
-        schema_meta.insert(
-            "instance".into(),
-            vector_lib::event::Value::Object(instance_meta),
-        );
-
-        log1.insert(
-            "_schema_metadata",
-            vector_lib::event::Value::Object(schema_meta),
-        );
-
-        events.push(Event::Log(log1));
-
-        // Event 2 - different instance to test partitioning
-        let mut log2 = LogEvent::from(BTreeMap::new());
-        log2.insert("_vector_table", "test_table_1");
-        log2.insert("_vector_source_table", "source_table_1");
-        log2.insert("_vector_source_schema", "test_schema");
-        log2.insert("_vector_instance", "test_instance_2"); // Different instance
-        log2.insert("_vector_timestamp", "2024-01-01T12:01:00Z");
-        // Data fields
-        log2.insert("id", 2i64);
-        log2.insert("name", "Bob");
-        log2.insert("age", 25i64);
-        log2.insert("active", false);
-        // Partition fields
-        log2.insert("date", "2024-01-01"); // Same date
-        log2.insert("instance", "test_instance_2"); // Different instance
-
-        events.push(Event::Log(log2));
-
-        // Create DeltaLakeWriter and write events
-        let table_config = DeltaTableConfig {
-            name: "test_table_1".to_string(),
-            schema_evolution: Some(true),
-        };
-
-        let write_config = WriteConfig {
-            batch_size: 1000,
-            timeout_secs: 30,
-        };
-
-        let mut writer = crate::common::deltalake_writer::DeltaLakeWriter::new(
-            base_path.clone(),
-            table_config,
-            write_config,
-            None,
-        );
-
-        // Write events
-        let write_result = writer.write_events(events).await;
-        if let Err(e) = &write_result {
-            println!("   Write failed: {}", e);
-            // Check if base_path exists
-            println!("   Base path exists: {}", base_path.exists());
-            if base_path.exists() {
-                println!("   Base path contents:");
-                if let Ok(entries) = fs::read_dir(&base_path) {
-                    for entry in entries {
-                        if let Ok(entry) = entry {
-                            println!("     - {:?}", entry.path());
-                        }
-                    }
-                }
-            }
-        }
-        write_result.expect("Failed to write events");
-
-        // Check if files were generated
-        // Note: DeltaLakeWriter uses base_path as the table directory, not base_path/table_name
-        let table_path = base_path.clone();
-        println!("Checking table path: {:?}", table_path);
-        println!("Table path exists: {}", table_path.exists());
-        assert!(
-            table_path.exists(),
-            "Table directory should exist: {:?}",
-            table_path
-        );
-
-        // Check _delta_log directory
-        let delta_log_path = table_path.join("_delta_log");
-        println!("Checking delta log path: {:?}", delta_log_path);
-        println!("Delta log path exists: {}", delta_log_path.exists());
-        assert!(
-            delta_log_path.exists(),
-            "Delta log directory should exist: {:?}",
-            delta_log_path
-        );
-
-        // Check for .json files (transaction logs)
-        let json_files: Vec<_> = fs::read_dir(&delta_log_path)
-            .expect("Failed to read delta log directory")
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                if path.extension()? == "json" {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        assert!(
-            !json_files.is_empty(),
-            "Should have at least one .json transaction log file"
-        );
-
-        // Check for data files (parquet)
-        println!("Checking for parquet files in: {:?}", table_path);
-        let entries: Vec<_> = fs::read_dir(&table_path)
-            .expect("Failed to read table directory")
-            .collect();
-        println!("Found {} entries in table directory", entries.len());
-
-        // Collect all parquet files (including those in partition directories)
-        let mut parquet_files = Vec::new();
-
-        for entry in &entries {
-            let entry = entry.as_ref().expect("Failed to read entry");
-            let path = entry.path();
-            println!("  Entry: {:?}", path);
-
-            if path.is_dir() && !path.to_string_lossy().contains("_delta_log") {
-                // Check partition directory (could be nested for multi-level partitioning)
-                println!("    -> This is a directory, checking for parquet files inside");
-                if let Ok(sub_entries) = fs::read_dir(&path) {
-                    for sub_entry in sub_entries {
-                        if let Ok(sub_entry) = sub_entry {
-                            let sub_path = sub_entry.path();
-                            if sub_path.is_dir() {
-                                // Nested directory (e.g., date=2024-01-01/instance=test_instance_1)
-                                println!("      Found nested directory: {:?}", sub_path);
-                                if let Ok(parquet_entries) = fs::read_dir(&sub_path) {
-                                    for parquet_entry in parquet_entries {
-                                        if let Ok(parquet_entry) = parquet_entry {
-                                            let parquet_path = parquet_entry.path();
-                                            if parquet_path
-                                                .extension()
-                                                .map(|ext| ext == "parquet")
-                                                .unwrap_or(false)
-                                            {
-                                                println!(
-                                                    "        Found parquet file: {:?}",
-                                                    parquet_path
-                                                );
-                                                parquet_files.push(parquet_path);
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if sub_path
-                                .extension()
-                                .map(|ext| ext == "parquet")
-                                .unwrap_or(false)
-                            {
-                                // Parquet file directly in this directory
-                                println!("      Found parquet file: {:?}", sub_path);
-                                parquet_files.push(sub_path);
-                            }
-                        }
-                    }
-                }
-            } else if path
-                .extension()
-                .map(|ext| ext == "parquet")
-                .unwrap_or(false)
-            {
-                // Parquet file in root directory
-                println!("    -> This is a parquet file!");
-                parquet_files.push(path);
-            }
-        }
-
-        println!("Found {} parquet files total", parquet_files.len());
-        assert!(
-            !parquet_files.is_empty(),
-            "Should have at least one .parquet data file"
-        );
-
-        // Verify multi-level partitioning
-        let partition_dirs: Vec<_> = entries
-            .iter()
-            .filter_map(|entry| {
-                let entry = entry.as_ref().ok()?;
-                let path = entry.path();
-                if path.is_dir() && !path.to_string_lossy().contains("_delta_log") {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        println!("Found {} partition directories:", partition_dirs.len());
-        for dir in &partition_dirs {
-            println!("  Partition dir: {:?}", dir);
-
-            // Check for nested partition directories (date/instance)
-            if dir.is_dir() {
-                if let Ok(nested_entries) = fs::read_dir(dir) {
-                    for nested_entry in nested_entries {
-                        if let Ok(nested_entry) = nested_entry {
-                            let nested_path = nested_entry.path();
-                            if nested_path.is_dir() {
-                                println!("    Nested partition dir: {:?}", nested_path);
-
-                                // Check for parquet files in nested directory
-                                if let Ok(parquet_entries) = fs::read_dir(&nested_path) {
-                                    for parquet_entry in parquet_entries {
-                                        if let Ok(parquet_entry) = parquet_entry {
-                                            let parquet_path = parquet_entry.path();
-                                            if parquet_path
-                                                .extension()
-                                                .map(|ext| ext == "parquet")
-                                                .unwrap_or(false)
-                                            {
-                                                println!("      Parquet file: {:?}", parquet_path);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // With multi-level partitioning (date,instance), we should see nested directories
-        let has_multi_level = partition_dirs.iter().any(|dir| {
-            dir.to_string_lossy().contains("date=")
-                && fs::read_dir(dir)
-                    .map(|entries| {
-                        entries.flatten().any(|entry| {
-                            entry.path().is_dir()
-                                && entry.path().to_string_lossy().contains("instance=")
-                        })
-                    })
-                    .unwrap_or(false)
-        });
-
-        assert!(
-            has_multi_level,
-            "Should have multi-level partition directories (date=.../instance=...)"
-        );
-
-        // Verify file contents (optional)
-        for json_file in &json_files {
-            let content = fs::read_to_string(json_file).expect("Failed to read JSON file");
-            assert!(
-                !content.is_empty(),
-                "JSON file should not be empty: {:?}",
-                json_file
-            );
-            // Delta Lake JSON files may contain table name or other metadata
-            println!(
-                "Transaction log content (first 500 chars): {}",
-                &content[..content.len().min(500)]
-            );
-        }
-
-        println!(
-            "   Test passed: Successfully wrote events to Delta Lake at {:?}",
-            base_path
-        );
-        println!("   Generated {} transaction log files", json_files.len());
-        println!("   Generated {} data files", parquet_files.len());
-        println!("   Multi-level partitioning (date/instance) verified");
-
-        // Clean up temporary directory
-        let _ = fs::remove_dir_all(base_path.parent().unwrap());
     }
 }

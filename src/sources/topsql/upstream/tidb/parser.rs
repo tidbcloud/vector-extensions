@@ -148,6 +148,8 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                     stmt_kv_exec_count: psd.stmt_kv_exec_count.clone(),
                     stmt_duration_sum_ns: psd.stmt_duration_sum_ns,
                     stmt_duration_count: psd.stmt_duration_count,
+                    stmt_network_in_bytes: 0, // Not supported in topsql v1
+                    stmt_network_out_bytes: 0, // Not supported in topsql v1
                 };
                 match digest_items.get_mut(&k) {
                     None => {
@@ -476,6 +478,10 @@ mod tests {
         stmt_kv_exec_count: BTreeMap<String, u64>,
         stmt_duration_sum_ns: u64,
         stmt_duration_count: u64,
+        #[serde(default)]
+        stmt_network_in_bytes: u64,
+        #[serde(default)]
+        stmt_network_out_bytes: u64,
     }
 
     fn load_mock_responses() -> Vec<TopSqlSubResponse> {
@@ -496,6 +502,8 @@ mod tests {
                             stmt_kv_exec_count: i.stmt_kv_exec_count,
                             stmt_duration_sum_ns: i.stmt_duration_sum_ns,
                             stmt_duration_count: i.stmt_duration_count,
+                            stmt_network_in_bytes: i.stmt_network_in_bytes,
+                            stmt_network_out_bytes: i.stmt_network_out_bytes,
                         })
                         .collect(),
                     keyspace_name: vec![],

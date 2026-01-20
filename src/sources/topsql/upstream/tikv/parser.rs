@@ -13,7 +13,7 @@ use crate::sources::topsql::upstream::parser::{Buf, UpstreamEventParser};
 use crate::sources::topsql::upstream::tidb::proto::ResourceGroupTag;
 use crate::sources::topsql::upstream::tikv::proto::resource_usage_record::RecordOneof;
 use crate::sources::topsql::upstream::tikv::proto::{
-    GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord,
+    GroupTagRecord, GroupTagRecordItem, RegionRecord, ResourceUsageRecord,
 };
 
 pub struct ResourceUsageRecordParser;
@@ -30,6 +30,13 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
     ) -> Vec<Event> {
         match response.record_oneof {
             Some(RecordOneof::Record(record)) => Self::parse_tikv_record(
+                record,
+                instance,
+                schema_cache,
+                sharedpool_id,
+                keyspace_to_vmtenants,
+            ),
+            Some(RecordOneof::RegionRecord(record)) => Self::parse_tikv_region_record(
                 record,
                 instance,
                 schema_cache,
@@ -118,6 +125,10 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                     cpu_time_ms: psd.cpu_time_ms,
                     read_keys: psd.read_keys,
                     write_keys: psd.write_keys,
+                    network_in_bytes: 0, // Not supported in topsql v1
+                    network_out_bytes: 0, // Not supported in topsql v1
+                    logical_read_bytes: 0, // Not supported in topsql v1
+                    logical_write_bytes: 0, // Not supported in topsql v1
                 };
                 match digest_items.get_mut(&psd.resource_group_tag) {
                     None => {
@@ -268,6 +279,18 @@ impl ResourceUsageRecordParser {
         logs
     }
 
+    fn parse_tikv_region_record(
+        _record: RegionRecord,
+        _instance: String,
+        _schema_cache: Arc<SchemaCache>,
+        _sharedpool_id: Option<String>,
+        _keyspace_to_vmtenants: HashMap<String, (String, String)>,
+    ) -> Vec<Event> {
+        // RegionRecord is not fully supported in topsql v1
+        // Return empty vector for now
+        vec![]
+    }
+
     fn decode_tag(tag: &[u8]) -> Option<(String, String, String, Option<i64>, Option<Vec<u8>>)> {
         match ResourceGroupTag::decode(tag) {
             Ok(resource_tag) => {
@@ -335,6 +358,14 @@ mod tests {
         cpu_time_ms: u32,
         read_keys: u32,
         write_keys: u32,
+        #[serde(default)]
+        network_in_bytes: u64,
+        #[serde(default)]
+        network_out_bytes: u64,
+        #[serde(default)]
+        logical_read_bytes: u64,
+        #[serde(default)]
+        logical_write_bytes: u64,
     }
 
     fn load_mock_records() -> Vec<ResourceUsageRecord> {
@@ -358,6 +389,10 @@ mod tests {
                             cpu_time_ms: i.cpu_time_ms,
                             read_keys: i.read_keys,
                             write_keys: i.write_keys,
+                            network_in_bytes: i.network_in_bytes,
+                            network_out_bytes: i.network_out_bytes,
+                            logical_read_bytes: i.logical_read_bytes,
+                            logical_write_bytes: i.logical_write_bytes,
                         })
                         .collect(),
                 })),

@@ -9,12 +9,12 @@ use prost::Message;
 use tonic::transport::ServerTlsConfig;
 use tonic::{Request, Response, Status};
 
-use crate::sources::topsql::upstream::tidb::proto::ResourceGroupTag;
-use crate::sources::topsql::upstream::tikv::proto::resource_metering_pub_sub_server::{
+use crate::sources::topsql_v2::upstream::tidb::proto::ResourceGroupTag;
+use crate::sources::topsql_v2::upstream::tikv::proto::resource_metering_pub_sub_server::{
     ResourceMeteringPubSub, ResourceMeteringPubSubServer,
 };
-use crate::sources::topsql::upstream::tikv::proto::resource_usage_record::RecordOneof;
-use crate::sources::topsql::upstream::tikv::proto::{
+use crate::sources::topsql_v2::upstream::tikv::proto::resource_usage_record::RecordOneof;
+use crate::sources::topsql_v2::upstream::tikv::proto::{
     GroupTagRecord, GroupTagRecordItem, ResourceMeteringRequest, ResourceUsageRecord,
 };
 
