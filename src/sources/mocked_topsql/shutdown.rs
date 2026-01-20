@@ -1,10 +1,11 @@
+use async_recursion::async_recursion;
 use tokio::sync::watch;
 
 pub fn pair() -> (ShutdownNotifier, ShutdownSubscriber) {
-    let (tx, _rx) = watch::channel(());
+    let (tx, rx) = watch::channel(());
     (
         ShutdownNotifier { tx },
-        ShutdownSubscriber {},
+        ShutdownSubscriber { parent: None, rx },
     )
 }
 
@@ -25,9 +26,47 @@ impl ShutdownNotifier {
 
 #[derive(Clone)]
 pub struct ShutdownSubscriber {
+    parent: Option<Box<ShutdownSubscriber>>,
+    rx: watch::Receiver<()>,
 }
 
 impl ShutdownSubscriber {
+    #[async_recursion]
+    pub async fn done(&mut self) {
+        let rx = &mut self.rx;
+        match self.parent.as_mut() {
+            None => {
+                let _ = rx.changed().await;
+            }
+            Some(parent) => {
+                let parent = parent.as_mut();
+                tokio::select! {
+                    _ = parent.done() => {}
+                    _ = rx.changed() => {}
+                }
+            }
+        }
+    }
+
+    pub fn extend(&self) -> (ShutdownNotifier, ShutdownSubscriber) {
+        let (tx, rx) = watch::channel(());
+        (
+            ShutdownNotifier { tx },
+            ShutdownSubscriber {
+                parent: Some(Box::new(self.clone())),
+                rx,
+            },
+        )
+    }
+
+    #[allow(dead_code)]
+    pub async fn wait_for_shutdown(&mut self) {
+        self.done().await
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<()> {
+        self.rx.clone()
+    }
 }
 
 #[cfg(test)]
