@@ -31,9 +31,11 @@ trap cleanup EXIT
 #  linux/amd64 -> amd64
 #  linux/arm64 -> arm64
 #  linux/arm/v7 -> arm
-cp target/x86_64-unknown-linux-gnu/release/vector "$WORK_DIR"/vector-amd64
-cp target/aarch64-unknown-linux-gnu/release/vector "$WORK_DIR"/vector-arm64
-# cp target/armv7-unknown-linux-gnueabihf/release/vector "$WORK_DIR"/vector-arm
+BINARY_NAME="${NEXTGEN:+vector-nextgen}"
+BINARY_NAME="${BINARY_NAME:-vector}"
+cp target/x86_64-unknown-linux-gnu/release/${BINARY_NAME} "$WORK_DIR"/vector-amd64
+cp target/aarch64-unknown-linux-gnu/release/${BINARY_NAME} "$WORK_DIR"/vector-arm64
+# cp target/armv7-unknown-linux-gnueabihf/release/${BINARY_NAME} "$WORK_DIR"/vector-arm
 # cp config/vector.toml "$WORK_DIR"
 
 VERSION="${VECTOR_VERSION:-"$(scripts/version.sh)"}"
