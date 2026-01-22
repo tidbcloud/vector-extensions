@@ -10,171 +10,94 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  GCR_REPO: gcr.io/pingcap-public/dbaas/vector
 
 jobs:
-  generate-build-meta:
-    name: Generate Build Meta
+  build-and-push-images:
+    name: Build Images & Push To GCR
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
-    - uses: actions/checkout@v2
-    - name: Generate Build Meta
-      id: build_meta
-      run: |
-        echo "vector_build_desc=$(git rev-parse --short HEAD) $(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
-        echo "vector_build_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-    outputs:
-      vector_build_desc: ${{ steps.build_meta.outputs.vector_build_desc }}
-      vector_build_sha: ${{ steps.build_meta.outputs.vector_build_sha }}
+      - name: Check out code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.git-ref || github.sha }}
 
-  build-x86_64-unknown-linux-gnu-binary:
-    name: Build x86_64-unknown-linux-gnu
-    runs-on: ubuntu-latest
-    needs:
-      - generate-build-meta
-    env:
-      VECTOR_BUILD_DESC: ${{ needs.generate-build-meta.outputs.vector_build_desc }}
-      VECTOR_BUILD_SHA: ${{ needs.generate-build-meta.outputs.vector_build_sha }}
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up toolchains
-      uses: actions-rs/toolchain@v1
-    - name: Install cross
-      run: cargo install cross
-    - name: Build x86_64-unknown-linux-gnu
-      run: make build-x86_64-unknown-linux-gnu
-    - name: Upload x86_64-unknown-linux-gnu
-      uses: actions/upload-artifact@v2
-      with:
-        name: vector-${{ env.VECTOR_BUILD_SHA }}-x86_64-unknown-linux-gnu
-        path: target/x86_64-unknown-linux-gnu/release/vector
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-  build-x86_64-unknown-linux-gnu-nextgen-binary:
-    name: Build x86_64-unknown-linux-gnu-nextgen
-    runs-on: ubuntu-latest
-    needs:
-      - generate-build-meta
-    env:
-      VECTOR_BUILD_DESC: ${{ needs.generate-build-meta.outputs.vector_build_desc }}
-      VECTOR_BUILD_SHA: ${{ needs.generate-build-meta.outputs.vector_build_sha }}
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up toolchains
-      uses: actions-rs/toolchain@v1
-    - name: Install cross
-      run: cargo install cross
-    - name: Build x86_64-unknown-linux-gnu-nextgen
-      run: make build-x86_64-unknown-linux-gnu-nextgen
-    - name: Upload x86_64-unknown-linux-gnu-nextgen
-      uses: actions/upload-artifact@v2
-      with:
-        name: vector-nextgen-${{ env.VECTOR_BUILD_SHA }}-x86_64-unknown-linux-gnu
-        path: target/x86_64-unknown-linux-gnu/release/vector-nextgen
+      - name: Set up Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          rustup component add rustfmt clippy
 
-  build-aarch64-unknown-linux-gnu-binary:
-    name: Build aarch64-unknown-linux-gnu
-    runs-on: ubuntu-latest
-    needs:
-      - generate-build-meta
-    env:
-      VECTOR_BUILD_DESC: ${{ needs.generate-build-meta.outputs.vector_build_desc }}
-      VECTOR_BUILD_SHA: ${{ needs.generate-build-meta.outputs.vector_build_sha }}
-      JEMALLOC_SYS_WITH_LG_PAGE: 16
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up toolchains
-      uses: actions-rs/toolchain@v1
-    - name: Install cross
-      run: cargo install cross
-    - name: Build aarch64-unknown-linux-gnu
-      run: make build-aarch64-unknown-linux-gnu
-    - name: Upload aarch64-unknown-linux-gnu
-      uses: actions/upload-artifact@v2
-      with:
-        name: vector-${{ env.VECTOR_BUILD_SHA }}-aarch64-unknown-linux-gnu
-        path: target/aarch64-unknown-linux-gnu/release/vector
+      - name: Install cross
+        run: cargo install cross
 
-  build-aarch64-unknown-linux-gnu-nextgen-binary:
-    name: Build aarch64-unknown-linux-gnu-nextgen
-    runs-on: ubuntu-latest
-    needs:
-      - generate-build-meta
-    env:
-      VECTOR_BUILD_DESC: ${{ needs.generate-build-meta.outputs.vector_build_desc }}
-      VECTOR_BUILD_SHA: ${{ needs.generate-build-meta.outputs.vector_build_sha }}
-      JEMALLOC_SYS_WITH_LG_PAGE: 16
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up toolchains
-      uses: actions-rs/toolchain@v1
-    - name: Install cross
-      run: cargo install cross
-    - name: Build aarch64-unknown-linux-gnu-nextgen
-      run: make build-aarch64-unknown-linux-gnu-nextgen
-    - name: Upload aarch64-unknown-linux-gnu-nextgen
-      uses: actions/upload-artifact@v2
-      with:
-        name: vector-nextgen-${{ env.VECTOR_BUILD_SHA }}-aarch64-unknown-linux-gnu
-        path: target/aarch64-unknown-linux-gnu/release/vector-nextgen
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
 
-  push-image:
-    name: Push Docker Images
-    runs-on: ubuntu-latest
-    needs:
-      - generate-build-meta
-      - build-x86_64-unknown-linux-gnu-binary
-      - build-x86_64-unknown-linux-gnu-nextgen-binary
-      - build-aarch64-unknown-linux-gnu-binary
-      - build-aarch64-unknown-linux-gnu-nextgen-binary
-    env:
-      VECTOR_BUILD_DESC: ${{ needs.generate-build-meta.outputs.vector_build_desc }}
-      VECTOR_BUILD_SHA: ${{ needs.generate-build-meta.outputs.vector_build_sha }}
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v2
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v1
-      with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
-    - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v1
-    - name: Configure Docker for GCR
-      run: gcloud auth configure-docker --quiet
-    - name: Download staged binary (x86_64-unknown-linux-gnu)
-      uses: actions/download-artifact@v2
-      with:
-        name: vector-${{ env.VECTOR_BUILD_SHA }}-x86_64-unknown-linux-gnu
-        path: target/x86_64-unknown-linux-gnu/release
-    - name: Download staged binary (aarch64-unknown-linux-gnu)
-      uses: actions/download-artifact@v2
-      with:
-        name: vector-${{ env.VECTOR_BUILD_SHA }}-aarch64-unknown-linux-gnu
-        path: target/aarch64-unknown-linux-gnu/release
-    - name: Download staged binary (x86_64-unknown-linux-gnu-nextgen)
-      uses: actions/download-artifact@v2
-      with:
-        name: vector-nextgen-${{ env.VECTOR_BUILD_SHA }}-x86_64-unknown-linux-gnu
-        path: target/x86_64-unknown-linux-gnu/release
-    - name: Download staged binary (aarch64-unknown-linux-gnu-nextgen)
-      uses: actions/download-artifact@v2
-      with:
-        name: vector-nextgen-${{ env.VECTOR_BUILD_SHA }}-aarch64-unknown-linux-gnu
-        path: target/aarch64-unknown-linux-gnu/release
-    - name: Set Release Meta
-      run: |
-        SHORT_SHA=$(git rev-parse --short HEAD)
-        echo "TAG=gcr.io/pingcap-public/dbaas/vector:nightly-${SHORT_SHA}" >> $GITHUB_ENV
-        echo "TAG_NG=gcr.io/pingcap-public/dbaas/vector:nightly-${SHORT_SHA}-ng" >> $GITHUB_ENV
-    - name: Build and push standard image
-      env:
-        REPO: gcr.io/pingcap-public/dbaas/vector
-        TAG: ${{ env.TAG }}
-      run: make release-docker
-    - name: Build and push nextgen image
-      env:
-        REPO: gcr.io/pingcap-public/dbaas/vector
-        TAG: ${{ env.TAG_NG }}
-        NEXTGEN: "true"
-      run: make release-docker-nextgen
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+
+      - name: Set build date and tags
+        id: set_tags
+        run: |
+          BUILD_DATE=$(date +%Y%m%d)
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "tag=${{ env.GCR_REPO }}:nightly-${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "tag_ng=${{ env.GCR_REPO }}:nightly-${SHA_SHORT}-ng" >> $GITHUB_OUTPUT
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v0
+
+      - name: Configure Gcloud
+        run: |
+          gcloud auth configure-docker gcr.io --quiet
+
+      - name: Build x86_64 and aarch64 binaries (standard)
+        run: |
+          make build-x86_64-unknown-linux-gnu
+          JEMALLOC_SYS_WITH_LG_PAGE=16 make build-aarch64-unknown-linux-gnu
+
+      - name: Build and push standard image
+        env:
+          REPO: ${{ env.GCR_REPO }}
+          TAG: ${{ steps.set_tags.outputs.tag }}
+        run: make release-docker
+
+      - name: Build x86_64 and aarch64 binaries (nextgen)
+        run: |
+          make build-x86_64-unknown-linux-gnu-nextgen
+          JEMALLOC_SYS_WITH_LG_PAGE=16 make build-aarch64-unknown-linux-gnu-nextgen
+
+      - name: Build and push nextgen image
+        env:
+          REPO: ${{ env.GCR_REPO }}
+          TAG: ${{ steps.set_tags.outputs.tag_ng }}
+          NEXTGEN: "true"
+        run: make release-docker-nextgen
+
+      - name: Build Summary
+        run: |
+          echo "✅ Vector images built and pushed successfully!"
+          echo ""
+          echo "📦 **Built Images:**"
+          echo "- **Standard:** \`${{ steps.set_tags.outputs.tag }}\`"
+          echo "- **Nextgen:** \`${{ steps.set_tags.outputs.tag_ng }}\`"
+          echo ""
+          echo "🔍 **Git SHA:** ${{ github.sha }}"
+          echo "📅 **Build Date:** ${{ steps.set_tags.outputs.build_date }}"
