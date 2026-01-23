@@ -4,3 +4,7 @@
 .DS_Store
 .specstory/
 test_data/
+coverage/
+*.lcov
+tarpaulin-report.html
+cobertura.xml

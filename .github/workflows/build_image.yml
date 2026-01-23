@@ -29,16 +29,31 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
 
       - name: Set up Rust toolchain
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           rustup component add rustfmt clippy
+
+      - name: Check disk space
+        run: |
+          df -h
+          echo "Available disk space before build:"
+          df -h . | tail -1
 
       - name: Install cross
         run: cargo install cross
@@ -65,14 +80,30 @@ jobs:
           username: slggamer
           password: ${{ secrets.DOCKERHUBTOKEN }}
 
-      - name: Build x86_64 and aarch64 binaries (standard)
+      - name: Build x86_64 binary (standard)
         env:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           CARGO_PROFILE_RELEASE_LTO: "thin"
           CARGO_BUILD_JOBS: 2
+          CARGO_INCREMENTAL: 0
         run: |
           make build-x86_64-unknown-linux-gnu
-          JEMALLOC_SYS_WITH_LG_PAGE=16 make build-aarch64-unknown-linux-gnu
+          # Clean up intermediate files to save disk space
+          find target/x86_64-unknown-linux-gnu/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
+          find target/x86_64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
+
+      - name: Build aarch64 binary (standard)
+        env:
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+          CARGO_PROFILE_RELEASE_LTO: "thin"
+          CARGO_BUILD_JOBS: 2
+          CARGO_INCREMENTAL: 0
+          JEMALLOC_SYS_WITH_LG_PAGE: 16
+        run: |
+          make build-aarch64-unknown-linux-gnu
+          # Clean up intermediate files to save disk space
+          find target/aarch64-unknown-linux-gnu/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
+          find target/aarch64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
       - name: Build and push standard image
         env:
@@ -80,14 +111,40 @@ jobs:
           TAG: ${{ steps.set_tags.outputs.tag }}
         run: make release-docker
 
-      - name: Build x86_64 and aarch64 binaries (nextgen)
+      - name: Clean up standard build artifacts
+        run: |
+          # Remove standard build artifacts after Docker image is built
+          rm -rf target/x86_64-unknown-linux-gnu/release/build
+          rm -rf target/aarch64-unknown-linux-gnu/release/build
+          find target/x86_64-unknown-linux-gnu/release/deps -type f ! -name "*.rlib" -delete 2>/dev/null || true
+          find target/aarch64-unknown-linux-gnu/release/deps -type f ! -name "*.rlib" -delete 2>/dev/null || true
+          # Keep only the final binaries
+          echo "Cleaned up intermediate build artifacts"
+
+      - name: Build x86_64 binary (nextgen)
         env:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           CARGO_PROFILE_RELEASE_LTO: "thin"
           CARGO_BUILD_JOBS: 2
+          CARGO_INCREMENTAL: 0
         run: |
           make build-x86_64-unknown-linux-gnu-nextgen
-          JEMALLOC_SYS_WITH_LG_PAGE=16 make build-aarch64-unknown-linux-gnu-nextgen
+          # Clean up intermediate files to save disk space
+          find target/x86_64-unknown-linux-gnu/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
+          find target/x86_64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
+
+      - name: Build aarch64 binary (nextgen)
+        env:
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+          CARGO_PROFILE_RELEASE_LTO: "thin"
+          CARGO_BUILD_JOBS: 2
+          CARGO_INCREMENTAL: 0
+          JEMALLOC_SYS_WITH_LG_PAGE: 16
+        run: |
+          make build-aarch64-unknown-linux-gnu-nextgen
+          # Clean up intermediate files to save disk space
+          find target/aarch64-unknown-linux-gnu/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
+          find target/aarch64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
       - name: Build and push nextgen image
         env:
@@ -106,3 +163,21 @@ jobs:
           echo ""
           echo "🔍 **Git SHA:** ${{ github.sha }}"
           echo "📅 **Build Date:** ${{ steps.set_tags.outputs.build_date }}"
+
+      - name: Final cleanup and disk space check
+        if: always()
+        run: |
+          echo "Final disk space usage:"
+          df -h .
+          echo ""
+          echo "Target directory size:"
+          du -sh target 2>/dev/null || echo "target directory not found"
+          echo ""
+          echo "Cleaning up remaining build artifacts..."
+          # Remove all build artifacts except final binaries
+          find target -type d -name "build" -exec rm -rf {} + 2>/dev/null || true
+          find target -type f -name "*.o" -delete 2>/dev/null || true
+          find target -type f -name "*.d" -delete 2>/dev/null || true
+          find target -type f -name "*.rmeta" -delete 2>/dev/null || true
+          echo "Cleanup completed"
+          df -h .

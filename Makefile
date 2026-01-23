@@ -32,6 +32,21 @@ test:
 	@cargo test --workspace --lib
 	@echo "Done testing."
 
+.PHONY: test-coverage
+test-coverage:
+	@echo "Running tests with coverage..."
+	@cargo install cargo-tarpaulin --quiet 2>/dev/null || true
+	@cargo tarpaulin --workspace --lib --out Xml --out Html --output-dir coverage --timeout 120 || true
+	@echo "Coverage report generated in coverage/ directory"
+	@echo "Done testing with coverage."
+
+.PHONY: test-coverage-summary
+test-coverage-summary:
+	@echo "Running tests with coverage summary..."
+	@cargo install cargo-tarpaulin --quiet 2>/dev/null || true
+	@cargo tarpaulin --workspace --lib --out Stdout --out Xml --output-dir coverage --timeout 120 || true
+	@echo "Done testing with coverage."
+
 .PHONY: build
 build:
 	@echo "Building..."
