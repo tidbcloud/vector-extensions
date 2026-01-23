@@ -68,10 +68,13 @@ build-aarch64-unknown-linux-musl: target/aarch64-unknown-linux-musl/release/vect
 build-armv7-unknown-linux-musleabihf: target/armv7-unknown-linux-musleabihf/release/vector
 	@echo "Output to ${<}"
 
+DOCKER_PLATFORM ?= $(shell if [ "$$(uname)" = "Darwin" ] && [ "$$(uname -m)" = "arm64" ]; then echo "--platform linux/amd64"; else echo ""; fi)
+
 .PHONY: cross-image-%
 cross-image-%: export TRIPLE =$($(strip @):cross-image-%=%)
 cross-image-%:
 	docker build \
+		$(DOCKER_PLATFORM) \
 		--tag vector-cross-env:${TRIPLE} \
 		--file scripts/cross/${TRIPLE}.dockerfile \
 		scripts/cross
