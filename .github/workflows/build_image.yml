@@ -1,7 +1,6 @@
 name: build_image
 
 permissions:
-  id-token: write
   contents: read
 
 on:
@@ -10,15 +9,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  GCR_REPO: gcr.io/pingcap-public/dbaas/vector
+  DOCKER_REPO: slggamer/vector
 
 jobs:
   build-and-push-images:
-    name: Build Images & Push To GCR
+    name: Build Images & Push To Docker Hub
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Check out code
         uses: actions/checkout@v3
@@ -58,15 +56,14 @@ jobs:
           SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
           echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          echo "tag=${{ env.GCR_REPO }}:nightly-${SHA_SHORT}" >> $GITHUB_OUTPUT
-          echo "tag_ng=${{ env.GCR_REPO }}:nightly-${SHA_SHORT}-ng" >> $GITHUB_OUTPUT
+          echo "tag=${{ env.DOCKER_REPO }}:nightly-${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "tag_ng=${{ env.DOCKER_REPO }}:nightly-${SHA_SHORT}-ng" >> $GITHUB_OUTPUT
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v0
-
-      - name: Configure Gcloud
-        run: |
-          gcloud auth configure-docker gcr.io --quiet
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: slggamer
+          password: ${{ secrets.DOCKERHUBTOKEN }}
 
       - name: Build x86_64 and aarch64 binaries (standard)
         run: |
@@ -75,7 +72,7 @@ jobs:
 
       - name: Build and push standard image
         env:
-          REPO: ${{ env.GCR_REPO }}
+          REPO: ${{ env.DOCKER_REPO }}
           TAG: ${{ steps.set_tags.outputs.tag }}
         run: make release-docker
 
@@ -86,7 +83,7 @@ jobs:
 
       - name: Build and push nextgen image
         env:
-          REPO: ${{ env.GCR_REPO }}
+          REPO: ${{ env.DOCKER_REPO }}
           TAG: ${{ steps.set_tags.outputs.tag_ng }}
           NEXTGEN: "true"
         run: make release-docker-nextgen

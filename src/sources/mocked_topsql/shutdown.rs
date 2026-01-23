@@ -48,6 +48,7 @@ impl ShutdownSubscriber {
         }
     }
 
+    #[allow(dead_code)]
     pub fn extend(&self) -> (ShutdownNotifier, ShutdownSubscriber) {
         let (tx, rx) = watch::channel(());
         (
@@ -64,6 +65,7 @@ impl ShutdownSubscriber {
         self.done().await
     }
 
+    #[allow(dead_code)]
     pub fn subscribe(&self) -> watch::Receiver<()> {
         self.rx.clone()
     }
