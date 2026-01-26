@@ -128,7 +128,9 @@ jobs:
           find target/x86_64-unknown-linux-gnu/release/deps -type f ! -name "*.rlib" -delete 2>/dev/null || true
           find target/aarch64-unknown-linux-gnu/release/deps -type f ! -name "*.rlib" -delete 2>/dev/null || true
           # Keep only the final binaries
-          echo "Cleaned up intermediate build artifacts"
+          df -h
+          echo "Available disk space after Cleaned up intermediate build artifacts:"
+          df -h . | tail -1
 
       - name: Build x86_64 binary (nextgen)
         timeout-minutes: 60
