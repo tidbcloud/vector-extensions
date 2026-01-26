@@ -89,6 +89,10 @@ impl TopologyFetcher {
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
     ) -> Result<Self, FetchError> {
+        // Ensure rustls has a default CryptoProvider installed before any TLS clients
+        // (e.g. tonic/etcd-client) are constructed.
+        crate::utils::rustls::init_rustls();
+
         let pd_address = Self::polish_address_impl(pd_address, &tls_config)?;
         let http_client = Self::build_http_client_impl(tls_config.as_ref(), proxy_config)?;
         let etcd_client = Self::build_etcd_client_impl(&pd_address, &tls_config).await?;
@@ -123,6 +127,8 @@ impl TopologyFetcher {
         proxy_config: &ProxyConfig,
         mock_components: Option<HashSet<Component>>,
     ) -> Result<Self, FetchError> {
+        crate::utils::rustls::init_rustls();
+
         // Create http_client (this should work without real connections)
         let http_client = Self::build_http_client_impl(None, proxy_config)?;
 
