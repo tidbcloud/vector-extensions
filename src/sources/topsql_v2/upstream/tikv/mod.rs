@@ -26,6 +26,9 @@ impl Upstream for TiKVUpstream {
         tls_config: Option<&vector::tls::TlsConfig>,
         shutdown_subscriber: ShutdownSubscriber,
     ) -> vector::Result<Endpoint> {
+        // Initialize rustls CryptoProvider before using tonic
+        crate::utils::rustls::init_rustls();
+        
         let endpoint = if tls_config.is_none() {
             Channel::from_shared(address.clone())?
                 .http2_keep_alive_interval(Duration::from_secs(300))
