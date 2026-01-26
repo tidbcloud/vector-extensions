@@ -104,8 +104,6 @@ jobs:
           CARGO_PROFILE_RELEASE_LTO: "thin"
           CARGO_BUILD_JOBS: 4
           CARGO_INCREMENTAL: 0
-          JEMALLOC_SYS_WITH_LG_PAGE: 16
-          RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
         run: |
           echo "Starting aarch64 build at $(date)"
           make build-aarch64-unknown-linux-gnu
@@ -154,8 +152,6 @@ jobs:
           CARGO_PROFILE_RELEASE_LTO: "thin"
           CARGO_BUILD_JOBS: 4
           CARGO_INCREMENTAL: 0
-          JEMALLOC_SYS_WITH_LG_PAGE: 16
-          RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
         run: |
           echo "Starting aarch64 nextgen build at $(date)"
           make build-aarch64-unknown-linux-gnu-nextgen
