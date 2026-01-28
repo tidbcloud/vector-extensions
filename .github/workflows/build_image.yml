@@ -160,6 +160,32 @@ jobs:
           find target/aarch64-unknown-linux-gnu/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
           find target/aarch64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
+      - name: Check nextgen binaries before building image
+        run: |
+          echo "Checking nextgen binary files..."
+          echo ""
+          echo "x86_64 binary:"
+          if [ -f target/x86_64-unknown-linux-gnu/release/vector-nextgen ]; then
+            ls -lh target/x86_64-unknown-linux-gnu/release/vector-nextgen
+            echo "  ✅ EXISTS"
+          else
+            echo "  ❌ NOT FOUND"
+          fi
+          echo ""
+          echo "aarch64 binary:"
+          if [ -f target/aarch64-unknown-linux-gnu/release/vector-nextgen ]; then
+            ls -lh target/aarch64-unknown-linux-gnu/release/vector-nextgen
+            echo "  ✅ EXISTS"
+          else
+            echo "  ❌ NOT FOUND"
+          fi
+          echo ""
+          if [ -f target/x86_64-unknown-linux-gnu/release/vector-nextgen ] && [ -f target/aarch64-unknown-linux-gnu/release/vector-nextgen ]; then
+            echo "✅ Both nextgen binaries exist - Makefile should skip rebuild"
+          else
+            echo "⚠️ Some binaries missing - Makefile will trigger rebuild"
+          fi
+
       - name: Build and push nextgen image
         env:
           REPO: ${{ env.DOCKER_REPO }}

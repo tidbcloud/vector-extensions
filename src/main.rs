@@ -12,6 +12,10 @@ mod utils;
 
 #[cfg(unix)]
 fn main() -> ExitCode {
+    // Initialize rustls CryptoProvider early, before any threads are spawned
+    // This prevents panics when rustls is used in worker threads
+    crate::utils::rustls::init_rustls();
+    
     let exit_code = Application::run(ExtraContext::default())
         .code()
         .unwrap_or(exitcode::UNAVAILABLE) as u8;
