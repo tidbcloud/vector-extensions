@@ -172,6 +172,11 @@ target/%/vector-nextgen: cargo-install-cross
 		--target ${TRIPLE} \
 		--no-default-features \
 		--features ${FEATURES}
+	@# Rename vector to vector-nextgen after build
+	@if [ -f target/${TRIPLE}/${PROFILE}/vector ] && [ ! -f target/${TRIPLE}/${PROFILE}/vector-nextgen ]; then \
+		mv target/${TRIPLE}/${PROFILE}/vector target/${TRIPLE}/${PROFILE}/vector-nextgen; \
+		echo "Renamed vector to vector-nextgen"; \
+	fi
 
 .PHONY: cargo-install-%
 cargo-install-%: override TOOL = $(@:cargo-install-%=%)
