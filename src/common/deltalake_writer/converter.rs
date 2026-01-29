@@ -18,6 +18,23 @@ impl EventConverter {
         Self
     }
 
+    /// Convert a Vector `Value` into a plain string for Arrow Utf8 columns.
+    ///
+    /// IMPORTANT:
+    /// - Prefer the raw string via `as_str()` to avoid JSON-style escaping (e.g. newline -> `\n`).
+    /// - Fall back to `to_string()` for non-string types.
+    fn log_value_to_plain_string(value: &LogValue) -> Option<String> {
+        if let Some(s) = value.as_str() {
+            return Some(s.to_string());
+        }
+
+        match value {
+            LogValue::Null => None,
+            // For everything else, `to_string()` is fine (numbers/bools/objects, etc.).
+            _ => Some(value.to_string()),
+        }
+    }
+
     /// Convert events to Arrow RecordBatch
     pub fn events_to_record_batch(
         schema_manager: &mut SchemaManager,
@@ -140,14 +157,14 @@ impl EventConverter {
                         // For data fields, try exact match first, then case-insensitive match
                         let field_name = field.name();
                         if let Some(value) = log_event.get(field_name.as_str()) {
-                            Some(value.to_string())
+                            Self::log_value_to_plain_string(value)
                         } else {
                             // Try case-insensitive match for data fields
                             if let Some(iter) = log_event.all_event_fields() {
                                 let mut found_value = None;
                                 for (key, value) in iter {
                                     if key.as_ref().to_lowercase() == field_name.to_lowercase() {
-                                        found_value = Some(value.to_string());
+                                        found_value = Self::log_value_to_plain_string(value);
                                         break;
                                     }
                                 }
@@ -160,9 +177,7 @@ impl EventConverter {
                 };
 
                 if let Some(s) = value_opt {
-                    // Trim quotes from string values to avoid query issues
-                    let trimmed = s.trim_matches('"');
-                    builder.append_value(trimmed);
+                    builder.append_value(&s);
                 } else {
                     builder.append_null();
                 }
@@ -586,11 +601,9 @@ impl EventConverter {
             .iter()
             .map(|event| {
                 if let Event::Log(log_event) = event {
-                    log_event.get(field.name().as_str()).map(|v| {
-                        // Trim quotes from string values to avoid query issues
-                        let s = v.to_string();
-                        s.trim_matches('"').to_string()
-                    })
+                    log_event
+                        .get(field.name().as_str())
+                        .and_then(Self::log_value_to_plain_string)
                 } else {
                     None
                 }
@@ -612,6 +625,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use vector_lib::event::LogEvent;
+    use arrow::array::StringArray;
 
     fn create_test_log_event() -> LogEvent {
         let mut log = LogEvent::from(BTreeMap::new());
@@ -654,5 +668,26 @@ mod tests {
 
         let result = EventConverter::build_boolean_column(&field, &events);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_string_column_preserves_newlines() {
+        let mut log = create_test_log_event();
+        let plan = "root\n└─ child\n".to_string();
+        log.insert("normalized_plan", plan.clone());
+        let events = vec![Event::Log(log)];
+        let field = Field::new("normalized_plan", DataType::Utf8, true);
+
+        let array = EventConverter::build_string_column(&field, &events, None).unwrap();
+        let string_array = array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("should be a StringArray");
+
+        let got = string_array.value(0);
+        assert_eq!(got, plan.as_str());
+        assert!(got.contains('\n'));
+        // If we accidentally JSON-escaped the string, we'd store a literal backslash-n.
+        assert!(!got.contains("\\n"));
     }
 }
