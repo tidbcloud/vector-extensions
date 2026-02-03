@@ -1,6 +1,7 @@
 pub mod conprof;
 pub mod filename;
 pub mod keyviz;
+pub mod statement;
 pub mod system_tables;
 pub mod topsql;
 pub mod topsql_v2;

@@ -1,0 +1,459 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package systemtable.v1;
+
+option go_package = "github.com/pingcap/tidb/pkg/systemtable/proto/v1;systemtablev1";
+
+// ============================================================================
+// SYSTEM TABLE API - FINAL VERSION
+// ============================================================================
+//
+// This is the unified API for TiDB system table data exchange.
+//
+// Design Principles:
+// 1. Schema-Agnostic: Client doesn't need to know table schemas
+// 2. Hybrid Push/Pull: Optimized push for high-volume, flexible pull for queries
+// 3. Forward Compatible: Protobuf ensures backward/forward compatibility
+// 4. Extensible: Dynamic metrics via map<string, MetricValue>
+//
+// ============================================================================
+
+// ============================================================================
+// PUSH SERVICE - For high-volume data ingestion
+// ============================================================================
+
+service SystemTablePushService {
+    // Push optimized statement batch (high performance)
+    rpc PushStatements(StatementBatch) returns (PushResponse);
+
+    // Push generic table rows (flexible for any table)
+    rpc PushTableRows(TableRowBatch) returns (PushResponse);
+
+    // Health check and capability discovery
+    rpc Ping(PingRequest) returns (PingResponse);
+}
+
+// ============================================================================
+// PULL SERVICE - Schema-agnostic query API
+// ============================================================================
+
+service SystemTablePullService {
+    // Query any table with SQL-like syntax (schema-agnostic!)
+    rpc QueryTable(TableQuery) returns (stream TableQueryResponse);
+
+    // Discover available tables
+    rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
+
+    // Get table schema (for tools/debugging)
+    rpc DescribeTable(DescribeTableRequest) returns (DescribeTableResponse);
+}
+
+// ============================================================================
+// PUSH MODE MESSAGES
+// ============================================================================
+
+// Optimized batch for statement data
+message StatementBatch {
+    // Batch metadata
+    BatchMetadata metadata = 1;
+
+    // Statement records
+    repeated Statement statements = 2;
+}
+
+// Generic batch for any table
+message TableRowBatch {
+    // Batch metadata
+    BatchMetadata metadata = 1;
+
+    // Table name
+    string table_name = 2;
+
+    // Schema (sent on first batch or when changed)
+    optional TableSchema schema = 3;
+
+    // Data rows
+    repeated TableRow rows = 4;
+}
+
+// Metadata for every batch
+message BatchMetadata {
+    // Cluster identification
+    string cluster_id = 1;
+    string instance_id = 2;
+
+    // Aggregation window
+    int64 window_start_ms = 3;
+    int64 window_end_ms = 4;
+
+    // Batch sequencing
+    int32 batch_sequence = 5;
+    int64 batch_timestamp_ms = 6;
+
+    // Schema versioning (for dynamic schema matching)
+    string schema_version = 10;         // e.g., "3.2.0"
+    int32 schema_id = 11;               // Schema registry ID (optional)
+    repeated string field_names = 12;   // List of extended metric names (for discovery)
+}
+
+// Push response
+message PushResponse {
+    bool success = 1;
+    string message = 2;
+    int64 received_timestamp_ms = 3;
+    int32 accepted_count = 4;
+    int32 rejected_count = 5;
+    repeated string errors = 6;
+}
+
+// Health check request
+message PingRequest {
+    string cluster_id = 1;
+    string instance_id = 2;
+}
+
+// Health check response with capabilities
+message PingResponse {
+    bool ok = 1;
+    string version = 2;
+    int64 server_timestamp_ms = 3;
+
+    // Server capabilities
+    repeated string supported_tables = 10;
+    string protocol_version = 11;
+}
+
+// ============================================================================
+// PULL MODE MESSAGES (Schema-Agnostic!)
+// ============================================================================
+
+// Query request - SQL-like syntax
+message TableQuery {
+    // Table name (ONLY required field!)
+    string table = 1;
+
+    // Time range filter (optional)
+    optional TimeRange time_range = 2;
+
+    // SQL WHERE clause (optional)
+    // Examples:
+    //   "exec_count > 100"
+    //   "exec_count > 100 AND avg_latency_us > 1000000"
+    //   "digest LIKE 'abc%'"
+    optional string where = 3;
+
+    // ORDER BY clauses (optional)
+    repeated OrderBy order_by = 4;
+
+    // Pagination
+    optional int32 limit = 5;
+    optional int32 offset = 6;
+    optional string cursor = 7;
+
+    // Column projection (optional - for bandwidth optimization)
+    // If empty: return ALL columns
+    // If specified: return ONLY these columns
+    repeated string columns = 8;
+}
+
+message TimeRange {
+    int64 start_ms = 1;
+    int64 end_ms = 2;
+}
+
+message OrderBy {
+    string expression = 1;  // Column name or expression
+    bool descending = 2;
+}
+
+// Query response with schema
+message TableQueryResponse {
+    // Schema (included in first response)
+    optional TableSchema schema = 1;
+
+    // Data rows
+    repeated TableRow rows = 2;
+
+    // Pagination info
+    optional string next_cursor = 10;
+    bool has_more = 11;
+    int64 total_count = 12;
+}
+
+// List tables request
+message ListTablesRequest {
+    optional string pattern = 1;  // SQL LIKE pattern
+}
+
+message ListTablesResponse {
+    repeated TableMetadata tables = 1;
+}
+
+message TableMetadata {
+    string name = 1;
+    string comment = 2;
+    bool supports_time_range = 3;
+    bool supports_push = 4;
+    int64 estimated_rows = 5;
+}
+
+// Describe table request
+message DescribeTableRequest {
+    string table = 1;
+}
+
+message DescribeTableResponse {
+    TableSchema schema = 1;
+    repeated IndexInfo indexes = 2;
+}
+
+message IndexInfo {
+    string name = 1;
+    repeated string columns = 2;
+    bool unique = 3;
+}
+
+// ============================================================================
+// SCHEMA TYPES
+// ============================================================================
+
+message TableSchema {
+    string table_name = 1;
+    repeated Column columns = 2;
+}
+
+message Column {
+    string name = 1;
+    int32 ordinal = 2;      // Column position (0-based)
+    DataType type = 3;
+    bool nullable = 4;
+    optional string comment = 5;
+}
+
+enum DataType {
+    UNKNOWN = 0;
+    STRING = 1;
+    INT64 = 2;
+    UINT64 = 3;
+    FLOAT64 = 4;
+    BOOL = 5;
+    BYTES = 6;
+    TIMESTAMP = 7;
+    DURATION = 8;
+    JSON = 9;
+}
+
+// ============================================================================
+// ROW AND VALUE TYPES
+// ============================================================================
+
+message TableRow {
+    // Values in column order (matches schema.columns)
+    repeated Value values = 1;
+}
+
+message Value {
+    oneof kind {
+        string string_val = 1;
+        int64 int64_val = 2;
+        uint64 uint64_val = 3;
+        double float64_val = 4;
+        bool bool_val = 5;
+        bytes bytes_val = 6;
+        int64 timestamp_ms = 7;
+        int64 duration_us = 8;
+        bytes json_val = 9;
+        NullValue null_val = 15;
+    }
+}
+
+enum NullValue {
+    NULL = 0;
+}
+
+// ============================================================================
+// STATEMENT MESSAGE - Optimized for high-volume statement data
+// ============================================================================
+
+message Statement {
+    // ========================================================================
+    // IDENTITY FIELDS (Required)
+    // ========================================================================
+    string digest = 1;                  // SQL digest (fingerprint)
+    string plan_digest = 2;             // Execution plan digest
+    string schema_name = 3;             // Database schema
+    string normalized_sql = 4;          // Normalized SQL text
+    string table_names = 5;             // Comma-separated table names
+    string stmt_type = 6;               // Statement type (SELECT, INSERT, etc.)
+
+    // ========================================================================
+    // SAMPLE DATA
+    // ========================================================================
+    string sample_sql = 10;             // Sample SQL with parameters
+    string sample_plan = 11;            // Sample execution plan
+    string prev_sql = 12;               // Previous SQL in transaction
+
+    // ========================================================================
+    // EXECUTION STATISTICS
+    // ========================================================================
+    int64 exec_count = 20;              // Total executions in window
+    int64 sum_errors = 21;              // Total error count
+    int64 sum_warnings = 22;            // Total warning count
+
+    // ========================================================================
+    // LATENCY METRICS (microseconds)
+    // ========================================================================
+    int64 sum_latency_us = 30;          // Total latency
+    int64 max_latency_us = 31;          // Maximum latency
+    int64 min_latency_us = 32;          // Minimum latency
+    int64 avg_latency_us = 33;          // Average latency
+    int64 p50_latency_us = 34;          // P50 latency
+    int64 p95_latency_us = 35;          // P95 latency
+    int64 p99_latency_us = 36;          // P99 latency
+
+    // ========================================================================
+    // PARSE/COMPILE METRICS
+    // ========================================================================
+    int64 sum_parse_latency_us = 40;    // Total parse time
+    int64 max_parse_latency_us = 41;    // Max parse time
+    int64 sum_compile_latency_us = 42;  // Total compile time
+    int64 max_compile_latency_us = 43;  // Max compile time
+
+    // ========================================================================
+    // RESOURCE USAGE
+    // ========================================================================
+    int64 sum_mem_bytes = 50;           // Total memory usage
+    int64 max_mem_bytes = 51;           // Peak memory usage
+    int64 sum_disk_bytes = 52;          // Total disk I/O
+    int64 max_disk_bytes = 53;          // Peak disk I/O
+    int64 sum_tidb_cpu_us = 54;         // Total TiDB CPU time
+    int64 sum_tikv_cpu_us = 55;         // Total TiKV CPU time
+
+    // ========================================================================
+    // TIKV COPROCESSOR METRICS
+    // ========================================================================
+    int64 sum_num_cop_tasks = 60;       // Total coprocessor tasks
+    int64 sum_process_time_us = 61;     // Total TiKV process time
+    int64 max_process_time_us = 62;     // Max TiKV process time
+    int64 sum_wait_time_us = 63;        // Total TiKV wait time
+    int64 max_wait_time_us = 64;        // Max TiKV wait time
+
+    // ========================================================================
+    // KEY SCAN METRICS
+    // ========================================================================
+    int64 sum_total_keys = 70;          // Total keys scanned
+    int64 max_total_keys = 71;          // Max keys in single execution
+    int64 sum_processed_keys = 72;      // Total keys processed
+    int64 max_processed_keys = 73;      // Max keys processed
+
+    // ========================================================================
+    // TRANSACTION METRICS
+    // ========================================================================
+    int64 commit_count = 80;            // Number of commits
+    int64 sum_prewrite_time_us = 81;    // Total prewrite time
+    int64 max_prewrite_time_us = 82;    // Max prewrite time
+    int64 sum_commit_time_us = 83;      // Total commit time
+    int64 max_commit_time_us = 84;      // Max commit time
+    int64 sum_write_keys = 85;          // Total write keys
+    int64 max_write_keys = 86;          // Max write keys
+    int64 sum_write_size_bytes = 87;    // Total write size
+    int64 max_write_size_bytes = 88;    // Max write size
+
+    // ========================================================================
+    // ROW STATISTICS
+    // ========================================================================
+    int64 sum_affected_rows = 100;      // Total affected rows
+    int64 sum_result_rows = 101;        // Total result rows
+    int64 max_result_rows = 102;        // Max result rows
+    int64 min_result_rows = 103;        // Min result rows
+
+    // ========================================================================
+    // PLAN CACHE
+    // ========================================================================
+    bool plan_in_cache = 110;           // Is plan cached
+    int64 plan_cache_hits = 111;        // Cache hit count
+
+    // ========================================================================
+    // TIMESTAMPS
+    // ========================================================================
+    int64 first_seen_ms = 120;          // First execution time
+    int64 last_seen_ms = 121;           // Last execution time
+
+    // ========================================================================
+    // FLAGS
+    // ========================================================================
+    bool is_internal = 130;             // Is internal SQL
+    bool prepared = 131;                // Is prepared statement
+
+    // ========================================================================
+    // MULTI-TENANCY
+    // ========================================================================
+    string keyspace_name = 140;         // Keyspace name
+    uint32 keyspace_id = 141;           // Keyspace ID
+    string resource_group_name = 142;   // Resource group
+
+    // ========================================================================
+    // EXTENDED METRICS (Dynamic - for schema evolution)
+    // ========================================================================
+    //
+    // This map allows adding new metrics WITHOUT proto changes.
+    // TiDB can add new metrics via config, Vector auto-discovers them.
+    //
+    // Example:
+    //   extended_metrics["sum_network_bytes"] = MetricValue{int64_val: 1000}
+    //   extended_metrics["sum_ru_consumption"] = MetricValue{double_val: 45.5}
+    //
+    map<string, MetricValue> extended_metrics = 200;
+
+    // Reserved for future static fields
+    reserved 150 to 199;
+    reserved 201 to 255;
+}
+
+// Metric value for extended_metrics map
+message MetricValue {
+    oneof value {
+        int64 int64_val = 1;
+        double double_val = 2;
+        string string_val = 3;
+        bytes bytes_val = 4;
+        bool bool_val = 5;
+    }
+}
+
+// ============================================================================
+// SCHEMA CONTRACT (For Vector Requirements Definition)
+// ============================================================================
+
+// Vector publishes this to declare what fields it requires
+message SchemaContract {
+    string version = 1;                 // Contract version
+    string publisher = 2;               // "vector-extensions"
+
+    // Required fields (TiDB MUST provide)
+    repeated FieldRequirement required_fields = 3;
+
+    // Optional fields (TiDB CAN provide)
+    repeated FieldRequirement optional_fields = 4;
+}
+
+message FieldRequirement {
+    string name = 1;                    // Field name
+    DataType type = 2;                  // Expected type
+    string description = 3;             // Human-readable description
+    optional string default_value = 4;  // Default if not provided (for optional)
+}

@@ -51,6 +51,8 @@ reqwest = { version = "0.11", features = ["native-tls"] }
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
 serde = { version = "1.0.219", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.142", default-features = false, features = ["std", "raw_value"] }
+serde_yaml = "0.9"
+uuid = { version = "1.0", features = ["v4"] }
 snafu = { version = "0.8.6", default-features = false, features = ["futures"] }
 sqlx = { version = "0.8", features = ["mysql", "runtime-tokio-rustls", "chrono"] }
 tokio = { version = "1.45.1", default-features = false, features = ["full"] }
