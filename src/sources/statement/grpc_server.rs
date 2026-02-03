@@ -23,6 +23,7 @@ use super::config::StatementConfig;
 use super::contract::ContractValidator;
 use super::schema::SchemaRegistry;
 use super::storage::StatementStorage;
+use super::health::{HealthChecker, BackpressureState, BackpressureAction, RateLimiter};
 
 // Proto generated types - these would be generated from systemtable.proto
 // For now, we define placeholder types that match the proto schema
@@ -43,6 +44,11 @@ pub struct StatementReceiver {
     schema_registry: Arc<SchemaRegistry>,
     storage: Arc<StatementStorage>,
 
+    // Health and backpressure
+    health_checker: Arc<HealthChecker>,
+    backpressure: Arc<std::sync::Mutex<BackpressureState>>,
+    rate_limiter: Arc<RateLimiter>,
+
     // Metrics
     statements_received: std::sync::atomic::AtomicU64,
     statements_stored: std::sync::atomic::AtomicU64,
@@ -57,11 +63,23 @@ impl StatementReceiver {
         schema_registry: SchemaRegistry,
         storage: StatementStorage,
     ) -> Self {
+        let health_checker = Arc::new(HealthChecker::new());
+        health_checker.mark_ready();
+
+        // Create rate limiter: max 1000 requests per second
+        let rate_limiter = Arc::new(RateLimiter::new(1000, 1000));
+
+        // Create backpressure state: throttle at 80% load, reject at 95%
+        let backpressure = Arc::new(std::sync::Mutex::new(BackpressureState::new(0.8, 0.95)));
+
         Self {
             config: Arc::new(config),
             contract_validator: Arc::new(contract_validator),
             schema_registry: Arc::new(schema_registry),
             storage: Arc::new(storage),
+            health_checker,
+            backpressure,
+            rate_limiter,
             statements_received: std::sync::atomic::AtomicU64::new(0),
             statements_stored: std::sync::atomic::AtomicU64::new(0),
             push_requests: std::sync::atomic::AtomicU64::new(0),
@@ -89,6 +107,46 @@ impl StatementReceiver {
     /// Processes a statement batch.
     async fn process_batch(&self, batch: StatementBatch) -> Result<PushResponse, Status> {
         let start = Instant::now();
+
+        // Check rate limiter
+        if !self.rate_limiter.try_acquire().await {
+            self.health_checker.record_grpc_error();
+            return Ok(PushResponse {
+                success: false,
+                message: "rate limit exceeded".to_string(),
+                received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                accepted_count: 0,
+                rejected_count: batch.statements.len() as i32,
+                errors: vec!["rate limit exceeded".to_string()],
+            });
+        }
+
+        // Check backpressure
+        {
+            let mut bp = self.backpressure.lock().unwrap();
+            let load = self.calculate_current_load();
+            let action = bp.update_load(load);
+
+            match action {
+                BackpressureAction::Reject => {
+                    self.health_checker.record_grpc_error();
+                    return Ok(PushResponse {
+                        success: false,
+                        message: format!("server under load (load: {:.2}), rejecting requests", load),
+                        received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                        accepted_count: 0,
+                        rejected_count: batch.statements.len() as i32,
+                        errors: vec!["server under load".to_string()],
+                    });
+                }
+                BackpressureAction::Throttle => {
+                    // Add a small delay to throttle the request
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                BackpressureAction::Accept => {}
+            }
+        }
+
         self.push_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Validate metadata
@@ -135,10 +193,20 @@ impl StatementReceiver {
         }
 
         let latency = start.elapsed();
+
+        // Record metrics
+        self.health_checker.record_grpc_request(latency.as_millis() as u64);
+        if rejected > 0 {
+            self.health_checker.record_grpc_error();
+        }
+
         debug!(
             "Processed batch: {} statements, {} accepted, {} rejected, {:?}",
             statements_count, accepted, rejected, latency
         );
+
+        // Update backpressure state with current load
+        self.update_storage_metrics();
 
         Ok(PushResponse {
             success: rejected == 0,
@@ -192,11 +260,39 @@ impl StatementReceiver {
 
     /// Returns current metrics.
     pub fn metrics(&self) -> ReceiverMetrics {
-        ReceiverMetrics {
-            statements_received: self.statements_received.load(std::sync::atomic::Ordering::Relaxed),
-            statements_stored: self.statements_stored.load(std::sync::atomic::Ordering::Relaxed),
-            push_requests: self.push_requests.load(std::sync::atomic::Ordering::Relaxed),
-        }
+        self.health_check()
+    }
+
+    /// Returns health checker reference.
+    pub fn health_check(&self) -> Arc<HealthChecker> {
+        self.health_checker.clone()
+    }
+
+    /// Calculates current system load (0.0 to 1.0).
+    fn calculate_current_load(&self) -> f64 {
+        // Estimate load based on pending requests and buffer sizes
+        let storage_buffer_size = self.storage.buffer_size();
+        let max_buffer_size = 10000; // Configurable threshold
+
+        // Calculate load based on buffer utilization
+        let buffer_load = (storage_buffer_size as f64 / max_buffer_size as f64).min(1.0);
+
+        // Combine with request rate (simplified)
+        let requests_total = self.push_requests.load(std::sync::atomic::Ordering::Relaxed);
+        let request_load = if requests_total > 1000 {
+            0.5
+        } else {
+            (requests_total as f64 / 2000.0).min(0.5)
+        };
+
+        (buffer_load + request_load).min(1.0)
+    }
+
+    /// Updates storage-related metrics.
+    fn update_storage_metrics(&self) {
+        let buffer_size = self.storage.buffer_size();
+        self.health_checker.set_storage_buffer_size(buffer_size);
+        self.health_checker.set_storage_healthy(buffer_size < 5000); // Healthy if buffer < 5000
     }
 }
 

@@ -190,6 +190,11 @@ impl StatementStorage {
             buffer_size: self.buffer_size.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
+
+    /// Returns the current buffer size in bytes.
+    pub fn buffer_size(&self) -> usize {
+        self.buffer_size.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// Storage metrics.
