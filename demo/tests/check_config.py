@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-快速检查配置生成逻辑
+Quick check of configuration generation logic
 """
 import sys
 import os
 
-# 添加当前目录到路径
+# Add current directory to path
 sys.path.insert(0, os.path.dirname(__file__))
 
-# 模拟 toml 模块（如果不存在）
+# Mock toml module (if not available)
 try:
     import toml
 except ImportError:
-    print("警告: toml 模块未安装，将使用简单输出")
+    print("Warning: toml module not installed, will use simple output")
     class toml:
         @staticmethod
         def dumps(d):
             import json
             return json.dumps(d, indent=2)
 
-# 导入配置生成函数
+# Import configuration generation function
 try:
     from app import generate_vector_config
     
-    print("=== 测试配置生成 ===\n")
+    print("=== Testing Configuration Generation ===\n")
     
     config = generate_vector_config(
         task_id="test-001",
@@ -36,31 +36,31 @@ try:
         filter_keywords=[],
     )
     
-    print("✓ 配置生成成功\n")
-    print("=== 生成的配置 ===")
+    print("✓ Configuration generation successful\n")
+    print("=== Generated Configuration ===")
     print(config)
     
-    # 检查关键部分
-    print("\n=== 配置检查 ===")
+    # Check key parts
+    print("\n=== Configuration Check ===")
     if "deltalake/slowlogs/" in config:
-        print("✓ S3 prefix 正确: deltalake/slowlogs/")
+        print("✓ S3 prefix correct: deltalake/slowlogs/")
     else:
-        print("❌ S3 prefix 可能有问题")
+        print("❌ S3 prefix may have issues")
     
     if "split_lines" in config:
-        print("✓ split_lines transform 存在")
+        print("✓ split_lines transform exists")
     else:
-        print("❌ split_lines transform 缺失")
+        print("❌ split_lines transform missing")
     
     if "decompress" in config:
-        print("✓ decompress transform 存在")
+        print("✓ decompress transform exists")
     else:
-        print("❌ decompress transform 缺失")
+        print("❌ decompress transform missing")
     
-    print("\n配置已生成，可以保存到文件进行 Vector 测试")
+    print("\nConfiguration generated, can be saved to file for Vector testing")
     
 except Exception as e:
-    print(f"❌ 错误: {e}")
+    print(f"❌ Error: {e}")
     import traceback
     traceback.print_exc()
     sys.exit(1)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-直接从 S3 Parquet 文件读取 slowlogs 并写入 MySQL（用于快速测试）
+Directly read slowlogs from S3 Parquet files and write to MySQL (for quick testing)
 """
 import os
 import sys
@@ -9,14 +9,10 @@ import pymysql
 from datetime import datetime
 from pathlib import Path
 
-# 设置 AWS 凭证
-os.environ["AWS_ACCESS_KEY_ID"] = "ASIAYBEGSUMKNOBLWYE5"
-os.environ["AWS_SECRET_ACCESS_KEY"] = "hemUNrcxvz3qD5d8nlvw8ldLdzJI/v9YX5R/rKRY"
-os.environ["AWS_SESSION_TOKEN"] = "IQoJb3JpZ2luX2VjEF8aDmFwLW5vcnRoZWFzdC0xIkgwRgIhAOz0wL3K/As9Ka48eiYkSWOvKH7exXuPyg5ZDY0xGh2lAiEAhwKUDmDtFdP9si7BZ7LEdtin96MT3r1R5/s9cIPGmyEqiQMIKBABGgw1NTIxODU1MzczMDAiDCbOE7xD1M3oRqdjoirmAhdATcd981pRXI9WyUqVNr1qAPA4PjVXjutDB5RTRWKSZuE4stWQs0bogZ2zzlJY7iIXv0PnN1eC25WaEJ2vUjldPobsyKvjDqh/QjSxeGGJ+f0roVunx5Y0CGdaOKK8uqirxMrCzVfLByjIJXNXWuaRKTALADOHN6O2ymQa2yewFR47yb7DUJi8vgexMj81Mc6wnJ04JpeANKhGkZx2VIAchuXpiamkAG55YZQUde43stRy2cIO67HRIZAsqMzBuoj4YAI8jC00VlcGcBGLiD+hb30o/574gZQ+uHe4iUCikL2lTkk8gi/nJooa4WSzgXEifc6J6zfOl8PQBVXOP1mLKcCWhYo6C3XIAHabjPi6BlZ8VwV5mQUaQ2FOOucyNF4lVYhw2q+l/t+DsQTQd8eNC7o9CHeKlfmMcKG8trjSOTx+1cq4IoPPq5D1atx4CikA2t8jfeH5uAZ6k4Fqrf0eY89BvrwwlIiRzAY6owEJDT94Dd/dNLK4yZSwxzdNNBxk1HYEhKcoJ9Ae4o5UisoIVWRdzA++YPkKA6gr3kBGiCVoU1xJAN9ewRnzD52yLSOVPMq7vaCmlPtOu+hpD03ufbU8CWM4T+dnJAqXiJSw+9NcPfauHanUWtFi+QMwUDacEFLAkD2WtURytBFumGbancBaq8m0UcicDq4koh9r3GfwWPGNUkcaJsWJUriqqA30"
-os.environ["AWS_REGION"] = "us-west-2"
+# Set AWS credentials
 
 def list_parquet_files(bucket, prefix, max_files=10):
-    """列出 S3 中的 Parquet 文件"""
+    """List Parquet files in S3"""
     s3 = boto3.client('s3', region_name='us-west-2')
     files = []
     
@@ -32,7 +28,7 @@ def list_parquet_files(bucket, prefix, max_files=10):
     return files
 
 def read_parquet_from_s3(bucket, key):
-    """从 S3 读取 Parquet 文件"""
+    """Read Parquet file from S3"""
     try:
         import pyarrow.parquet as pq
         import io
@@ -42,15 +38,15 @@ def read_parquet_from_s3(bucket, key):
         parquet_file = pq.ParquetFile(io.BytesIO(obj['Body'].read()))
         return parquet_file.read().to_pandas()
     except ImportError:
-        print("需要安装 pyarrow: pip install pyarrow")
+        print("Need to install pyarrow: pip install pyarrow")
         return None
     except Exception as e:
-        print(f"读取 Parquet 文件失败: {e}")
+        print(f"Failed to read Parquet file: {e}")
         return None
 
 def import_to_mysql(df, mysql_connection, mysql_table, task_id="direct-import"):
-    """将 DataFrame 导入 MySQL"""
-    # 解析 MySQL 连接
+    """Import DataFrame to MySQL"""
+    # Parse MySQL connection
     mysql_parts = mysql_connection.replace("mysql://", "").split("@")
     user_pass = mysql_parts[0].split(":")
     mysql_user, mysql_pass = user_pass
@@ -74,13 +70,13 @@ def import_to_mysql(df, mysql_connection, mysql_table, task_id="direct-import"):
         total_imported = 0
         batch_size = 100
         
-        # TiDB slowlog 是结构化数据，需要转换为文本格式
-        # 或者直接存储为 JSON
-        print("将结构化数据转换为文本格式...")
+        # TiDB slowlog is structured data, need to convert to text format
+        # Or store directly as JSON
+        print("Converting structured data to text format...")
         
         for idx, row in df.iterrows():
-            # 构建 slowlog 文本行（模拟 TiDB slowlog 格式）
-            # 提取关键字段
+            # Build slowlog text line (simulating TiDB slowlog format)
+            # Extract key fields
             time_val = row.get('time', '')
             db = row.get('db', '')
             user = row.get('user', '')
@@ -88,13 +84,13 @@ def import_to_mysql(df, mysql_connection, mysql_table, task_id="direct-import"):
             query_time = row.get('query_time', '')
             result_rows = row.get('result_rows', '')
             
-            # 尝试找到 SQL 语句（可能在 prev_stmt 或其他字段）
+            # Try to find SQL statement (may be in prev_stmt or other fields)
             sql_stmt = row.get('prev_stmt', '') or row.get('digest', '')
             
-            # 构建 slowlog 文本行
+            # Build slowlog text line
             log_line = f"# Time: {time_val}\n# User@Host: {user}[{user}] @ {host}\n# Query_time: {query_time}  Rows_examined: {result_rows}\n{sql_stmt}"
             
-            # 或者存储为 JSON（包含所有字段）
+            # Or store as JSON (includes all fields)
             # log_line = json.dumps(row.to_dict())
             
             timestamp = datetime.now().isoformat()
@@ -105,17 +101,17 @@ def import_to_mysql(df, mysql_connection, mysql_table, task_id="direct-import"):
             
             if total_imported % batch_size == 0:
                 conn.commit()
-                print(f"✓ 已导入 {total_imported} 条记录...")
+                print(f"✓ Imported {total_imported} records...")
         
         conn.commit()
         cursor.close()
         conn.close()
         
-        print(f"✓ 总共导入 {total_imported} 条记录到 MySQL")
+        print(f"✓ Total imported {total_imported} records to MySQL")
         return total_imported
         
     except Exception as e:
-        print(f"❌ MySQL 导入失败: {e}")
+        print(f"❌ MySQL import failed: {e}")
         import traceback
         traceback.print_exc()
         return 0
@@ -126,37 +122,37 @@ def main():
     mysql_connection = "mysql://root:root@localhost:3306/testdb"
     mysql_table = "slowlogs"
     
-    print("=== 直接从 S3 Parquet 导入 Slowlogs 到 MySQL ===\n")
+    print("=== Direct Import Slowlogs from S3 Parquet to MySQL ===\n")
     
-    # 1. 列出 Parquet 文件
-    print("1. 查找 Parquet 文件...")
+    # 1. List Parquet files
+    print("1. Finding Parquet files...")
     files = list_parquet_files(bucket, prefix, max_files=5)
     if not files:
-        print("❌ 未找到 Parquet 文件")
+        print("❌ No Parquet files found")
         return
     
-    print(f"✓ 找到 {len(files)} 个 Parquet 文件")
+    print(f"✓ Found {len(files)} Parquet files")
     for f in files[:3]:
         print(f"  - {f}")
     
-    # 2. 读取第一个文件
-    print(f"\n2. 读取文件: {files[0]}")
+    # 2. Read first file
+    print(f"\n2. Reading file: {files[0]}")
     df = read_parquet_from_s3(bucket, files[0])
     if df is None:
         return
     
-    print(f"✓ 读取成功，共 {len(df)} 行")
-    print(f"✓ 列名: {list(df.columns)}")
-    print(f"\n前 3 行数据:")
+    print(f"✓ Read successfully, {len(df)} rows")
+    print(f"✓ Column names: {list(df.columns)}")
+    print(f"\nFirst 3 rows:")
     print(df.head(3))
     
-    # 3. 导入 MySQL
-    print(f"\n3. 导入 MySQL...")
+    # 3. Import to MySQL
+    print(f"\n3. Importing to MySQL...")
     total = import_to_mysql(df, mysql_connection, mysql_table)
     
     if total > 0:
-        print(f"\n✓ 成功导入 {total} 条记录")
-        print(f"\n验证:")
+        print(f"\n✓ Successfully imported {total} records")
+        print(f"\nVerification:")
         print(f"  mysql -h localhost -u root -proot testdb -e 'SELECT COUNT(*) FROM slowlogs;'")
         print(f"  mysql -h localhost -u root -proot testdb -e 'SELECT * FROM slowlogs LIMIT 5;'")
 
@@ -164,8 +160,8 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n中断")
+        print("\n\nInterrupted")
     except Exception as e:
-        print(f"\n❌ 错误: {e}")
+        print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()

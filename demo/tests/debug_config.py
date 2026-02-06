@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-调试脚本：生成并验证 Vector 配置
+Debug script: Generate and validate Vector configuration
 """
 import toml
 import json
 
-# 生成测试配置
+# Generate test configuration
 config = {
     "data_dir": "/tmp/vector-data/test",
     
@@ -53,16 +53,16 @@ config = {
     }
 }
 
-# 输出配置
+# Output configuration
 config_toml = toml.dumps(config)
-print("=== Vector 配置 ===")
+print("=== Vector Configuration ===")
 print(config_toml)
 
-# 保存到文件
+# Save to file
 with open("/tmp/vector-debug-config.toml", "w") as f:
     f.write(config_toml)
 
-print("\n✓ 配置已保存到 /tmp/vector-debug-config.toml")
-print("\n测试命令:")
+print("\n✓ Configuration saved to /tmp/vector-debug-config.toml")
+print("\nTest commands:")
 print("  vector --config /tmp/vector-debug-config.toml --dry-run")
 print("  vector --config /tmp/vector-debug-config.toml")

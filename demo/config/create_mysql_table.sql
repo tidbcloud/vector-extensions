@@ -1,5 +1,5 @@
--- 创建用于存储 slowlogs 的 MySQL 表
--- 使用前请根据实际需求调整表结构
+-- Create MySQL table for storing slowlogs
+-- Please adjust table structure according to actual requirements before use
 
 CREATE DATABASE IF NOT EXISTS testdb;
 USE testdb;
