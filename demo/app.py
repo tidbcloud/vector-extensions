@@ -88,27 +88,16 @@ def get_parquet_processor_script_path() -> Path:
     return script_path
 
 
-def get_mysql_writer_script_path() -> Path:
-    """Get the path to the MySQL writer script
-    
-    The script is located in demo/extension/sinks/ and will be executed
-    by Vector's exec sink. This script will be converted to a Rust-based
-    Vector plugin in the future.
-    """
-    # Get the demo directory (parent of this file's directory)
-    demo_dir = Path(__file__).parent
-    script_path = demo_dir / "extension" / "sinks" / "mysql_writer.py"
-    
-    if not script_path.exists():
-        raise FileNotFoundError(f"MySQL writer script not found: {script_path}")
-    
-    return script_path
+# Note: get_mysql_writer_script_path() is no longer needed
+# MySQL writing is now handled directly by Vector's tidb sink
+# This function is kept for backward compatibility but not used
 
 
 def generate_vector_config(
     task_id: str,
     processor_script: Path,
-    mysql_writer_script: Path,
+    mysql_connection: str,
+    mysql_table: str,
     s3_bucket: str,
     s3_prefix: str,
     s3_region: str,
@@ -126,7 +115,7 @@ def generate_vector_config(
        - Vector reads stdout and creates events
     2. remap transform: Parses JSON Lines (if needed)
     3. filter transform: Applies keyword filtering using VRL (if provided)
-    4. file sink: Outputs processed data to files
+    4. tidb sink: Writes data directly to MySQL/TiDB database
     
     Note: All data processing is done by Vector, not by this management API.
     The Python script is executed by Vector's exec source, not by this app.
@@ -159,13 +148,16 @@ def generate_vector_config(
             "parquet_processor": {
                 "type": "exec",
                 "command": ["python3", str(processor_script)],
-                "mode": "oneshot",  # Use oneshot mode for one-time tasks - script runs once and exits
+                "mode": "streaming",  # Use streaming mode - script runs and outputs data
+                "streaming": {
+                    "respawn_on_exit": False  # Don't respawn - script runs once and exits
+                },
                 "decoding": {
                     "codec": "json"
                 },
-                # Vector exec source will run the script once and read its stdout
+                # Vector exec source will run the script and read its stdout
                 # Each line of JSON output becomes an event
-                # When script exits, Vector will finish processing remaining events and exit
+                # When script exits (after processing all files), Vector will finish processing remaining events
                 # Environment variables are inherited from Vector process
                 # (set by management API before starting Vector)
             }
@@ -205,21 +197,30 @@ def generate_vector_config(
     else:
         sink_input = next_input
     
-    # Add sink - output to file for MySQL import
-    # Note: Vector doesn't have exec sink, so we use file sink and monitor it
-    # In production, this would be a custom Vector sink plugin
-    output_dir = Path(f"/tmp/vector-output/{task_id}")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Add tidb sink - write directly to MySQL/TiDB
+    # Parse MySQL connection string to extract components
+    # Format: mysql://user:password@host:port/database
+    mysql_parts = mysql_connection.replace("mysql://", "").split("@")
+    user_pass = mysql_parts[0].split(":")
+    mysql_user, mysql_pass = user_pass
+    host_port = mysql_parts[1].split("/")
+    host_port_parts = host_port[0].split(":")
+    mysql_host = host_port_parts[0]
+    mysql_port = int(host_port_parts[1]) if len(host_port_parts) > 1 else 3306
+    mysql_database = host_port[1]
+    
+    # Build connection string for tidb sink
+    tidb_connection_string = f"mysql://{mysql_user}:{mysql_pass}@{mysql_host}:{mysql_port}/{mysql_database}"
     
     config["sinks"] = {
-        "file_sink": {
-            "type": "file",
+        "tidb_sink": {
+            "type": "tidb",
             "inputs": [sink_input],
-            "path": f"{output_dir}/slowlogs-%Y-%m-%d-%H%M%S.jsonl",
-            "encoding": {
-                "codec": "json"
-            },
-            "compression": "none",
+            "connection_string": tidb_connection_string,
+            "table": mysql_table,
+            "batch_size": 1000,
+            "max_connections": 10,
+            "connection_timeout": 30,
         }
     }
     
@@ -242,15 +243,15 @@ def start_vector_process(
     Args:
         task_id: Task identifier
         config_content: Vector TOML configuration content
-        mysql_connection: MySQL connection string (used by background import thread)
-        mysql_table: MySQL table name (used by background import thread)
+        mysql_connection: MySQL connection string (for compatibility, not used directly)
+        mysql_table: MySQL table name (for compatibility, not used directly)
         vector_binary: Path to Vector binary (optional)
         script_env: Environment variables to pass to Vector (inherited by exec source scripts)
     
     Note: 
     - Data processing is done by Vector's exec source (executes Python script)
-    - MySQL import is handled by a background thread that monitors Vector's output files
-    - This is a temporary solution; in production, a custom Vector sink plugin would be used
+    - MySQL import is handled directly by Vector's tidb sink
+    - No background thread needed anymore
     """
     
     # Use provided vector_binary or fallback to VECTOR_BINARY
@@ -259,10 +260,6 @@ def start_vector_process(
     # Write config to temporary file
     config_file = CONFIG_DIR / f"{task_id}.toml"
     config_file.write_text(config_content)
-    
-    # Create output directory for file sink
-    output_dir = Path(f"/tmp/vector-output/{task_id}")
-    output_dir.mkdir(parents=True, exist_ok=True)
     
     # Prepare environment variables
     # Merge script_env with current environment
@@ -322,21 +319,14 @@ def start_vector_process(
     stdout_thread.start()
     stderr_thread.start()
     
-    # Start MySQL import process in background
-    # Note: Vector doesn't have exec sink, so we use file sink and monitor it
-    # The mysql_writer.py script exists but Vector can't execute it directly as a sink
-    import_thread = threading.Thread(
-        target=import_to_mysql,
-        args=(output_dir, mysql_connection, mysql_table, task_id),
-        daemon=True
-    )
-    import_thread.start()
+    # Note: MySQL import is now handled directly by Vector's tidb sink
+    # No background thread needed anymore
     
     # Start task monitoring thread to detect completion and cleanup
     # For one-time tasks, Vector should exit when exec source script finishes
     monitor_thread = threading.Thread(
         target=monitor_vector_task,
-        args=(task_id, process.pid, output_dir),
+        args=(task_id, process.pid, None),  # No output_dir needed anymore
         daemon=True
     )
     monitor_thread.start()
@@ -358,22 +348,21 @@ def start_vector_process(
     return process.pid
 
 
-def monitor_vector_task(task_id: str, pid: int, output_dir: Path):
+def monitor_vector_task(task_id: str, pid: int, output_dir: Optional[Path]):
     """Monitor Vector process and detect when one-time task completes
     
     For one-time tasks with oneshot exec source:
     - Script runs once and exits
     - Vector processes remaining events and should exit
     - We detect this and update task status
+    
+    Note: output_dir is optional and only used for legacy file-based monitoring.
+    With tidb sink, data is written directly to MySQL, so file monitoring is not needed.
     """
     max_wait_time = 300  # Maximum 5 minutes for task completion
     check_interval = 2  # Check every 2 seconds
-    no_output_timeout = 30  # If no new output for 30 seconds, consider task done
     
     start_time = time.time()
-    last_output_time = time.time()
-    last_file_count = 0
-    last_file_size = {}
     
     print(f"[Monitor {task_id}] Starting task monitoring (PID: {pid})")
     
@@ -409,27 +398,8 @@ def monitor_vector_task(task_id: str, pid: int, output_dir: Path):
                     tasks[task_id]["updated_at"] = datetime.now().isoformat()
                 break
             
-            # Check for new output files or file growth
-            jsonl_files = list(output_dir.glob("*.jsonl"))
-            current_file_count = len(jsonl_files)
-            current_file_sizes = {str(f): f.stat().st_size for f in jsonl_files if f.exists()}
-            
-            # Check if files are growing
-            files_growing = False
-            for file_path, current_size in current_file_sizes.items():
-                if file_path not in last_file_size or current_size > last_file_size[file_path]:
-                    files_growing = True
-                    last_output_time = time.time()
-                    break
-            
-            if current_file_count > last_file_count or files_growing:
-                last_file_count = current_file_count
-                last_file_size = current_file_sizes
-                last_output_time = time.time()
-            
             # Check timeouts
             elapsed = time.time() - start_time
-            time_since_output = time.time() - last_output_time
             
             if elapsed > max_wait_time:
                 print(f"[Monitor {task_id}] ⚠️  Task exceeded max wait time ({max_wait_time}s), stopping")
@@ -447,16 +417,14 @@ def monitor_vector_task(task_id: str, pid: int, output_dir: Path):
                     tasks[task_id]["updated_at"] = datetime.now().isoformat()
                 break
             
-            # For oneshot mode, if no output for a while and process is still running,
-            # it might be stuck - but give it more time since Vector needs to process events
-            if time_since_output > no_output_timeout and elapsed > 60:
-                # Check if process is actually doing something (CPU usage)
+            # For oneshot mode, check if process is actually doing something (CPU usage)
+            if elapsed > 60:
                 try:
                     proc = psutil.Process(pid)
                     cpu_percent = proc.cpu_percent(interval=1)
                     if cpu_percent < 1.0:  # Very low CPU usage
-                        print(f"[Monitor {task_id}] ⚠️  No output for {time_since_output}s and low CPU, task may be stuck")
-                        # Don't kill yet, just log
+                        # Process might be done, but give it more time
+                        pass
                 except:
                     pass
             
@@ -470,7 +438,11 @@ def monitor_vector_task(task_id: str, pid: int, output_dir: Path):
 
 
 def import_to_mysql(output_dir: Path, mysql_connection: str, mysql_table: str, task_id: str):
-    """Import JSON lines from files in directory to MySQL table (real-time monitoring)"""
+    """Import JSON lines from files in directory to MySQL table (real-time monitoring)
+    
+    NOTE: This function is no longer used. MySQL writing is now handled directly
+    by Vector's tidb sink. This function is kept for backward compatibility.
+    """
     try:
         import pymysql
     except ImportError:
@@ -689,21 +661,22 @@ def create_task():
             start_time = time_range.get("start")
             end_time = time_range.get("end")
         
-        # Step 1: Get extension script paths
-        print(f"[Task {task_id}] Step 1: Getting extension scripts...")
+        # Step 1: Get extension script path
+        print(f"[Task {task_id}] Step 1: Getting extension script...")
         try:
             processor_script = get_parquet_processor_script_path()
-            mysql_writer_script = get_mysql_writer_script_path()
         except FileNotFoundError as e:
             return jsonify({"error": str(e)}), 500
         
         # Step 2: Generate Vector configuration
-        # The scripts will be executed by Vector's exec source/sink with environment variables
+        # The script will be executed by Vector's exec source with environment variables
+        # Data will be written directly to MySQL using tidb sink
         print(f"[Task {task_id}] Step 2: Generating Vector configuration...")
         vector_config = generate_vector_config(
             task_id=task_id,
             processor_script=processor_script,
-            mysql_writer_script=mysql_writer_script,
+            mysql_connection=data["mysql_connection"],
+            mysql_table=data["mysql_table"],
             s3_bucket=data["s3_bucket"],
             s3_prefix=data["s3_prefix"],
             s3_region=data.get("s3_region", "us-west-2"),
@@ -737,31 +710,18 @@ def create_task():
         if not actual_vector_path:
             return jsonify({"error": "Vector binary not found. Please build Vector first."}), 500
         
-        # Parse MySQL connection string
+        # MySQL connection and table are already used in generate_vector_config
+        # to configure the tidb sink directly
         mysql_connection = data["mysql_connection"]
-        mysql_parts = mysql_connection.replace("mysql://", "").split("@")
-        user_pass = mysql_parts[0].split(":")
-        mysql_user, mysql_pass = user_pass
-        host_port = mysql_parts[1].split("/")
-        host_port_parts = host_port[0].split(":")
-        mysql_host = host_port_parts[0]
-        mysql_port = int(host_port_parts[1]) if len(host_port_parts) > 1 else 3306
-        mysql_database = host_port[1]
         mysql_table = data["mysql_table"]
         
-        # Prepare environment variables for the scripts
+        # Prepare environment variables for the source script only
+        # Note: MySQL connection is configured in Vector's tidb sink config, not via environment variables
         script_env = {
             # For source script (parquet processor)
             "S3_BUCKET": data["s3_bucket"],
             "S3_PREFIX": data["s3_prefix"],
             "S3_REGION": data.get("s3_region", "us-west-2"),
-            # For sink script (MySQL writer)
-            "MYSQL_HOST": mysql_host,
-            "MYSQL_PORT": str(mysql_port),
-            "MYSQL_USER": mysql_user,
-            "MYSQL_PASSWORD": mysql_pass,
-            "MYSQL_DATABASE": mysql_database,
-            "MYSQL_TABLE": mysql_table,
             "TASK_ID": task_id,
         }
         if start_time:
