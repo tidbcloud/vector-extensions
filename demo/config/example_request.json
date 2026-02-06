@@ -1,0 +1,9 @@
+{
+  "s3_bucket": "my-logs-bucket",
+  "s3_prefix": "slowlogs/2024/01/01/",
+  "s3_region": "us-west-2",
+  "file_pattern": "*.log.gz",
+  "mysql_connection": "mysql://root:password@localhost:3306/testdb",
+  "mysql_table": "slowlogs",
+  "filter_keywords": ["ERROR", "WARN", "timeout"]
+}

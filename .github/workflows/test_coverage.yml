@@ -1,0 +1,99 @@
+name: test_coverage
+
+on:
+  pull_request:
+    branches: [ master, main ]
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  coverage:
+    name: Test Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-coverage-
+            ${{ runner.os }}-cargo-
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Run tests with coverage
+        run: |
+          cargo tarpaulin \
+            --workspace \
+            --lib \
+            --out Xml \
+            --out Html \
+            --output-dir coverage \
+            --timeout 120 \
+            --exclude-files '*/tests/*' \
+            --exclude-files '*/test_*' \
+            --exclude-files '*/benches/*' \
+            --exclude-files '*/examples/*' \
+            --exclude-files '*/src/main.rs' || true
+
+      - name: Generate coverage summary
+        run: |
+          if [ -f coverage/cobertura.xml ]; then
+            echo "## 📊 Test Coverage Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Coverage report generated successfully!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📁 **Coverage files:**" >> $GITHUB_STEP_SUMMARY
+            echo "- HTML report: \`coverage/tarpaulin-report.html\`" >> $GITHUB_STEP_SUMMARY
+            echo "- XML report: \`coverage/cobertura.xml\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "View the detailed HTML report in the artifacts below." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Coverage report generation failed or no tests were run." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: |
+            coverage/
+          retention-days: 30
+
+      - name: Comment PR with coverage
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          recreate: true
+          message: |
+            ## 📊 Test Coverage Report
+            
+            Coverage report has been generated for this PR.
+            
+            📥 **Download the coverage report:**
+            - Check the "coverage-report" artifact in the Actions tab
+            - Open `coverage/tarpaulin-report.html` in your browser for detailed coverage
+            
+            💡 **Note:** Coverage reports are generated for library tests only (excluding integration tests and examples).

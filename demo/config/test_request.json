@@ -1,0 +1,12 @@
+{
+  "s3_bucket": "o11y-dev-shared-us-west-2",
+  "s3_prefix": "deltalake/slowlogs/",
+  "s3_region": "us-west-2",
+  "time_range": {
+    "start": "2025-06-06T00:00:00Z",
+    "end": "2025-06-10T23:59:59Z"
+  },
+  "mysql_connection": "mysql://root:root@localhost:3306/testdb",
+  "mysql_table": "slowlogs",
+  "filter_keywords": []
+}

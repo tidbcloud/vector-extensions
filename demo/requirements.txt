@@ -1,0 +1,8 @@
+flask==3.0.0
+flask-cors==4.0.0
+psutil==5.9.6
+toml==0.10.2
+pymysql==1.1.0
+boto3==1.34.0
+pyarrow==14.0.1
+pandas==2.1.4

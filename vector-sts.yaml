@@ -1,0 +1,166 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vector
+  namespace: observability
+  labels:
+    app: vector
+spec:
+  serviceName: vector
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vector
+  template:
+    metadata:
+      labels:
+        app: vector
+    spec:
+      containers:
+      - name: vector
+        image: slggamer/vector:0.37.1-2d79df-debian-perl-nice
+        command: ["sh", "-c"]
+        args:
+          - |
+            cat > /tmp/perl_cpu_test.pl << 'PERLEOF'
+            while(1) {
+              for(my $i=0; $i<1000000; $i++) {
+                my $x = sqrt($i);
+              }
+            }
+            PERLEOF
+            echo "INFO: Perl CPU test script created at /tmp/perl_cpu_test.pl"
+            # 创建vector CPU测试脚本（使用bash，正常优先级）
+            cat > /tmp/vector_cpu_test.sh << 'VECEOF'
+            #!/bin/bash
+            while true; do
+              for ((i=0; i<1000000; i++)); do
+                # CPU密集型计算
+                result=$((i * i + i / 2))
+                result=$((result * 3 - i))
+                result=$((result / 2 + i))
+              done
+            done
+            VECEOF
+            chmod +x /tmp/vector_cpu_test.sh
+            echo "INFO: Vector CPU test script created at /tmp/vector_cpu_test.sh"
+            # 将配置内容写入文件
+            if [ -n "$VECTOR_CONFIG" ]; then
+              echo "$VECTOR_CONFIG" > /tmp/vector.yaml
+              echo "INFO: Vector config written to /tmp/vector.yaml"
+            fi
+            # 启动vector，使用配置文件
+            exec /usr/bin/vector -c /tmp/vector.yaml
+        ports:
+        - containerPort: 8687
+          name: api
+          protocol: TCP
+        - containerPort: 9699
+          name: prom-exporter
+          protocol: TCP
+        env:
+        - name: VECTOR_CONFIG
+          value: |
+            data_dir: /vector-data-dir
+            api:
+              enabled: true
+              address: 0.0.0.0:8687
+              playground: false
+            sources:
+              internal_metrics:
+                type: internal_metrics
+              demo_logs:
+                type: demo_logs
+                format: "json"
+                interval: 1
+              perl_test_1:
+                type: exec
+                command: ["/usr/bin/perl", "/tmp/perl_cpu_test.pl"]
+                mode: streaming
+                streaming:
+                  respawn_on_exit: true
+              perl_test_2:
+                type: exec
+                command: ["/usr/bin/perl", "/tmp/perl_cpu_test.pl"]
+                mode: streaming
+                streaming:
+                  respawn_on_exit: true
+              perl_test_3:
+                type: exec
+                command: ["/usr/bin/perl", "/tmp/perl_cpu_test.pl"]
+                mode: streaming
+                streaming:
+                  respawn_on_exit: true
+              perl_test_4:
+                type: exec
+                command: ["/usr/bin/perl", "/tmp/perl_cpu_test.pl"]
+                mode: streaming
+                streaming:
+                  respawn_on_exit: true
+              perl_test_5:
+                type: exec
+                command: ["/usr/bin/perl", "/tmp/perl_cpu_test.pl"]
+                mode: streaming
+                streaming:
+                  respawn_on_exit: true
+              vector_cpu_test:
+                type: exec
+                command: ["/bin/bash", "/tmp/vector_cpu_test.sh"]
+                mode: streaming
+                streaming:
+                  respawn_on_exit: true
+            transforms:
+              parse_json:
+                type: remap
+                inputs: ["demo_logs"]
+                source: |
+                  . = parse_json!(.message)
+                  .timestamp = now()
+            sinks:
+              console:
+                type: console
+                inputs: ["parse_json"]
+                encoding:
+                  codec: json
+              prometheus_exporter:
+                type: prometheus_exporter
+                inputs: ["internal_metrics"]
+                address: "0.0.0.0:9699"
+        securityContext:
+          runAsUser: 0
+          capabilities:
+            add:
+            - CHOWN
+            - FOWNER
+        volumeMounts:
+        - name: data-dir
+          mountPath: /vector-data-dir
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8687
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          failureThreshold: 10
+          timeoutSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8687
+          initialDelaySeconds: 10
+          periodSeconds: 10
+  volumeClaimTemplates:
+  - metadata:
+      name: data-dir
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 10Gi
