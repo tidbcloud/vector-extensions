@@ -410,13 +410,13 @@ impl TopSQLDeltaLakeSink {
             let table_path = if self.base_path.to_string_lossy().starts_with("s3://") {
                 // For S3 paths, append the table name to the S3 path
                 PathBuf::from(format!(
-                    "{}/{}",
+                    "{}/type=topsql_meta/{}",
                     self.base_path.to_string_lossy(),
                     table_name
                 ))
             } else {
                 // For local paths, use join as before
-                self.base_path.join(table_name)
+                self.base_path.join("type=topsql_meta").join(table_name)
             };
 
             let table_config = self
