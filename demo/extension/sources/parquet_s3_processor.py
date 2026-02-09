@@ -19,6 +19,7 @@ S3_PREFIX = os.environ.get('S3_PREFIX', '')
 S3_REGION = os.environ.get('S3_REGION', 'us-west-2')
 START_TIME = os.environ.get('START_TIME', None)
 END_TIME = os.environ.get('END_TIME', None)
+TASK_ID = os.environ.get('TASK_ID', 'default')  # Task ID for database tracking
 
 # AWS credentials from environment (inherited from Vector process)
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN
@@ -98,6 +99,7 @@ def process_parquet_files():
                     "message": log_line,
                     "timestamp": datetime.fromtimestamp(time_val).isoformat() if time_val else datetime.now().isoformat(),
                     "source": parquet_key,
+                    "task_id": TASK_ID,  # Add task_id for database tracking
                 }
                 print(json.dumps(event))
                 

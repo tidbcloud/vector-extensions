@@ -73,26 +73,57 @@ max_connections = 10
 
 ## Implementation Details
 
-### Table Schema
+### Dynamic Schema Discovery
 
-The sink expects a table with the following columns:
-- `log_line` (TEXT/VARCHAR): The log message content
-- `log_timestamp` (DATETIME/TIMESTAMP): The event timestamp
-- `task_id` (VARCHAR): Optional task identifier
+The sink automatically queries the target table schema on initialization using `SHOW COLUMNS FROM table`. This allows the sink to:
+- Discover all available columns dynamically
+- Adapt to different table structures without code changes
+- Handle nullable/non-nullable columns appropriately
+- Skip auto-increment columns (like `id`) and auto-generated columns (like `created_at`)
+
+### Field Mapping
+
+The sink uses **automatic field matching** to map event fields to table columns:
+
+1. **Exact Match**: First tries to find an event field with the exact same name as the column
+2. **Case-Insensitive Match**: If no exact match, searches all event fields case-insensitively
+3. **No Hard-coded Mappings**: The sink does not use hard-coded field name mappings, making it truly generic
 
 ### Field Extraction
 
-The sink extracts fields from log events in the following order:
-1. `message` or `log` field for `log_line`
-2. `timestamp` or `time` field for `log_timestamp`
-3. `task_id` field for `task_id`
-4. Falls back to event metadata timestamp if no timestamp field found
+For each column in the table schema:
+- The sink attempts to find a matching event field using the matching strategy above
+- If a match is found, the value is extracted and converted to the appropriate format
+- If no match is found:
+  - For nullable columns: The value is set to NULL
+  - For non-nullable columns: A default value is used based on the column type:
+    - Integer types → `0`
+    - Float types → `0.0`
+    - DATETIME/TIMESTAMP → Current timestamp
+    - Other types → Empty string
+
+### Type Conversion
+
+The sink automatically handles type conversions:
+- **Timestamp Conversion**: Automatically detects DATETIME/TIMESTAMP columns and converts ISO 8601 timestamps (e.g., `2025-06-06T18:00:00`) to MySQL DATETIME format (`2025-06-06 18:00:00`)
+- **Value Serialization**: Complex types (objects, arrays) are serialized as JSON strings
+- **String Handling**: All values are converted to strings for SQL binding
 
 ### Batch Processing
 
 - Events are collected into batches of `batch_size`
-- Batches are inserted using prepared statements
+- For each batch, a dynamic INSERT statement is generated based on the table schema
+- Only columns that exist in the table schema are included in the INSERT statement
+- Batches are inserted using prepared statements with proper type binding
 - Errors in one batch don't stop processing of other batches
+
+### Dynamic SQL Generation
+
+The sink generates INSERT statements dynamically:
+- Queries table schema on initialization
+- Builds INSERT statement with only the columns that exist in the table
+- Automatically skips auto-increment and auto-generated columns
+- Handles NULL values appropriately based on column nullability
 
 ## Dependencies
 
@@ -116,11 +147,13 @@ The sink extracts fields from log events in the following order:
 
 ## Future Improvements
 
-1. **Custom Schema Mapping**: Allow configuration of field-to-column mappings
-2. **Schema Evolution**: Handle table schema changes gracefully
+1. **Custom Field Mapping**: Allow configuration of field-to-column mappings (e.g., `message` → `log_line`)
+2. **Schema Evolution**: Handle table schema changes gracefully (re-query schema on errors)
 3. **Transaction Support**: Option to use transactions for batch inserts
 4. **Retry Logic**: Automatic retry for transient failures
 5. **Metrics**: Add metrics for insert rates, errors, and latency
+6. **Type-aware Binding**: Use proper SQL types instead of string binding for better performance
+7. **Batch Optimization**: Use multi-row INSERT statements for better performance
 
 ## Testing
 

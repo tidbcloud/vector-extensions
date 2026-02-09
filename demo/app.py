@@ -145,6 +145,11 @@ def generate_vector_config(
         },
         
         "sources": {
+            # Enable internal_metrics to see component metrics in vector top
+            "internal_metrics": {
+                "type": "internal_metrics",
+            },
+            
             "parquet_processor": {
                 "type": "exec",
                 "command": ["python3", str(processor_script)],
@@ -166,25 +171,11 @@ def generate_vector_config(
         "transforms": {}
     }
     
-    # Add transform to process exec source output
-    # The exec source outputs JSON Lines, so we parse them
-    config["transforms"]["parse_json"] = {
-        "type": "remap",
-        "inputs": ["parquet_processor"],
-        "source": '''
-            # Parse JSON Lines from exec source output
-            # Vector exec source with json decoding already parses JSON
-            # But we ensure the message field is properly set
-            if exists(.message) {
-                .message = string!(.message)
-            }
-            true
-        ''',
-    }
-    
-    # Time filtering is already done in the Python script
-    # Vector-level filtering would be redundant here
-    next_input = "parse_json"
+    # Note: exec source with json decoding already parses JSON Lines
+    # So the events already have the fields from the JSON (message, timestamp, source, etc.)
+    # We can use the source directly or add a simple transform to ensure message field exists
+    # For now, we'll use the source directly and only add filter if needed
+    next_input = "parquet_processor"
     
     # Add keyword filter if provided
     if keyword_filter_condition:
