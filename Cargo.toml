@@ -6,9 +6,9 @@ readme = "README.md"
 publish = false
 default-run = "vector"
 
-# [profile.release]
-# codegen-units = 1
-# lto = "fat"
+[profile.release]
+codegen-units = 1
+lto = "fat"
 
 [[bin]]
 name = "vector"
