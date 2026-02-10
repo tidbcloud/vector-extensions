@@ -357,16 +357,37 @@ impl TopSQLDeltaLakeSink {
         // Get or create writer for this table
         let mut writers = self.writers.lock().await;
         let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
+            let (table_type, table_instance) = match table_name
+                .strip_prefix("topsql_")
+                .and_then(|rest| rest.split_once('_'))
+            {
+                Some((t, inst)) if !t.is_empty() && !inst.is_empty() => (t, inst),
+                _ => {
+                    error!(
+                        "Unexpected table_name format (expected `topsql_{{type}}_{{instance}}`): {}",
+                        table_name
+                    );
+                    ("unknown", "unknown")
+                }
+            };
+
+            let type_dir = format!("type=topsql_{}", table_type);
+            let instance_dir = format!("instance={}", table_instance);
+
             let table_path = if self.base_path.to_string_lossy().starts_with("s3://") {
-                // For S3 paths, append the table name to the S3 path
+                // For S3 paths, build a partition-like directory structure
+                // <base>/topsql/data/type=.../instance=.../<table_name>
+                let base = self.base_path.to_string_lossy();
+                let base = base.trim_end_matches('/');
                 PathBuf::from(format!(
-                    "{}/{}",
-                    self.base_path.to_string_lossy(),
-                    table_name
+                    "{}/{}/{}",
+                    base, type_dir, instance_dir
                 ))
             } else {
                 // For local paths, use join as before
-                self.base_path.join(table_name)
+                self.base_path
+                    .join(&type_dir)
+                    .join(&instance_dir)
             };
 
             let table_config = self
