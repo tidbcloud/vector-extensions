@@ -6,7 +6,10 @@
     "start": "2025-06-06T00:00:00Z",
     "end": "2025-06-10T23:59:59Z"
   },
+  "_comment_time": "Time format: ISO 8601 strings (e.g., '2025-06-06T00:00:00Z') will be automatically converted to Unix timestamps (seconds) by the API. Delta Lake 'time' column is typically Unix timestamp (numeric type).",
   "mysql_connection": "mysql://root:root@localhost:3306/testdb",
   "mysql_table": "slowlogs",
-  "filter_keywords": []
+  "filter_keywords": [],
+  "use_transform": false,
+  "_comment": "use_transform: false because MySQL table structure matches Delta Lake fields. tidb sink will automatically map fields (case-insensitive)."
 }

@@ -27,7 +27,7 @@ echo ""
 
 # 1. Health check
 echo "1. Health Check"
-curl -s "$API_URL/health" | jq . || echo "Server not running"
+curl -s "$API_URL/api/v1/health" | jq . || echo "Server not running"
 echo ""
 
 # 2. Create task (with time range)
@@ -63,7 +63,7 @@ MYSQL_CONTAINER=$(docker ps | grep mysql | awk '{print $1}' | head -1)
 if [ -n "$MYSQL_CONTAINER" ]; then
     docker exec $MYSQL_CONTAINER mysql -u root -proot testdb -e "SELECT COUNT(*) as total FROM slowlogs;" 2>/dev/null | grep -v "Warning" || echo "MySQL query failed"
     echo ""
-    docker exec $MYSQL_CONTAINER mysql -u root -proot testdb -e "SELECT id, LEFT(log_line, 100) as preview FROM slowlogs LIMIT 5;" 2>/dev/null | grep -v "Warning" || echo "MySQL query failed"
+    docker exec $MYSQL_CONTAINER mysql -u root -proot testdb -e "SELECT id, time, db, user, host, LEFT(prev_stmt, 50) as sql_preview FROM slowlogs LIMIT 5;" 2>/dev/null | grep -v "Warning" || echo "MySQL query failed"
 else
     echo "⚠️  MySQL container not found"
 fi

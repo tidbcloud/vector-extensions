@@ -1,4 +1,5 @@
 pub mod conprof;
+pub mod delta_lake_watermark;
 pub mod filename;
 pub mod keyviz;
 pub mod system_tables;

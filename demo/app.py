@@ -11,12 +11,14 @@ Vector itself through its exec source, which executes scripts in demo/extension/
 
 Data Flow:
 - Management API (this file) → Generates Vector TOML config
-- Vector exec source → Executes demo/extension/sources/parquet_s3_processor.py
-- Vector transforms → Applies VRL-based filtering/transformation
-- Vector file sink → Outputs to files
-- Background thread → Monitors files and imports to MySQL (temporary solution)
+- Vector delta_lake_watermark source → Reads from Delta Lake table in S3 with checkpoint support
+- Vector transforms → Converts to slowlog format and applies VRL-based filtering
+- Vector tidb sink → Writes data directly to MySQL/TiDB database
 
-Future: Custom Vector plugins (Rust) will replace the Python scripts.
+Features:
+- Fault recovery: Checkpoint support enables resume from last processed record
+- Incremental sync: Only processes new data since last checkpoint
+- At-least-once delivery: Acknowledgment mechanism ensures data reliability
 """
 import os
 import json
@@ -95,7 +97,7 @@ def get_parquet_processor_script_path() -> Path:
 
 def generate_vector_config(
     task_id: str,
-    processor_script: Path,
+    processor_script: Optional[Path],  # Not used anymore, kept for compatibility
     mysql_connection: str,
     mysql_table: str,
     s3_bucket: str,
@@ -104,37 +106,92 @@ def generate_vector_config(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     filter_keywords: Optional[List[str]] = None,
+    unique_id_column: Optional[str] = None,  # Optional unique ID column for precise sync
+    order_by_column: Optional[str] = None,  # Optional: column name for ordering (default: "time")
+    condition: Optional[str] = None,  # Optional: SQL WHERE condition for source-level filtering
+    use_transform: bool = True,  # Optional: whether to use transform to convert to slowlog format (default: True)
 ) -> str:
-    """Generate Vector TOML configuration for slowlog backup
+    """Generate Vector TOML configuration for slowlog backup using delta_lake_watermark source
     
     This function ONLY generates Vector configuration. It does NOT process any data.
     
     Configuration structure:
-    1. exec source: Executes Python script (demo/extension/sources/parquet_s3_processor.py)
-       - Script reads Parquet files from S3 and outputs JSON Lines to stdout
-       - Vector reads stdout and creates events
-    2. remap transform: Parses JSON Lines (if needed)
-    3. filter transform: Applies keyword filtering using VRL (if provided)
-    4. tidb sink: Writes data directly to MySQL/TiDB database
+    1. delta_lake_watermark source: Reads from Delta Lake table in S3 with checkpoint support
+       - Supports incremental sync with fault recovery
+       - Uses DuckDB to query Delta Lake tables with SQL WHERE conditions (predicate pushdown)
+       - Automatically handles checkpointing for resume capability
+       - Supports source-level filtering via 'condition' parameter (more efficient than transform filtering)
+    2. remap transform: Converts Delta Lake records to slowlog format
+    3. tidb sink: Writes data directly to MySQL/TiDB database
     
     Note: All data processing is done by Vector, not by this management API.
-    The Python script is executed by Vector's exec source, not by this app.
+    The delta_lake_watermark source provides built-in checkpoint support for fault recovery.
+    
+    Args:
+        order_by_column: Column name for ordering (default: "time"). This should be a timestamp column.
+        condition: SQL WHERE condition for source-level filtering (e.g., "type = 'error' AND severity > 3").
+                   This is more efficient than filtering in transforms because it uses predicate pushdown.
+        filter_keywords: DEPRECATED - Use 'condition' parameter instead for better performance.
+                        If provided, will be converted to SQL condition for source-level filtering.
+        use_transform: Whether to use transform to convert Delta Lake records to slowlog format (default: True).
+                       Set to False if MySQL table structure matches Delta Lake table structure.
+                       When False, tidb sink will automatically map Delta Lake fields to MySQL columns.
+                       When True, transform combines multiple fields into a single 'log_line' text field.
     """
     
-    # Build keyword filter condition if provided
-    keyword_filter_condition = None
-    if filter_keywords:
-        conditions = [f'contains(string!(.message), "{kw}")' for kw in filter_keywords]
-        keyword_filter_condition = " or ".join(conditions)
-    
-    # Generate Vector config - uses exec source to run Python script
-    # Create data_dir first (Vector requires it to exist)
+    # Generate Vector config - uses delta_lake_watermark source
+    # Create data_dir first (Vector requires it to exist, and checkpoint will be stored here)
     data_dir = Path(f"/tmp/vector-data/{task_id}")
-    data_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = data_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
-    # Note: Environment variables for the script (S3_BUCKET, S3_PREFIX, etc.)
-    # will be set when starting the Vector process, not in the config itself.
-    # The script reads from environment variables.
+    # Build Delta Lake table endpoint from S3 bucket and prefix
+    # Remove trailing slash from prefix if present
+    s3_prefix_clean = s3_prefix.rstrip('/')
+    delta_table_endpoint = f"s3://{s3_bucket}/{s3_prefix_clean}"
+    
+    # Determine order_by_column (default to "time" if not provided)
+    order_by_col = order_by_column or "time"
+    
+    # Build SQL condition for source-level filtering (more efficient than transform filtering)
+    # Priority: 1. condition parameter, 2. filter_keywords (converted to SQL)
+    sql_condition = condition
+    if not sql_condition and filter_keywords:
+        # Convert keyword filter to SQL condition (assuming keywords are in 'prev_stmt' or 'digest' column)
+        # This uses predicate pushdown for better performance
+        keyword_conditions = [f"(prev_stmt LIKE '%{kw}%' OR digest LIKE '%{kw}%')" for kw in filter_keywords]
+        sql_condition = " OR ".join(keyword_conditions)
+    
+    # Configure delta_lake_watermark source
+    # Note: unique_id_column is optional but recommended for precise incremental sync
+    # If the table has a unique ID column (like id, uuid, request_id), specify it here
+    # Otherwise, set to None and the source will use >= for checkpoint recovery
+    delta_source_config = {
+        "type": "delta_lake_watermark",
+        "endpoint": delta_table_endpoint,
+        "cloud_provider": "aws",
+        "data_dir": str(checkpoint_dir),
+        "order_by_column": order_by_col,  # Configurable column for ordering
+        "batch_size": 10000,
+        "poll_interval_secs": 30,
+        "acknowledgements": True,
+        "duckdb_memory_limit": "2GB",
+    }
+    
+    # Set unique_id_column if provided
+    # This enables precise incremental sync with no duplicates and no missed data
+    if unique_id_column:
+        delta_source_config["unique_id_column"] = unique_id_column
+    
+    # Add time range if provided
+    if start_time:
+        delta_source_config["begin_time"] = start_time
+    if end_time:
+        delta_source_config["end_time"] = end_time
+    
+    # Add SQL condition for source-level filtering (predicate pushdown - more efficient)
+    if sql_condition:
+        delta_source_config["condition"] = sql_condition
     
     config = {
         "data_dir": str(data_dir),
@@ -150,43 +207,78 @@ def generate_vector_config(
                 "type": "internal_metrics",
             },
             
-            "parquet_processor": {
-                "type": "exec",
-                "command": ["python3", str(processor_script)],
-                "mode": "streaming",  # Use streaming mode - script runs and outputs data
-                "streaming": {
-                    "respawn_on_exit": False  # Don't respawn - script runs once and exits
-                },
-                "decoding": {
-                    "codec": "json"
-                },
-                # Vector exec source will run the script and read its stdout
-                # Each line of JSON output becomes an event
-                # When script exits (after processing all files), Vector will finish processing remaining events
-                # Environment variables are inherited from Vector process
-                # (set by management API before starting Vector)
-            }
+            "delta_lake_source": delta_source_config
         },
         
         "transforms": {}
     }
     
-    # Note: exec source with json decoding already parses JSON Lines
-    # So the events already have the fields from the JSON (message, timestamp, source, etc.)
-    # We can use the source directly or add a simple transform to ensure message field exists
-    # For now, we'll use the source directly and only add filter if needed
-    next_input = "parquet_processor"
+    # Determine if transform is needed
+    # Transform is only needed if MySQL table structure doesn't match Delta Lake table structure
+    # If MySQL table has columns matching Delta Lake fields (time, db, user, host, etc.),
+    # tidb sink will automatically map them, so no transform is needed.
+    # 
+    # Current MySQL table structure (from create_mysql_table.sql):
+    # - id (AUTO_INCREMENT)
+    # - log_line (TEXT) - requires transform to combine multiple fields into text
+    # - log_timestamp (DATETIME) - requires transform to convert time field
+    # - task_id (VARCHAR) - requires transform to add task_id
+    # - created_at (TIMESTAMP, auto-generated)
+    #
+    # If your MySQL table has columns matching Delta Lake fields directly (e.g., time, db, user, host),
+    # you can skip the transform and let tidb sink handle the mapping automatically.
     
-    # Add keyword filter if provided
-    if keyword_filter_condition:
-        config["transforms"]["keyword_filter"] = {
-            "type": "filter",
-            "inputs": [next_input],
-            "condition": keyword_filter_condition,
+    if use_transform:
+        # Transform is needed to convert structured Delta Lake records to slowlog text format
+        # Delta Lake records have fields: time, db, user, host, query_time, result_rows, prev_stmt, digest, etc.
+        # MySQL table expects: log_line (TEXT), log_timestamp (DATETIME), task_id (VARCHAR)
+        config["transforms"]["format_slowlog"] = {
+            "type": "remap",
+            "inputs": ["delta_lake_source"],
+            "source": f"""
+                # Convert Delta Lake record to slowlog format
+                # Use dynamic order_by_column ({order_by_col}) for timestamp field
+                time_str = string!(.{order_by_col} ?? "")
+                db_str = string!(.db ?? "")
+                user_str = string!(.user ?? "")
+                host_str = string!(.host ?? "")
+                query_time_str = string!(.query_time ?? "")
+                result_rows_str = string!(.result_rows ?? "")
+                sql_str = string!(.prev_stmt ?? "") ?? string!(.digest ?? "")
+                
+                message = "# Time: " + time_str + " | DB: " + db_str + " | User: " + user_str + "@" + host_str + " | Query_time: " + query_time_str + " | Rows: " + result_rows_str + " | SQL: " + sql_str
+                
+                # Set log_timestamp from order_by_column field (convert Unix timestamp to ISO 8601)
+                # Use dynamic field name based on order_by_column configuration
+                # Note: 'timestamp' is a reserved keyword in VRL, so we use 'log_timestamp' instead
+                # Also set @timestamp for Vector's internal timestamp handling
+                log_timestamp = if exists(.{order_by_col}) {{ format_timestamp!(to_int!(.{order_by_col}) ?? 0, format: "%+") }} else {{ now() }}
+                .@timestamp = log_timestamp
+                
+                source = "delta_lake"
+                task_id = get_env_var("TASK_ID") ?? ""
+            """
         }
-        sink_input = "keyword_filter"
+        sink_input = "format_slowlog"
     else:
-        sink_input = next_input
+        # No transform needed - tidb sink will automatically map Delta Lake fields to MySQL columns
+        # Make sure MySQL table has columns matching Delta Lake field names (time, db, user, host, etc.)
+        # tidb sink supports automatic field mapping (case-insensitive)
+        # 
+        # Example MySQL table structure that matches Delta Lake:
+        # CREATE TABLE slowlogs (
+        #     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        #     time BIGINT,  -- matches Delta Lake 'time' field
+        #     db VARCHAR(255),  -- matches Delta Lake 'db' field
+        #     user VARCHAR(255),  -- matches Delta Lake 'user' field
+        #     host VARCHAR(255),  -- matches Delta Lake 'host' field
+        #     query_time FLOAT,  -- matches Delta Lake 'query_time' field
+        #     result_rows INT,  -- matches Delta Lake 'result_rows' field
+        #     prev_stmt TEXT,  -- matches Delta Lake 'prev_stmt' field
+        #     digest VARCHAR(255),  -- matches Delta Lake 'digest' field
+        #     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        # );
+        sink_input = "delta_lake_source"
     
     # Add tidb sink - write directly to MySQL/TiDB
     # Parse MySQL connection string to extract components
@@ -240,9 +332,10 @@ def start_vector_process(
         script_env: Environment variables to pass to Vector (inherited by exec source scripts)
     
     Note: 
-    - Data processing is done by Vector's exec source (executes Python script)
+    - Data processing is done by Vector's delta_lake_watermark source
     - MySQL import is handled directly by Vector's tidb sink
     - No background thread needed anymore
+    - Checkpoint support enables fault recovery
     """
     
     # Use provided vector_binary or fallback to VECTOR_BINARY
@@ -254,13 +347,17 @@ def start_vector_process(
     
     # Prepare environment variables
     # Merge script_env with current environment
+    # For delta_lake_watermark source, we need AWS credentials for S3 access
     env = os.environ.copy()
     if script_env:
         env.update(script_env)
     
+    # Add TASK_ID to environment for transforms
+    env["TASK_ID"] = task_id
+    
     # Start Vector process
     # Note: Vector will inherit environment variables (AWS_ACCESS_KEY_ID, etc.)
-    # and pass them to exec source scripts
+    # for delta_lake_watermark source to access S3
     cmd = [vector_cmd, "--config", str(config_file)]
     
     # Create log files for Vector output (for debugging)
@@ -649,23 +746,41 @@ def create_task():
         start_time = None
         end_time = None
         if time_range:
-            start_time = time_range.get("start")
-            end_time = time_range.get("end")
+            # Convert ISO 8601 strings to Unix timestamps (seconds)
+            # Delta Lake time column is typically Unix timestamp (numeric)
+            from datetime import datetime
+            start_str = time_range.get("start")
+            end_str = time_range.get("end")
+            if start_str:
+                try:
+                    # Parse ISO 8601 and convert to Unix timestamp
+                    dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                    start_time = str(int(dt.timestamp()))
+                except (ValueError, AttributeError):
+                    # If conversion fails, use original string (might be already a timestamp)
+                    start_time = start_str
+            if end_str:
+                try:
+                    # Parse ISO 8601 and convert to Unix timestamp
+                    dt = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+                    end_time = str(int(dt.timestamp()))
+                except (ValueError, AttributeError):
+                    # If conversion fails, use original string (might be already a timestamp)
+                    end_time = end_str
         
-        # Step 1: Get extension script path
-        print(f"[Task {task_id}] Step 1: Getting extension script...")
-        try:
-            processor_script = get_parquet_processor_script_path()
-        except FileNotFoundError as e:
-            return jsonify({"error": str(e)}), 500
+        # Extract optional parameters
+        unique_id_column = data.get("unique_id_column")  # Optional: "id", "uuid", "digest", etc.
+        order_by_column = data.get("order_by_column")  # Optional: column name for ordering (default: "time")
+        condition = data.get("condition")  # Optional: SQL WHERE condition for source-level filtering
+        use_transform = data.get("use_transform", True)  # Optional: whether to use transform (default: True)
         
-        # Step 2: Generate Vector configuration
-        # The script will be executed by Vector's exec source with environment variables
-        # Data will be written directly to MySQL using tidb sink
-        print(f"[Task {task_id}] Step 2: Generating Vector configuration...")
+        # Step 1: Generate Vector configuration
+        # Using delta_lake_watermark source for fault recovery support
+        # No need for processor script anymore - delta_lake_watermark handles everything
+        print(f"[Task {task_id}] Step 1: Generating Vector configuration with delta_lake_watermark source...")
         vector_config = generate_vector_config(
             task_id=task_id,
-            processor_script=processor_script,
+            processor_script=None,  # Not needed anymore
             mysql_connection=data["mysql_connection"],
             mysql_table=data["mysql_table"],
             s3_bucket=data["s3_bucket"],
@@ -673,11 +788,15 @@ def create_task():
             s3_region=data.get("s3_region", "us-west-2"),
             start_time=start_time,
             end_time=end_time,
-            filter_keywords=data.get("filter_keywords"),
+            filter_keywords=data.get("filter_keywords"),  # DEPRECATED: Use 'condition' instead
+            unique_id_column=unique_id_column,  # Optional: for precise incremental sync
+            order_by_column=order_by_column,  # Optional: column name for ordering (default: "time")
+            condition=condition,  # Optional: SQL WHERE condition for source-level filtering (more efficient)
+            use_transform=use_transform,  # Optional: whether to use transform (default: True)
         )
         
-        # Step 3: Start Vector process
-        print(f"[Task {task_id}] Step 3: Starting Vector process...")
+        # Step 2: Start Vector process
+        print(f"[Task {task_id}] Step 2: Starting Vector process...")
         
         # Check if Vector is available
         vector_binary_path = Path(VECTOR_BINARY)
@@ -706,19 +825,15 @@ def create_task():
         mysql_connection = data["mysql_connection"]
         mysql_table = data["mysql_table"]
         
-        # Prepare environment variables for the source script only
-        # Note: MySQL connection is configured in Vector's tidb sink config, not via environment variables
+        # Prepare environment variables
+        # For delta_lake_watermark source, we need AWS credentials for S3 access
+        # These are typically set via AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
+        # or via IAM roles (in Kubernetes/ECS)
         script_env = {
-            # For source script (parquet processor)
-            "S3_BUCKET": data["s3_bucket"],
-            "S3_PREFIX": data["s3_prefix"],
-            "S3_REGION": data.get("s3_region", "us-west-2"),
-            "TASK_ID": task_id,
+            "TASK_ID": task_id,  # For transforms to use
+            # AWS credentials should be set in the environment or via IAM roles
+            # S3_REGION is configured in the delta_lake_watermark source config
         }
-        if start_time:
-            script_env["START_TIME"] = start_time
-        if end_time:
-            script_env["END_TIME"] = end_time
         
         # Start Vector process
         print(f"[Task {task_id}] ✓ Vector found: {actual_vector_path}, starting Vector process...")
