@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use regex::Regex;
 use chrono::{DateTime, Utc};
 use metrics::counter;
 use tokio::time::sleep;
@@ -11,6 +12,7 @@ use bytes::Bytes;
 use vector_lib::event::{Event, LogEvent, Value as LogValue};
 
 use crate::sources::file_list::file_lister::{FileLister, FileMetadata};
+use crate::sources::file_list::line_parser;
 use crate::sources::file_list::path_resolver::ListRequest;
 
 /// Parse raw_logs prefix "diagnosis/data/.../merged-logs/{YYYYMMDDHH}/{component}/" to (hour_partition, component).
@@ -30,6 +32,8 @@ pub struct Controller {
     poll_interval: Option<Duration>,
     emit_metadata: bool,
     emit_content: bool,
+    emit_per_line: bool,
+    custom_line_regexes: Option<Vec<Regex>>,
     decompress_gzip: bool,
     out: SourceSender,
     shutdown: ShutdownSignal,
@@ -55,6 +59,8 @@ impl Controller {
         poll_interval: Option<Duration>,
         emit_metadata: bool,
         emit_content: bool,
+        emit_per_line: bool,
+        custom_line_regexes: Option<Vec<Regex>>,
         decompress_gzip: bool,
         out: SourceSender,
         shutdown: ShutdownSignal,
@@ -75,6 +81,8 @@ impl Controller {
             poll_interval,
             emit_metadata,
             emit_content,
+            emit_per_line,
+            custom_line_regexes,
             decompress_gzip,
             out,
             shutdown,
@@ -96,6 +104,8 @@ impl Controller {
         poll_interval: Option<Duration>,
         emit_metadata: bool,
         emit_content: bool,
+        emit_per_line: bool,
+        custom_line_regexes: Option<Vec<Regex>>,
         decompress_gzip: bool,
         out: SourceSender,
         shutdown: ShutdownSignal,
@@ -116,6 +126,8 @@ impl Controller {
             poll_interval,
             emit_metadata,
             emit_content,
+            emit_per_line,
+            custom_line_regexes,
             decompress_gzip,
             out,
             shutdown,
@@ -223,42 +235,92 @@ impl Controller {
                         .list_files_at(&f.prefix, f.pattern.as_deref(), f.skip_time_filter)
                         .await?;
                     let partition = parse_raw_logs_prefix(&f.prefix);
-                    let n = files.len();
                     for file in &files {
-                        let mut log_event = LogEvent::default();
-                        log_event.insert("file_path", LogValue::Bytes(file.path.clone().into()));
-                        log_event.insert("data_type", LogValue::Bytes(Bytes::from_static(b"file")));
-                        if let Some((ref hour, ref comp)) = partition {
-                            log_event.insert("hour_partition", LogValue::Bytes(hour.clone().into()));
-                            log_event.insert("component", LogValue::Bytes(comp.clone().into()));
-                        }
-                        if self.emit_metadata {
-                            log_event.insert("file_size", LogValue::Integer(file.size as i64));
-                            log_event.insert(
-                                "last_modified",
-                                LogValue::Bytes(file.last_modified.to_rfc3339().into()),
-                            );
-                            log_event.insert("bucket", LogValue::Bytes(file.bucket.clone().into()));
-                            log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
-                        }
-                        if self.emit_content {
+                        if self.emit_content && self.emit_per_line {
                             match self.file_lister.get_file_bytes(&file.path, self.decompress_gzip).await {
                                 Ok(content) => {
-                                    let msg = String::from_utf8_lossy(&content).into_owned();
-                                    log_event.insert("message", LogValue::Bytes(msg.into()));
+                                    let text = String::from_utf8_lossy(&content).into_owned();
+                                    let mut line_count = 0u64;
+                                    for line in text.lines() {
+                                        let parsed = if let Some(ref regexes) = self.custom_line_regexes {
+                                            line_parser::parse_line_with_regexes(line, regexes).unwrap_or_else(|| {
+                                                let mut raw = std::collections::BTreeMap::new();
+                                                raw.insert("message".to_string(), line.to_string());
+                                                raw.insert("line_type".to_string(), line_parser::LINE_TYPE_RAW.to_string());
+                                                raw
+                                            })
+                                        } else {
+                                            let (_, fields) = line_parser::parse_line(line);
+                                            fields
+                                        };
+                                        let mut log_event = LogEvent::default();
+                                        log_event.insert("file_path", LogValue::Bytes(file.path.clone().into()));
+                                        log_event.insert("data_type", LogValue::Bytes(Bytes::from_static(b"file")));
+                                        if let Some((ref hour, ref comp)) = partition {
+                                            log_event.insert("hour_partition", LogValue::Bytes(hour.clone().into()));
+                                            log_event.insert("component", LogValue::Bytes(comp.clone().into()));
+                                        }
+                                        for (k, v) in &parsed {
+                                            log_event.insert(k.as_str(), LogValue::Bytes(v.clone().into()));
+                                        }
+                                        if self.emit_metadata {
+                                            log_event.insert("file_size", LogValue::Integer(file.size as i64));
+                                            log_event.insert(
+                                                "last_modified",
+                                                LogValue::Bytes(file.last_modified.to_rfc3339().into()),
+                                            );
+                                            log_event.insert("bucket", LogValue::Bytes(file.bucket.clone().into()));
+                                            log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
+                                        }
+                                        log_event.insert(
+                                            "@timestamp",
+                                            LogValue::Bytes(Utc::now().to_rfc3339().into()),
+                                        );
+                                        batch.push(Event::Log(log_event));
+                                        line_count += 1;
+                                    }
+                                    counter!("file_list_files_found_total").increment(line_count);
                                 }
                                 Err(e) => {
                                     error!("file_list: failed to get content for {}: {}", file.path, e);
                                 }
                             }
+                        } else {
+                            let mut log_event = LogEvent::default();
+                            log_event.insert("file_path", LogValue::Bytes(file.path.clone().into()));
+                            log_event.insert("data_type", LogValue::Bytes(Bytes::from_static(b"file")));
+                            if let Some((ref hour, ref comp)) = partition {
+                                log_event.insert("hour_partition", LogValue::Bytes(hour.clone().into()));
+                                log_event.insert("component", LogValue::Bytes(comp.clone().into()));
+                            }
+                            if self.emit_metadata {
+                                log_event.insert("file_size", LogValue::Integer(file.size as i64));
+                                log_event.insert(
+                                    "last_modified",
+                                    LogValue::Bytes(file.last_modified.to_rfc3339().into()),
+                                );
+                                log_event.insert("bucket", LogValue::Bytes(file.bucket.clone().into()));
+                                log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
+                            }
+                            if self.emit_content {
+                                match self.file_lister.get_file_bytes(&file.path, self.decompress_gzip).await {
+                                    Ok(content) => {
+                                        let msg = String::from_utf8_lossy(&content).into_owned();
+                                        log_event.insert("message", LogValue::Bytes(msg.into()));
+                                    }
+                                    Err(e) => {
+                                        error!("file_list: failed to get content for {}: {}", file.path, e);
+                                    }
+                                }
+                            }
+                            log_event.insert(
+                                "@timestamp",
+                                LogValue::Bytes(Utc::now().to_rfc3339().into()),
+                            );
+                            batch.push(Event::Log(log_event));
+                            counter!("file_list_files_found_total").increment(1);
                         }
-                        log_event.insert(
-                            "@timestamp",
-                            LogValue::Bytes(Utc::now().to_rfc3339().into()),
-                        );
-                        batch.push(Event::Log(log_event));
                     }
-                    counter!("file_list_files_found_total").increment(n as u64);
                 }
                 ListRequest::DeltaTable(d) => {
                     let paths = self
@@ -319,40 +381,88 @@ impl Controller {
                                 .file_lister
                                 .list_files_at(&prefix, Some("*.log"), true)
                                 .await?;
-                            let n = files.len();
                             for file in &files {
-                                let mut log_event = LogEvent::default();
-                                log_event.insert("file_path", LogValue::Bytes(file.path.clone().into()));
-                                log_event.insert("data_type", LogValue::Bytes(Bytes::from_static(b"file")));
-                                log_event.insert("hour_partition", LogValue::Bytes(hour_partition.clone().into()));
-                                log_event.insert("component", LogValue::Bytes(comp.clone().into()));
-                                if self.emit_metadata {
-                                    log_event.insert("file_size", LogValue::Integer(file.size as i64));
-                                    log_event.insert(
-                                        "last_modified",
-                                        LogValue::Bytes(file.last_modified.to_rfc3339().into()),
-                                    );
-                                    log_event.insert("bucket", LogValue::Bytes(file.bucket.clone().into()));
-                                    log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
-                                }
-                                if self.emit_content {
+                                if self.emit_content && self.emit_per_line {
                                     match self.file_lister.get_file_bytes(&file.path, self.decompress_gzip).await {
                                         Ok(content) => {
-                                            let msg = String::from_utf8_lossy(&content).into_owned();
-                                            log_event.insert("message", LogValue::Bytes(msg.into()));
+                                            let text = String::from_utf8_lossy(&content).into_owned();
+                                            let mut line_count = 0u64;
+                                            for line in text.lines() {
+                                                let parsed = if let Some(ref regexes) = self.custom_line_regexes {
+                                                    line_parser::parse_line_with_regexes(line, regexes).unwrap_or_else(|| {
+                                                        let mut raw = std::collections::BTreeMap::new();
+                                                        raw.insert("message".to_string(), line.to_string());
+                                                        raw.insert("line_type".to_string(), line_parser::LINE_TYPE_RAW.to_string());
+                                                        raw
+                                                    })
+                                                } else {
+                                                    let (_, fields) = line_parser::parse_line(line);
+                                                    fields
+                                                };
+                                                let mut log_event = LogEvent::default();
+                                                log_event.insert("file_path", LogValue::Bytes(file.path.clone().into()));
+                                                log_event.insert("data_type", LogValue::Bytes(Bytes::from_static(b"file")));
+                                                log_event.insert("hour_partition", LogValue::Bytes(hour_partition.clone().into()));
+                                                log_event.insert("component", LogValue::Bytes(comp.clone().into()));
+                                                for (k, v) in &parsed {
+                                                    log_event.insert(k.as_str(), LogValue::Bytes(v.clone().into()));
+                                                }
+                                                if self.emit_metadata {
+                                                    log_event.insert("file_size", LogValue::Integer(file.size as i64));
+                                                    log_event.insert(
+                                                        "last_modified",
+                                                        LogValue::Bytes(file.last_modified.to_rfc3339().into()),
+                                                    );
+                                                    log_event.insert("bucket", LogValue::Bytes(file.bucket.clone().into()));
+                                                    log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
+                                                }
+                                                log_event.insert(
+                                                    "@timestamp",
+                                                    LogValue::Bytes(Utc::now().to_rfc3339().into()),
+                                                );
+                                                batch.push(Event::Log(log_event));
+                                                line_count += 1;
+                                            }
+                                            counter!("file_list_files_found_total").increment(line_count);
                                         }
                                         Err(e) => {
                                             error!("file_list: failed to get content for {}: {}", file.path, e);
                                         }
                                     }
+                                } else {
+                                    let mut log_event = LogEvent::default();
+                                    log_event.insert("file_path", LogValue::Bytes(file.path.clone().into()));
+                                    log_event.insert("data_type", LogValue::Bytes(Bytes::from_static(b"file")));
+                                    log_event.insert("hour_partition", LogValue::Bytes(hour_partition.clone().into()));
+                                    log_event.insert("component", LogValue::Bytes(comp.clone().into()));
+                                    if self.emit_metadata {
+                                        log_event.insert("file_size", LogValue::Integer(file.size as i64));
+                                        log_event.insert(
+                                            "last_modified",
+                                            LogValue::Bytes(file.last_modified.to_rfc3339().into()),
+                                        );
+                                        log_event.insert("bucket", LogValue::Bytes(file.bucket.clone().into()));
+                                        log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
+                                    }
+                                    if self.emit_content {
+                                        match self.file_lister.get_file_bytes(&file.path, self.decompress_gzip).await {
+                                            Ok(content) => {
+                                                let msg = String::from_utf8_lossy(&content).into_owned();
+                                                log_event.insert("message", LogValue::Bytes(msg.into()));
+                                            }
+                                            Err(e) => {
+                                                error!("file_list: failed to get content for {}: {}", file.path, e);
+                                            }
+                                        }
+                                    }
+                                    log_event.insert(
+                                        "@timestamp",
+                                        LogValue::Bytes(Utc::now().to_rfc3339().into()),
+                                    );
+                                    batch.push(Event::Log(log_event));
+                                    counter!("file_list_files_found_total").increment(1);
                                 }
-                                log_event.insert(
-                                    "@timestamp",
-                                    LogValue::Bytes(Utc::now().to_rfc3339().into()),
-                                );
-                                batch.push(Event::Log(log_event));
                             }
-                            counter!("file_list_files_found_total").increment(n as u64);
                             if !batch.is_empty() {
                                 self.out.send_batch(std::mem::take(&mut batch)).await?;
                             }

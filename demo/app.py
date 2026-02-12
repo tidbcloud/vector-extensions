@@ -335,11 +335,14 @@ def generate_sync_logs_vector_config(
     dest_aws_access_key_id: Optional[str] = None,
     dest_aws_secret_access_key: Optional[str] = None,
     dest_aws_session_token: Optional[str] = None,
+    output_format: str = "text",
+    parse_lines: bool = False,
+    line_parse_regexes: Optional[List[str]] = None,
 ) -> str:
     """生成用于同步日志文件的 Vector 配置。
 
-    全流程在 Vector 内完成：file_list 拉取并解压文件，官方 aws_s3 sink 通过 key_prefix 模板（{{ component }}/{{ hour_partition }}/）按组件+小时分区写入目标 bucket。
-    Demo 仅生成配置并启动 Vector，不包含任何拷贝业务逻辑。
+    全流程在 Vector 内完成：file_list 拉取并解压，官方 aws_s3 sink 按 key_prefix 模板写入目标 bucket。
+    output_format 为写入 S3 时的编码格式（text/json/csv 等）。parse_lines=True 时按行解析；若提供 line_parse_regexes（带命名捕获 (?P<name>...) 的正则列表），则仅用自定义正则解析，否则用内置 Python/HTTP 规则。
 
     支持两种模式：
     1) types 模式：传入 cluster_id, project_id, types (如 ["raw_logs"]), start_time, end_time
@@ -357,8 +360,11 @@ def generate_sync_logs_vector_config(
         "poll_interval_secs": 0,  # one-shot
         "emit_metadata": True,
         "emit_content": True,
+        "emit_per_line": bool(parse_lines),
         "decompress_gzip": True,
     }
+    if line_parse_regexes:
+        file_list_source["line_parse_regexes"] = line_parse_regexes
     if region:
         file_list_source["region"] = region
 
@@ -385,22 +391,48 @@ def generate_sync_logs_vector_config(
             file_list_source["time_range_end"] = end_time
 
     dest_prefix_normalized = dest_prefix.rstrip("/") + "/" if dest_prefix else ""
+    # 官方 aws_s3 支持的 codec：text, json, csv, logfmt, raw_message, syslog, gelf（不含需 schema 的 avro/cef/protobuf 等）
+    SUPPORTED_OUTPUT_FORMATS = ("text", "json", "csv", "logfmt", "raw_message", "syslog", "gelf")
+    fmt = (output_format or "text").lower()
+    if fmt not in SUPPORTED_OUTPUT_FORMATS:
+        raise ValueError(
+            f"output_format 仅支持 {', '.join(SUPPORTED_OUTPUT_FORMATS)}，当前为 {output_format}；"
+            "avro/cef/protobuf 等需额外 schema 配置，暂不支持"
+        )
 
-    # 使用官方 aws_s3：key_prefix 支持模板语法，用 {{ component }}/{{ hour_partition }}/ 实现按组件+小时分区路径
-    sink_encoding = "text" if content_format == "text" else "json"
+    # 使用官方 aws_s3：key_prefix 模板 {{ component }}/{{ hour_partition }}/；编码由 output_format 决定
     aws_s3_sink = {
         "type": "aws_s3",
         "inputs": ["file_list"],
         "bucket": dest_bucket,
         "key_prefix": dest_prefix_normalized + "{{ component }}/{{ hour_partition }}/",
-        "encoding": {"codec": sink_encoding},
-        # timeout_secs 设短：官方默认 300s，小 batch 会一直等到超时才写；sync-logs 希望「读完尽快写」，设 10s 便于尽早 flush，避免 source 结束后 sink 还被强杀导致丢数据
+        "encoding": {"codec": fmt},
+        # timeout_secs 设短：官方默认 300s，小 batch 会一直等到超时才写；sync-logs 希望「读完尽快写」，设 10s 便于尽早 flush
         "batch": {"max_bytes": max_file_bytes, "timeout_secs": 10},
         "compression": "gzip",
     }
+    if fmt == "csv":
+        # 按行解析时：每条记录含 line_type, log_timestamp, logger, level, tag, message_body（Python）或 client_ip, method, path, status 等（HTTP），便于按列过滤
+        aws_s3_sink["encoding"]["csv"] = {
+            "fields": (
+                [
+                    "file_path", "data_type", "hour_partition", "component",
+                    "line_type", "log_timestamp", "logger", "level", "tag", "message_body",
+                    "client_ip", "request_date", "method", "path", "protocol", "status", "response_size",
+                    "message",
+                    "file_size", "last_modified", "bucket", "full_path",
+                    "@timestamp",
+                ]
+                if parse_lines
+                else [
+                    "file_path", "data_type", "hour_partition", "component",
+                    "file_size", "last_modified", "bucket", "full_path",
+                    "@timestamp", "message",
+                ]
+            ),
+        }
     if region:
         aws_s3_sink["region"] = region
-    # 目标端（sink）使用独立凭证时：读取用环境变量（只读账号），写入用此处配置的账号（如 o11y-dev 写权限）
     if dest_aws_access_key_id and dest_aws_secret_access_key:
         aws_s3_sink["auth"] = {
             "access_key_id": dest_aws_access_key_id,
@@ -1290,6 +1322,7 @@ def sync_logs():
         "max_keys": 10000
     }
         region 可选，默认 "us-west-2"。结果写入 dest_bucket/dest_prefix 下，按 component/hour_partition 分区。
+        output_format 可选，默认 "text"：写入 S3 时的编码格式（text/json/csv 等）。parse_lines 可选，默认 false：为 true 时按行解析。line_parse_regexes 可选：字符串数组，每条为正则且须含命名捕获 (?P<name>...)，按顺序匹配，命中则捕获名作为列；不传则用内置 Python/HTTP 规则。始终需要 dest_bucket、dest_prefix。
     timeout_secs 可选，默认 3600：Vector 子进程最长运行时间，超时会被终止。多组件/大时间范围请适当调大。
 
     凭证：读取源 bucket 使用**环境变量**中的 AWS 凭证（启动 demo 时 export 的账号）；写入目标 bucket 可使用请求体中的
@@ -1306,8 +1339,14 @@ def sync_logs():
         source_bucket = data.get("source_bucket")
         dest_bucket = data.get("dest_bucket")
         dest_prefix = data.get("dest_prefix", "")
+        output_format = (data.get("output_format") or "text").lower()
+        parse_lines = bool(data.get("parse_lines"))
+        line_parse_regexes = data.get("line_parse_regexes")  # optional list of regex strings
         if not source_bucket or not dest_bucket:
             return jsonify({"error": "缺少 source_bucket 或 dest_bucket"}), 400
+        _supported = ("text", "json", "csv", "logfmt", "raw_message", "syslog", "gelf")
+        if output_format not in _supported:
+            return jsonify({"error": f"output_format 仅支持 {', '.join(_supported)}（avro/cef/protobuf 等需 schema 的暂不支持）"}), 400
 
         task_id = str(uuid.uuid4())
         time_range = data.get("time_range") or {}
@@ -1374,6 +1413,9 @@ def sync_logs():
             dest_aws_access_key_id=dest_aws_access_key_id,
             dest_aws_secret_access_key=dest_aws_secret_access_key,
             dest_aws_session_token=dest_aws_session_token,
+            output_format=output_format,
+            parse_lines=parse_lines,
+            line_parse_regexes=line_parse_regexes,
         )
 
         ok, err, vector_log_path = run_vector_sync(task_id, config_content, vector_binary, timeout_secs=timeout_secs)
@@ -1391,19 +1433,25 @@ def sync_logs():
                 "source_bucket": source_bucket,
                 "dest_bucket": dest_bucket,
                 "dest_prefix": dest_prefix.rstrip("/") + "/" if dest_prefix else "",
+                "output_format": output_format,
+                "parse_lines": parse_lines,
+                "line_parse_regexes": line_parse_regexes,
             },
             "result": {
-                "message": "由 Vector file_list + 官方 aws_s3 sink（key_prefix 模板）完成，结果在目标 bucket 按 component/hour_partition 分区",
+                "message": "由 Vector file_list + 官方 aws_s3 sink（key_prefix 模板）完成，结果在目标 bucket 按 component/hour_partition 分区，编码 "
+                + output_format
+                + ("，按行解析" if parse_lines else ""),
                 "vector_log_path": log_path_str,
             },
         }
 
         return jsonify({
-            "message": "同步完成（Vector file_list 拉取解压 + 官方 aws_s3 key_prefix 模板按组件/时间分区写入目标）",
+            "message": "同步完成（Vector file_list 拉取解压 + aws_s3 按组件/时间分区写入目标，编码 " + output_format + "）",
             "task_id": task_id,
             "status": "completed",
             "dest_bucket": dest_bucket,
             "dest_prefix": dest_prefix.rstrip("/") + "/" if dest_prefix else "",
+            "output_format": output_format,
             "vector_log_path": log_path_str,
         }), 200
     except ValueError as e:

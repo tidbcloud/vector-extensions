@@ -13,6 +13,7 @@ use crate::sources::file_list::path_resolver::resolve_requests;
 
 mod controller;
 mod file_lister;
+mod line_parser;
 mod object_store_builder;
 mod path_resolver;
 
@@ -75,6 +76,16 @@ pub struct FileListConfig {
     /// Delta table / TopSQL list requests are unchanged (path only). Enables sync/aggregation in downstream sinks.
     #[serde(default)]
     pub emit_content: bool,
+
+    /// When true with emit_content, split file content by newline and emit one event per line with parsed fields.
+    /// Use built-in rules (Python logging + HTTP access) or, when `line_parse_regexes` is set, only those regexes (named capture groups → fields).
+    #[serde(default)]
+    pub emit_per_line: bool,
+
+    /// Optional list of regexes for per-line parsing. Each regex must use named capture groups `(?P<name>...)`; group names become event field names.
+    /// Tried in order; first match wins; unmatched lines get line_type=raw. When non-empty, built-in (python/http) rules are not used.
+    #[serde(default)]
+    pub line_parse_regexes: Option<Vec<String>>,
 
     /// When emit_content is true, decompress gzip (.gz) before emitting. Ignored when emit_content is false.
     #[serde(default = "default_decompress_gzip")]
@@ -144,6 +155,8 @@ impl GenerateConfig for FileListConfig {
             poll_interval_secs: default_poll_interval_secs(),
             emit_metadata: default_emit_metadata(),
             emit_content: false,
+            emit_per_line: false,
+            line_parse_regexes: None,
             decompress_gzip: default_decompress_gzip(),
         })
         .unwrap()
@@ -216,6 +229,15 @@ impl SourceConfig for FileListConfig {
             Some(requests)
         } else {
             let prefix = self.effective_prefix()?;
+            let custom_line_regexes = if self.emit_per_line {
+                self.line_parse_regexes
+                    .as_ref()
+                    .filter(|v| !v.is_empty())
+                    .map(|v| line_parser::compile_line_parse_regexes(v))
+                    .transpose()?
+            } else {
+                None
+            };
             let controller = Controller::new_legacy(
                 self.endpoint.clone(),
                 self.cloud_provider.clone(),
@@ -228,6 +250,8 @@ impl SourceConfig for FileListConfig {
                 poll_interval,
                 self.emit_metadata,
                 self.emit_content,
+                self.emit_per_line,
+                custom_line_regexes,
                 self.decompress_gzip,
                 cx.out,
                 cx.shutdown,
@@ -235,6 +259,16 @@ impl SourceConfig for FileListConfig {
             return Ok(Box::pin(async move {
                 controller.run_legacy().await
             }));
+        };
+
+        let custom_line_regexes = if self.emit_per_line {
+            self.line_parse_regexes
+                .as_ref()
+                .filter(|v| !v.is_empty())
+                .map(|v| line_parser::compile_line_parse_regexes(v))
+                .transpose()?
+        } else {
+            None
         };
 
         let controller = Controller::new_with_requests(
@@ -248,6 +282,8 @@ impl SourceConfig for FileListConfig {
             poll_interval,
             self.emit_metadata,
             self.emit_content,
+            self.emit_per_line,
+            custom_line_regexes,
             self.decompress_gzip,
             cx.out,
             cx.shutdown,
@@ -298,6 +334,8 @@ mod tests {
             poll_interval_secs: default_poll_interval_secs(),
             emit_metadata: default_emit_metadata(),
             emit_content: false,
+            emit_per_line: false,
+            line_parse_regexes: None,
             decompress_gzip: default_decompress_gzip(),
         };
         assert_eq!(config.cloud_provider, "aws");
@@ -323,6 +361,8 @@ mod tests {
             poll_interval_secs: default_poll_interval_secs(),
             emit_metadata: default_emit_metadata(),
             emit_content: false,
+            emit_per_line: false,
+            line_parse_regexes: None,
             decompress_gzip: default_decompress_gzip(),
         };
         assert!(config.effective_prefix().is_err());

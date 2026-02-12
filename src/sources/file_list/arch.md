@@ -215,9 +215,28 @@ emit_metadata = true
 
 - **`emit_content`** (optional, default: false): When true, for each listed **file** (not Delta table paths), download from object store, optionally decompress .gz, and set event `message` to the content. Enables full sync/aggregation in Vector (e.g. file_list → content_to_s3).
 
+- **`emit_per_line`** (optional, default: false): When true with `emit_content`, split file content by newline and emit **one event per log line** with parsed fields. See [Line parsing rules](#line-parsing-rules-emit_per_line) below. Unmatched lines get `line_type=raw`. Enables per-line filtering in CSV/JSON sinks.
+
+- **`line_parse_regexes`** (optional): List of regex strings for **custom** per-line parsing. When non-empty, **only** these regexes are used (built-in Python/HTTP rules are skipped). Each regex must contain at least one **named capture group** `(?P<name>...)`; capture names become event field names. Tried in order; first match wins; `line_type` is set to `custom`, and `message` is always the raw line. Unmatched lines get `line_type=raw`, `message` only. Example: `["^(?P<ts>\\d{4}-\\d{2}-\\d{2}) (?P<level>\\w+): (?P<msg>.*)$"]`.
+
 - **`decompress_gzip`** (optional, default: true): When `emit_content` is true, decompress before emitting if either (1) path ends with `.gz` or `.log.gz`, or (2) content starts with gzip magic bytes (`1f 8b`), so misnamed or extension-less gzip data is still decompressed.
 
 - **`raw_log_components`** (optional, for raw_logs only): Component subdirs under `merged-logs/{YYYYMMDDHH}/` (e.g. `tidb`, `loki`, `operator`). **When not set = discover at runtime**: for each hour prefix we list with delimiter to get immediate subdir names (all components that actually exist in the bucket). Set explicitly to sync only a subset.
+
+### Line parsing rules (emit_per_line)
+
+当 `emit_per_line = true` 时：
+
+- **若配置了 `line_parse_regexes`（非空）**：仅用这些正则按顺序匹配；每条正则须含**命名捕获** `(?P<name>...)`，捕获名作为字段名。命中则 `line_type=custom`，未命中则 `line_type=raw`、仅 `message`。**内置 Python/HTTP 规则不再使用**。
+- **若未配置 `line_parse_regexes`**：使用以下两种内置规则。
+
+| 规则 | 匹配格式示例 | 正则（简要） | 输出字段 |
+|------|----------------|----------------|----------|
+| **Python logging** | `2026-02-04 11:40:12,114 [slowlogconverter] [INFO] [Memory] message body` | `^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[([^\]]+)\] \[([^\]]+)\]\s*(?:\[([^\]]*)\]\s*)?(.*)$` | `line_type=python_logging`, `log_timestamp`, `logger`, `level`, `tag`, `message_body`, `message`（整行原文） |
+| **HTTP access** | `10.1.103.150 - - [04/Feb/2026 11:40:17] "GET /metrics HTTP/1.1" 200 -` | `^(\S+) - - \[([^\]]+)\] "(\S+) ([^"]*) (\S+)" (\d+) (\S*).*$` | `line_type=http_access`, `client_ip`, `request_date`, `method`, `path`, `protocol`, `status`, `response_size`, `message`（整行原文） |
+| **未匹配** | 任意其他行 | — | `line_type=raw`, `message`（整行原文） |
+
+- 每条事件始终带 `message`（原始行）。自定义正则时，建议输出格式用 **JSON** 以保留所有捕获字段；CSV 需在 sink 的 `encoding.csv.fields` 中列出所需列名（含自定义名）。
 
 ## Usage Examples
 
@@ -277,6 +296,95 @@ encoding = { codec = "text" }
 batch = { max_bytes = 33554432 }
 compression = "none"
 ```
+
+### Example 4: Full pipeline (raw_logs with components → S3 by component/hour)
+
+完整示例：开启 API、file_list 按组件拉取解压、aws_s3 用 `key_prefix` 模板按 `{{ component }}/{{ hour_partition }}/` 写入目标。
+
+```toml
+[api]
+enabled = true
+address = "127.0.0.1:0"
+
+[sources.file_list]
+type = "file_list"
+endpoint = "s3://o11y-prod-shared-us-west-2-staging"
+cloud_provider = "aws"
+max_keys = 10000
+poll_interval_secs = 0
+emit_metadata = true
+emit_content = true
+decompress_gzip = true
+region = "us-west-2"
+cluster_id = "o11y"
+types = ["raw_logs"]
+start_time = "2026-02-04T11:00:00Z"
+end_time = "2026-02-04T13:59:59Z"
+raw_log_components = ["loki", "operator", "o11ydiagnosis-deltalake"]
+
+[sinks.to_s3]
+type = "aws_s3"
+inputs = ["file_list"]
+bucket = "o11y-dev-shared-us-west-2"
+key_prefix = "leotest/{{ component }}/{{ hour_partition }}/"
+compression = "gzip"
+region = "us-west-2"
+
+[sinks.to_s3.encoding]
+codec = "text"
+
+[sinks.to_s3.batch]
+max_bytes = 33554432
+timeout_secs = 10
+```
+
+Demo 的 sync-logs API 通过 **output_format** 控制写入 S3 的编码（与官方 aws_s3 encoding.codec 一致）：`text`（默认）、`json`、`csv`、`logfmt`、`raw_message`、`syslog`、`gelf`；始终需要 `dest_bucket`、`dest_prefix`。avro/cef/protobuf 等需额外 schema 的格式暂不支持；parquet 官方 sink 不支持。
+
+- **尽量多保留信息**（如 o11ydiagnosis-deltalake 等多行/混合日志）：推荐 **json**。每条事件包含完整 `message`（原始日志内容）及 `file_path`、`component`、`hour_partition`、`file_size`、`last_modified`、`@timestamp` 等元数据，便于下游查询与解析。
+
+### Example 5: 同一 file_list 以 CSV 格式输出到本地文件
+
+使用官方 **file** sink，`encoding.codec = "csv"`，将 file_list 的每条事件输出为 CSV 一行；需通过 `encoding.csv.fields` 指定列顺序（与 file_list 发出字段一致）。
+
+```toml
+[api]
+enabled = true
+address = "127.0.0.1:0"
+
+[sources.file_list]
+type = "file_list"
+endpoint = "s3://o11y-prod-shared-us-west-2-staging"
+cloud_provider = "aws"
+max_keys = 10000
+poll_interval_secs = 0
+emit_metadata = true
+emit_content = true
+decompress_gzip = true
+region = "us-west-2"
+cluster_id = "o11y"
+types = ["raw_logs"]
+start_time = "2026-02-04T11:00:00Z"
+end_time = "2026-02-04T13:59:59Z"
+raw_log_components = ["loki", "operator", "o11ydiagnosis-deltalake"]
+
+[sinks.to_csv]
+type = "file"
+inputs = ["file_list"]
+path = "/tmp/file_list-%Y-%m-%d.csv"
+
+[sinks.to_csv.encoding]
+codec = "csv"
+
+# 列顺序与 file_list 事件字段一致；无该字段时输出空串
+[sinks.to_csv.encoding.csv]
+fields = ["file_path", "data_type", "hour_partition", "component", "file_size", "last_modified", "bucket", "full_path", "@timestamp", "message"]
+```
+
+说明：
+
+- **path**：输出文件路径，支持时间模板（如 `%Y-%m-%d`），多文件时按时间/模板分文件。
+- **encoding.csv.fields**：CSV 列顺序；若某事件缺少某字段，该列为空。`message` 为文件内容（`emit_content = true` 时），可能很大，若只关心元数据可去掉 `"message"`。
+- 仅列文件不拉内容时，可设 `emit_content = false`，并从 `fields` 中移除 `"message"`。
 
 ## Multi-Cloud Configuration
 
