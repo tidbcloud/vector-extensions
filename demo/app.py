@@ -450,6 +450,106 @@ def generate_sync_logs_vector_config(
     return toml.dumps(config)
 
 
+def generate_sync_logs_to_mysql_config(
+    task_id: str,
+    source_bucket: str,
+    mysql_connection: str,
+    mysql_table: str,
+    *,
+    cluster_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    types: Optional[List[str]] = None,
+    source_prefix: Optional[str] = None,
+    pattern: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    max_keys: int = 10000,
+    cloud_provider: str = "aws",
+    region: Optional[str] = None,
+    raw_log_components: Optional[List[str]] = None,
+    max_file_bytes: int = 32 * 1024 * 1024,
+    content_format: str = "text",
+    parse_lines: bool = False,
+    line_parse_regexes: Optional[List[str]] = None,
+) -> str:
+    """生成 file_list 源 + tidb sink 的 Vector 配置，将解析后的日志行写入本地 MySQL/TiDB。
+
+    与 sync-logs 相同的源与解析参数（types/raw_log_components/time_range、parse_lines、line_parse_regexes），
+    但写入目标为 MySQL 表，由 tidb sink 按表结构自动映射事件字段到列。
+    表结构需与事件字段一致，可参考 demo/config/create_parsed_logs_table.sql。
+    """
+    endpoint = f"s3://{source_bucket}"
+    data_dir = Path(f"/tmp/vector-data/{task_id}")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    file_list_source = {
+        "type": "file_list",
+        "endpoint": endpoint,
+        "cloud_provider": cloud_provider,
+        "max_keys": max_keys,
+        "poll_interval_secs": 0,
+        "emit_metadata": True,
+        "emit_content": True,
+        "emit_per_line": bool(parse_lines),
+        "decompress_gzip": True,
+    }
+    if line_parse_regexes:
+        file_list_source["line_parse_regexes"] = line_parse_regexes
+    if region:
+        file_list_source["region"] = region
+
+    if types and len(types) > 0:
+        file_list_source["cluster_id"] = cluster_id
+        if project_id:
+            file_list_source["project_id"] = project_id
+        file_list_source["types"] = types
+        if start_time:
+            file_list_source["start_time"] = start_time
+        if end_time:
+            file_list_source["end_time"] = end_time
+        if raw_log_components:
+            file_list_source["raw_log_components"] = raw_log_components
+    else:
+        if not source_prefix:
+            raise ValueError("sync_logs_to_mysql: 请提供 source_prefix 或 types")
+        file_list_source["prefix"] = source_prefix.rstrip("/") + "/"
+        if pattern:
+            file_list_source["pattern"] = pattern
+        if start_time:
+            file_list_source["time_range_start"] = start_time
+        if end_time:
+            file_list_source["time_range_end"] = end_time
+
+    # tidb sink：与 generate_vector_config 相同的连接串解析
+    mysql_parts = mysql_connection.replace("mysql://", "").split("@")
+    user_pass = mysql_parts[0].split(":")
+    mysql_user, mysql_pass = user_pass[0], user_pass[1] if len(user_pass) > 1 else ""
+    host_port = mysql_parts[1].split("/")
+    host_port_parts = host_port[0].split(":")
+    mysql_host = host_port_parts[0]
+    mysql_port = int(host_port_parts[1]) if len(host_port_parts) > 1 else 3306
+    mysql_database = host_port[1]
+    tidb_connection_string = f"mysql://{mysql_user}:{mysql_pass}@{mysql_host}:{mysql_port}/{mysql_database}"
+
+    config = {
+        "data_dir": str(data_dir),
+        "api": {"enabled": True, "address": "127.0.0.1:0"},
+        "sources": {"file_list": file_list_source},
+        "sinks": {
+            "tidb_sink": {
+                "type": "tidb",
+                "inputs": ["file_list"],
+                "connection_string": tidb_connection_string,
+                "table": mysql_table,
+                "batch_size": 1000,
+                "max_connections": 10,
+                "connection_timeout": 30,
+            }
+        },
+    }
+    return toml.dumps(config)
+
+
 def run_vector_sync(
     task_id: str,
     config_content: str,
@@ -1452,6 +1552,137 @@ def sync_logs():
             "dest_bucket": dest_bucket,
             "dest_prefix": dest_prefix.rstrip("/") + "/" if dest_prefix else "",
             "output_format": output_format,
+            "vector_log_path": log_path_str,
+        }), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v1/sync-logs-to-mysql", methods=["POST"])
+def sync_logs_to_mysql():
+    """从 S3 拉取日志（file_list），按行解析后写入本地 MySQL/TiDB（tidb sink）。
+
+    请求体与 sync-logs 的源与解析参数一致，额外必填 mysql_connection、mysql_table；不需要 dest_bucket/dest_prefix。
+    表结构需与事件字段一致，tidb sink 会按列名做 case-insensitive 映射。建表示例：demo/config/create_parsed_logs_table.sql。
+
+    请求体示例：
+    {
+        "source_bucket": "my-bucket",
+        "cluster_id": "10324983984131567830",
+        "types": ["raw_logs"],
+        "time_range": { "start": "2026-01-08T00:00:00Z", "end": "2026-01-08T01:00:00Z" },
+        "raw_log_components": ["loki", "operator"],
+        "parse_lines": true,
+        "line_parse_regexes": [],   // 可选，不传则用内置 Python/HTTP 规则
+        "mysql_connection": "mysql://root:root@localhost:3306/testdb",
+        "mysql_table": "parsed_logs",
+        "max_keys": 10000,
+        "region": "us-west-2",
+        "timeout_secs": 3600
+    }
+    """
+    try:
+        data = request.json or {}
+        source_bucket = data.get("source_bucket")
+        mysql_connection = data.get("mysql_connection")
+        mysql_table = data.get("mysql_table")
+        parse_lines = bool(data.get("parse_lines"))
+        line_parse_regexes = data.get("line_parse_regexes")
+
+        if not source_bucket:
+            return jsonify({"error": "缺少 source_bucket"}), 400
+        if not mysql_connection or not mysql_table:
+            return jsonify({"error": "缺少 mysql_connection 或 mysql_table"}), 400
+
+        task_id = str(uuid.uuid4())
+        time_range = data.get("time_range") or {}
+        start_time = time_range.get("start")
+        end_time = time_range.get("end")
+        max_keys = data.get("max_keys", 10000)
+        cloud_provider = data.get("cloud_provider", "aws")
+        region = data.get("region", "us-west-2")
+        raw_log_components = data.get("raw_log_components") or data.get("components")
+        timeout_secs = data.get("timeout_secs", 3600)
+
+        types = data.get("types")
+        if types and len(types) > 0:
+            cluster_id = data.get("cluster_id")
+            project_id = data.get("project_id")
+            if not cluster_id:
+                return jsonify({"error": "使用 types 时需提供 cluster_id"}), 400
+            if not start_time or not end_time:
+                return jsonify({"error": "使用 types（如 raw_logs）时需提供 time_range.start 与 time_range.end"}), 400
+            source_prefix = None
+            pattern = None
+        else:
+            source_prefix = data.get("source_prefix")
+            if not source_prefix:
+                return jsonify({"error": "请提供 source_prefix 或 types"}), 400
+            pattern = data.get("pattern")
+            cluster_id = project_id = None
+
+        vector_binary_path = Path(VECTOR_BINARY)
+        if not vector_binary_path.exists() or not os.access(vector_binary_path, os.X_OK):
+            project_root = Path(__file__).parent.parent
+            for name in ("debug", "release"):
+                candidate = project_root / "target" / name / "vector"
+                if candidate.exists() and os.access(candidate, os.X_OK):
+                    vector_binary_path = candidate
+                    break
+        if not vector_binary_path.exists() or not os.access(vector_binary_path, os.X_OK):
+            return jsonify({"error": "未找到 Vector 可执行文件，请先编译"}), 500
+        vector_binary = str(vector_binary_path.resolve())
+
+        config_content = generate_sync_logs_to_mysql_config(
+            task_id=task_id,
+            source_bucket=source_bucket,
+            mysql_connection=mysql_connection,
+            mysql_table=mysql_table,
+            cluster_id=cluster_id,
+            project_id=project_id,
+            types=types,
+            source_prefix=source_prefix,
+            pattern=pattern,
+            start_time=start_time,
+            end_time=end_time,
+            max_keys=max_keys,
+            cloud_provider=cloud_provider,
+            region=region,
+            raw_log_components=raw_log_components,
+            parse_lines=parse_lines,
+            line_parse_regexes=line_parse_regexes,
+        )
+
+        ok, err, vector_log_path = run_vector_sync(task_id, config_content, vector_binary, timeout_secs=timeout_secs)
+        if not ok:
+            return jsonify({"error": f"Vector 执行失败: {err}", "task_id": task_id}), 500
+
+        log_path_str = str(vector_log_path) if vector_log_path else None
+        tasks[task_id] = {
+            "task_id": task_id,
+            "status": "completed",
+            "type": "sync_logs_to_mysql",
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "config": {
+                "source_bucket": source_bucket,
+                "mysql_connection": "mysql://***@.../" + mysql_connection.split("/")[-1] if "/" in mysql_connection else "***",
+                "mysql_table": mysql_table,
+                "parse_lines": parse_lines,
+                "line_parse_regexes": line_parse_regexes,
+            },
+            "result": {"message": "file_list 拉取并按行解析，tidb sink 写入 MySQL", "vector_log_path": log_path_str},
+        }
+
+        return jsonify({
+            "message": "同步完成，解析日志已写入 MySQL 表",
+            "task_id": task_id,
+            "status": "completed",
+            "mysql_table": mysql_table,
             "vector_log_path": log_path_str,
         }), 200
     except ValueError as e:

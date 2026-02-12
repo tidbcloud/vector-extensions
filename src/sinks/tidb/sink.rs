@@ -234,11 +234,16 @@ impl TiDBSink {
             ));
         }
 
+        // Quote column names with backticks so MySQL accepts identifiers like @timestamp
+        let columns_quoted: Vec<String> = columns
+            .iter()
+            .map(|c| format!("`{}`", c.replace('`', "``")))
+            .collect();
         let placeholders: Vec<String> = (0..columns.len()).map(|_| "?".to_string()).collect();
         let query = format!(
             "INSERT INTO {} ({}) VALUES ({})",
             self.table,
-            columns.join(", "),
+            columns_quoted.join(", "),
             placeholders.join(", ")
         );
 
