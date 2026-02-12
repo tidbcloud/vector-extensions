@@ -1,0 +1,28 @@
+data_dir = "/tmp/vector-data/leotest"
+api = { enabled = true, address = "127.0.0.1:0" }
+
+[sources.file_list]
+type = "file_list"
+endpoint = "s3://o11y-prod-shared-us-west-2-staging"
+cloud_provider = "aws"
+region = "us-west-2"
+max_keys = 10000
+poll_interval_secs = 0
+emit_metadata = true
+emit_content = true
+decompress_gzip = true
+cluster_id = "o11y"
+types = ["raw_logs"]
+raw_log_components = ["loki", "operator", "o11ydiagnosis-deltalake"]
+start_time = "2026-02-04T11:00:00Z"
+end_time = "2026-02-04T13:59:59Z"
+
+[sinks.to_s3]
+type = "aws_s3"
+inputs = ["file_list"]
+bucket = "o11y-test-shared-us-west-2"
+key_prefix = "leotest/"
+region = "us-west-2"
+encoding = { codec = "text" }
+batch = { max_bytes = 33554432 }
+compression = "gzip"

@@ -331,10 +331,14 @@ def generate_sync_logs_vector_config(
     region: Optional[str] = "us-west-2",
     max_file_bytes: int = 32 * 1024 * 1024,
     content_format: str = "text",
+    raw_log_components: Optional[List[str]] = None,
+    dest_aws_access_key_id: Optional[str] = None,
+    dest_aws_secret_access_key: Optional[str] = None,
+    dest_aws_session_token: Optional[str] = None,
 ) -> str:
     """生成用于同步日志文件的 Vector 配置。
 
-    全流程在 Vector 内完成：file_list 拉取并解压文件，官方 aws_s3 sink 按 batch 聚合写入目标 bucket。
+    全流程在 Vector 内完成：file_list 拉取并解压文件，官方 aws_s3 sink 通过 key_prefix 模板（{{ component }}/{{ hour_partition }}/）按组件+小时分区写入目标 bucket。
     Demo 仅生成配置并启动 Vector，不包含任何拷贝业务逻辑。
 
     支持两种模式：
@@ -367,6 +371,8 @@ def generate_sync_logs_vector_config(
             file_list_source["start_time"] = start_time
         if end_time:
             file_list_source["end_time"] = end_time
+        if raw_log_components:
+            file_list_source["raw_log_components"] = raw_log_components
     else:
         if not source_prefix:
             raise ValueError("sync_logs: 请提供 source_prefix 或 types")
@@ -380,19 +386,28 @@ def generate_sync_logs_vector_config(
 
     dest_prefix_normalized = dest_prefix.rstrip("/") + "/" if dest_prefix else ""
 
-    # 使用官方 aws_s3 sink：encoding 用 message 字段，batch 控制每对象大小，默认 gzip 压缩上传省容量
+    # 使用官方 aws_s3：key_prefix 支持模板语法，用 {{ component }}/{{ hour_partition }}/ 实现按组件+小时分区路径
     sink_encoding = "text" if content_format == "text" else "json"
     aws_s3_sink = {
         "type": "aws_s3",
         "inputs": ["file_list"],
         "bucket": dest_bucket,
-        "key_prefix": dest_prefix_normalized,
+        "key_prefix": dest_prefix_normalized + "{{ component }}/{{ hour_partition }}/",
         "encoding": {"codec": sink_encoding},
-        "batch": {"max_bytes": max_file_bytes},
+        # timeout_secs 设短：官方默认 300s，小 batch 会一直等到超时才写；sync-logs 希望「读完尽快写」，设 10s 便于尽早 flush，避免 source 结束后 sink 还被强杀导致丢数据
+        "batch": {"max_bytes": max_file_bytes, "timeout_secs": 10},
         "compression": "gzip",
     }
     if region:
         aws_s3_sink["region"] = region
+    # 目标端（sink）使用独立凭证时：读取用环境变量（只读账号），写入用此处配置的账号（如 o11y-dev 写权限）
+    if dest_aws_access_key_id and dest_aws_secret_access_key:
+        aws_s3_sink["auth"] = {
+            "access_key_id": dest_aws_access_key_id,
+            "secret_access_key": dest_aws_secret_access_key,
+        }
+        if dest_aws_session_token:
+            aws_s3_sink["auth"]["session_token"] = dest_aws_session_token
 
     config = {
         "data_dir": str(data_dir),
@@ -409,9 +424,10 @@ def run_vector_sync(
     vector_binary: str,
     timeout_secs: int = 300,
     env_extra: Optional[Dict[str, str]] = None,
-) -> Tuple[bool, Optional[str]]:
-    """同步执行 Vector，等待退出。返回 (成功, 错误信息)。"""
+) -> Tuple[bool, Optional[str], Optional[Path]]:
+    """同步执行 Vector，等待退出。返回 (成功, 错误信息, Vector 日志文件路径)。"""
     config_file = CONFIG_DIR / f"{task_id}_sync_logs.toml"
+    log_file = CONFIG_DIR / f"{task_id}_sync_logs.log"
     config_file.write_text(config_content)
     env = os.environ.copy()
     if env_extra:
@@ -426,14 +442,20 @@ def run_vector_sync(
             timeout=timeout_secs,
             env=env,
         )
+        # 始终把 Vector 的 stdout/stderr 写入日志文件，便于排查“成功但桶里无文件”等问题
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write("=== Vector stdout ===\n")
+            f.write(result.stdout or "")
+            f.write("\n=== Vector stderr ===\n")
+            f.write(result.stderr or "")
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "")[:500]
-            return False, err or f"Vector exited with code {result.returncode}"
-        return True, None
+            return False, err or f"Vector exited with code {result.returncode}", log_file
+        return True, None, log_file
     except subprocess.TimeoutExpired:
-        return False, f"Vector 执行超时 ({timeout_secs}s)"
+        return False, f"Vector 执行超时 ({timeout_secs}s)", None
     except Exception as e:
-        return False, str(e)
+        return False, str(e), None
 
 
 def parse_file_list_output(output_path: Path) -> List[str]:
@@ -1233,7 +1255,7 @@ def copy_s3_files_with_boto3(
 
 @app.route("/api/v1/sync-logs", methods=["POST"])
 def sync_logs():
-    """同步日志：由 Vector 完成全流程（file_list 拉取+解压 -> content_to_s3 聚合写入目标 bucket）。
+    """同步日志：由 Vector 完成全流程（file_list 拉取+解压 -> 官方 aws_s3 按 key_prefix 模板分区写入目标 bucket）。
 
     Demo 仅生成 Vector 配置并执行 Vector，不包含任何拷贝业务逻辑。
 
@@ -1250,8 +1272,12 @@ def sync_logs():
         "region": "us-west-2",
         "max_keys": 10000,
         "max_file_bytes": 33554432,
-        "content_format": "text"
+        "content_format": "text",
+        "dest_aws_access_key_id": "...",
+        "dest_aws_secret_access_key": "...",
+        "dest_aws_session_token": "..."
     }
+    其中 dest_aws_* 可选；若提供则 sink 写入目标桶时使用该凭证，读取源桶仍用环境变量。
     B) 按前缀：
     {
         "source_bucket": "my-bucket",
@@ -1263,7 +1289,17 @@ def sync_logs():
         "region": "us-west-2",
         "max_keys": 10000
     }
-    region 可选，默认 "us-west-2"。结果写入 dest_bucket/dest_prefix（part-00001.txt 等）。
+        region 可选，默认 "us-west-2"。结果写入 dest_bucket/dest_prefix 下，按 component/hour_partition 分区。
+    timeout_secs 可选，默认 3600：Vector 子进程最长运行时间，超时会被终止。多组件/大时间范围请适当调大。
+
+    凭证：读取源 bucket 使用**环境变量**中的 AWS 凭证（启动 demo 时 export 的账号）；写入目标 bucket 可使用请求体中的
+    dest_aws_access_key_id、dest_aws_secret_access_key、dest_aws_session_token（可选）指定独立账号，便于“只读源 + 可写目标”分离。
+
+    Vector 日志：每次执行后 stdout/stderr 会写入 CONFIG_DIR/{task_id}_sync_logs.log（默认 /tmp/vector-tasks/）。
+    响应里会返回 vector_log_path。若任务显示成功但目标桶里没有文件，请查看该日志：
+    - file_list 是否列到文件（关键词 file_list_files_found_total、list_files_at）
+    - 源路径是否正确（raw_logs 为 diagnosis/data/{cluster_id}/merged-logs/{YYYYMMDDHH}/{component}/*.log）
+    - aws_s3 是否有 template_failed 等（缺少 component/hour_partition 时事件会被丢弃）
     """
     try:
         data = request.json or {}
@@ -1282,6 +1318,11 @@ def sync_logs():
         region = data.get("region", "us-west-2")
         max_file_bytes = data.get("max_file_bytes", 32 * 1024 * 1024)
         content_format = data.get("content_format", "text")
+        raw_log_components = data.get("raw_log_components") or data.get("components")
+        timeout_secs = data.get("timeout_secs", 3600)
+        dest_aws_access_key_id = data.get("dest_aws_access_key_id")
+        dest_aws_secret_access_key = data.get("dest_aws_secret_access_key")
+        dest_aws_session_token = data.get("dest_aws_session_token")
 
         types = data.get("types")
         if types and len(types) > 0:
@@ -1327,14 +1368,19 @@ def sync_logs():
             max_keys=max_keys,
             cloud_provider=cloud_provider,
             region=region,
+            raw_log_components=raw_log_components,
             max_file_bytes=max_file_bytes,
             content_format=content_format,
+            dest_aws_access_key_id=dest_aws_access_key_id,
+            dest_aws_secret_access_key=dest_aws_secret_access_key,
+            dest_aws_session_token=dest_aws_session_token,
         )
 
-        ok, err = run_vector_sync(task_id, config_content, vector_binary, timeout_secs=300)
+        ok, err, vector_log_path = run_vector_sync(task_id, config_content, vector_binary, timeout_secs=timeout_secs)
         if not ok:
             return jsonify({"error": f"Vector 执行失败: {err}", "task_id": task_id}), 500
 
+        log_path_str = str(vector_log_path) if vector_log_path else None
         tasks[task_id] = {
             "task_id": task_id,
             "status": "completed",
@@ -1346,15 +1392,19 @@ def sync_logs():
                 "dest_bucket": dest_bucket,
                 "dest_prefix": dest_prefix.rstrip("/") + "/" if dest_prefix else "",
             },
-            "result": {"message": "由 Vector file_list + 官方 aws_s3 sink 完成，结果在目标 bucket 对应 prefix 下"},
+            "result": {
+                "message": "由 Vector file_list + 官方 aws_s3 sink（key_prefix 模板）完成，结果在目标 bucket 按 component/hour_partition 分区",
+                "vector_log_path": log_path_str,
+            },
         }
 
         return jsonify({
-            "message": "同步完成（Vector file_list 拉取解压 + 官方 aws_s3 sink 写入目标）",
+            "message": "同步完成（Vector file_list 拉取解压 + 官方 aws_s3 key_prefix 模板按组件/时间分区写入目标）",
             "task_id": task_id,
             "status": "completed",
             "dest_bucket": dest_bucket,
             "dest_prefix": dest_prefix.rstrip("/") + "/" if dest_prefix else "",
+            "vector_log_path": log_path_str,
         }), 200
     except ValueError as e:
         return jsonify({"error": str(e)}), 400

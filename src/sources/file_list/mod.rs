@@ -46,6 +46,8 @@ pub struct FileListConfig {
 
     /// Data types to list (paths are fixed in code). Values: raw_logs, slowlog, sql_statement, top_sql, conprof.
     pub types: Option<Vec<String>>,
+    /// For raw_logs only: component subdirs under merged-logs/{YYYYMMDDHH}/ (e.g. tidb, loki, operator). Default when unset: ["tidb"].
+    pub raw_log_components: Option<Vec<String>>,
 
     /// Explicit prefix (legacy / when types is not set). If set with pattern, used as single prefix list.
     pub prefix: Option<String>,
@@ -133,6 +135,7 @@ impl GenerateConfig for FileListConfig {
             project_id: Some("1372813089209061633".to_string()),
             conprof_org_id: None,
             types: Some(vec!["raw_logs".to_string(), "conprof".to_string()]),
+            raw_log_components: None,
             prefix: None,
             pattern: None,
             time_range_start: Some("2026-01-08T00:00:00Z".to_string()),
@@ -208,6 +211,7 @@ impl SourceConfig for FileListConfig {
                 &type_kinds,
                 time_range_start,
                 time_range_end,
+                self.raw_log_components.as_deref(),
             )?;
             Some(requests)
         } else {
@@ -285,6 +289,7 @@ mod tests {
             project_id: None,
             conprof_org_id: None,
             types: None,
+            raw_log_components: None,
             prefix: Some("path/".to_string()),
             pattern: None,
             time_range_start: None,
@@ -309,6 +314,7 @@ mod tests {
             project_id: None,
             conprof_org_id: None,
             types: None,
+            raw_log_components: None,
             prefix: None,
             pattern: None,
             time_range_start: None,

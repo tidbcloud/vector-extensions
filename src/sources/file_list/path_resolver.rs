@@ -63,15 +63,25 @@ pub struct TopSqlListRequest {
     pub list_prefix: String,
 }
 
-/// Resolved request: either list files (prefix+pattern) or list delta tables.
+/// When raw_log_components is not set: discover components by listing each hour prefix at runtime.
+#[derive(Debug, Clone)]
+pub struct RawLogsDiscoverRequest {
+    /// One prefix per hour, e.g. "diagnosis/data/o11y/merged-logs/2026020411/"
+    pub hour_prefixes: Vec<String>,
+}
+
+/// Resolved request: either list files (prefix+pattern), list delta tables, or discover raw_log components.
 #[derive(Debug, Clone)]
 pub enum ListRequest {
     FileList(FileListRequest),
     DeltaTable(DeltaTableRequest),
     TopSql(TopSqlListRequest),
+    /// Raw_logs with components to be discovered by listing each hour prefix (when raw_log_components not specified).
+    RawLogsDiscover(RawLogsDiscoverRequest),
 }
 
 /// Resolve list requests for the given types, cluster_id, project_id, and time range.
+/// When types contains raw_logs: if `raw_log_components` is set (non-empty), use those; otherwise emit RawLogsDiscover so the runtime lists each hour prefix to discover component subdirs (all components).
 pub fn resolve_requests(
     cluster_id: &str,
     project_id: Option<&str>,
@@ -79,6 +89,7 @@ pub fn resolve_requests(
     types: &[DataTypeKind],
     time_start: Option<DateTime<Utc>>,
     time_end: Option<DateTime<Utc>>,
+    raw_log_components: Option<&[String]>,
 ) -> vector::Result<Vec<ListRequest>> {
     let mut out = Vec::new();
 
@@ -91,25 +102,37 @@ pub fn resolve_requests(
                         return Err("raw_logs requires start_time and end_time".into());
                     }
                 };
-                // Hourly partitions: YYYYMMDDHH
-                for dt in hourly_range(start, end) {
-                    let part = format!(
-                        "{:04}{:02}{:02}{:02}",
-                        dt.year(),
-                        dt.month(),
-                        dt.day(),
-                        dt.hour()
-                    );
-                    let prefix = format!(
-                        "diagnosis/data/{}/merged-logs/{}/tidb/",
-                        cluster_id, part
-                    );
-                    out.push(ListRequest::FileList(FileListRequest {
-                        prefix,
-                        pattern: Some("*.log".to_string()),
-                        skip_time_filter: true, // hourly partition already encodes time; S3 last_modified often later
-                    }));
+                let hour_prefixes: Vec<String> = hourly_range(start, end)
+                    .map(|dt| {
+                        let part = format!(
+                            "{:04}{:02}{:02}{:02}",
+                            dt.year(),
+                            dt.month(),
+                            dt.day(),
+                            dt.hour()
+                        );
+                        format!("diagnosis/data/{}/merged-logs/{}/", cluster_id, part)
+                    })
+                    .collect();
+
+                if let Some(c) = raw_log_components {
+                    if !c.is_empty() {
+                        for comp in c {
+                            for prefix in &hour_prefixes {
+                                out.push(ListRequest::FileList(FileListRequest {
+                                    prefix: format!("{}{}/", prefix, comp),
+                                    pattern: Some("*.log".to_string()),
+                                    skip_time_filter: true,
+                                }));
+                            }
+                        }
+                        continue;
+                    }
                 }
+                // Not specified => discover components by list at runtime
+                out.push(ListRequest::RawLogsDiscover(RawLogsDiscoverRequest {
+                    hour_prefixes,
+                }));
             }
 
             DataTypeKind::Slowlog => {
@@ -204,6 +227,7 @@ mod tests {
             &[DataTypeKind::RawLogs],
             None,
             None,
+            None,
         );
         assert!(r.is_err());
     }
@@ -215,6 +239,7 @@ mod tests {
             None,
             None,
             &[DataTypeKind::Slowlog],
+            None,
             None,
             None,
         );
@@ -236,6 +261,7 @@ mod tests {
             &[DataTypeKind::Conprof],
             Some(start),
             Some(end),
+            None,
         )
         .unwrap();
         assert_eq!(r.len(), 1);
@@ -266,13 +292,44 @@ mod tests {
             &[DataTypeKind::RawLogs],
             Some(start),
             Some(end),
+            None,
         )
         .unwrap();
-        assert_eq!(r.len(), 3); // 00, 01, 02
+        assert_eq!(r.len(), 1);
+        match &r[0] {
+            ListRequest::RawLogsDiscover(d) => {
+                assert_eq!(d.hour_prefixes.len(), 3); // 00, 01, 02
+                assert!(d.hour_prefixes[0].contains("2026010800"));
+                assert!(d.hour_prefixes[0].contains("diagnosis/data/10324983984131567830/merged-logs/"));
+            }
+            _ => panic!("expected RawLogsDiscover when raw_log_components not set"),
+        }
+    }
+
+    #[test]
+    fn test_raw_logs_with_explicit_components() {
+        let start = DateTime::parse_from_rfc3339("2026-01-08T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = DateTime::parse_from_rfc3339("2026-01-08T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let comps = vec!["loki".to_string(), "operator".to_string()];
+        let r = resolve_requests(
+            "10324983984131567830",
+            None,
+            None,
+            &[DataTypeKind::RawLogs],
+            Some(start),
+            Some(end),
+            Some(&comps),
+        )
+        .unwrap();
+        assert_eq!(r.len(), 2 * 2); // 2 hours × 2 components
         match &r[0] {
             ListRequest::FileList(f) => {
+                assert!(f.prefix.contains("loki"));
                 assert!(f.prefix.contains("2026010800"));
-                assert!(f.prefix.contains("diagnosis/data/10324983984131567830/merged-logs/"));
             }
             _ => panic!("expected FileList"),
         }
@@ -285,6 +342,7 @@ mod tests {
             Some("1372813089209061633"),
             None,
             &[DataTypeKind::TopSql],
+            None,
             None,
             None,
         )

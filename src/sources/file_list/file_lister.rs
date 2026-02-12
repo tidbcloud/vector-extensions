@@ -189,6 +189,9 @@ impl FileLister {
         }
 
         info!("Found {} files matching criteria", files.len());
+        for f in &files {
+            info!(file_path = %f.path, file_size = f.size, "listed file");
+        }
         Ok(files)
     }
 
@@ -264,6 +267,23 @@ impl FileLister {
         let mut out: Vec<_> = instances.into_iter().collect();
         out.sort();
         Ok(out)
+    }
+
+    /// List immediate subdirectory names under `prefix` (e.g. prefix "diagnosis/data/o11y/merged-logs/2026020411/"
+    /// returns ["loki", "operator", "tidb", ...]). Uses list_with_delimiter to get common prefixes, then takes the last path segment of each.
+    pub async fn list_subdir_names(&self, prefix: &str) -> vector::Result<Vec<String>> {
+        let prefix_path = ObjectStorePath::from(prefix.trim_end_matches('/'));
+        let result = self.object_store.list_with_delimiter(Some(&prefix_path)).await?;
+        let mut names: Vec<String> = result
+            .common_prefixes
+            .iter()
+            .filter_map(|p| {
+                let s = p.to_string();
+                s.trim_end_matches('/').split('/').last().map(|seg| seg.to_string())
+            })
+            .collect();
+        names.sort();
+        Ok(names)
     }
 
     /// Gzip magic bytes: 1f 8b (RFC 1952).

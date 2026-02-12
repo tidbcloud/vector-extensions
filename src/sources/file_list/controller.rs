@@ -13,6 +13,17 @@ use vector_lib::event::{Event, LogEvent, Value as LogValue};
 use crate::sources::file_list::file_lister::{FileLister, FileMetadata};
 use crate::sources::file_list::path_resolver::ListRequest;
 
+/// Parse raw_logs prefix "diagnosis/data/.../merged-logs/{YYYYMMDDHH}/{component}/" to (hour_partition, component).
+fn parse_raw_logs_prefix(prefix: &str) -> Option<(String, String)> {
+    let prefix = prefix.trim_end_matches('/');
+    let parts: Vec<&str> = prefix.split('/').collect();
+    // .../merged-logs/2026020411/loki => need merged-logs, then 10-digit, then component
+    let merged_pos = parts.iter().position(|p| *p == "merged-logs")?;
+    let hour = parts.get(merged_pos + 1).filter(|s| s.len() == 10 && s.chars().all(|c| c.is_ascii_digit()))?;
+    let component = parts.get(merged_pos + 2)?;
+    Some((hour.to_string(), component.to_string()))
+}
+
 pub struct Controller {
     file_lister: Arc<FileLister>,
     list_requests: Option<Vec<ListRequest>>,
@@ -118,21 +129,13 @@ impl Controller {
         info!("FileList Controller starting (data types mode)...");
 
         loop {
-            let events = match self.collect_events_by_requests().await {
-                Ok(ev) => ev,
-                Err(e) => {
-                    error!("Error listing: {}", e);
-                    if self.poll_interval.is_none() {
-                        break;
-                    }
-                    sleep(self.poll_interval.unwrap_or_default()).await;
-                    continue;
+            if let Err(e) = self.collect_events_by_requests().await {
+                error!("Error listing: {}", e);
+                if self.poll_interval.is_none() {
+                    break;
                 }
-            };
-            if !events.is_empty() {
-                if let Err(e) = self.out.send_batch(events).await {
-                    error!("Failed to send events: {}", e);
-                }
+                sleep(self.poll_interval.unwrap_or_default()).await;
+                continue;
             }
             if self.poll_interval.is_none() {
                 break;
@@ -202,25 +205,33 @@ impl Controller {
         Ok((self.poll_interval.is_some(), events))
     }
 
-    async fn collect_events_by_requests(&self) -> vector::Result<Vec<Event>> {
+    /// Collect events by processing each list request and send each batch to the sink immediately.
+    /// This ensures all components (e.g. loki, operator, o11ydiagnosis-deltalake) get flushed to the
+    /// sink incrementally, avoiding only the first component being written if the process is killed.
+    async fn collect_events_by_requests(&mut self) -> vector::Result<()> {
         let requests = self
             .list_requests
             .as_ref()
             .ok_or("list_requests is None")?;
-        let mut all_events = Vec::new();
 
         for req in requests {
+            let mut batch = Vec::new();
             match req {
                 ListRequest::FileList(f) => {
                     let files = self
                         .file_lister
                         .list_files_at(&f.prefix, f.pattern.as_deref(), f.skip_time_filter)
                         .await?;
+                    let partition = parse_raw_logs_prefix(&f.prefix);
                     let n = files.len();
                     for file in &files {
                         let mut log_event = LogEvent::default();
                         log_event.insert("file_path", LogValue::Bytes(file.path.clone().into()));
                         log_event.insert("data_type", LogValue::Bytes(Bytes::from_static(b"file")));
+                        if let Some((ref hour, ref comp)) = partition {
+                            log_event.insert("hour_partition", LogValue::Bytes(hour.clone().into()));
+                            log_event.insert("component", LogValue::Bytes(comp.clone().into()));
+                        }
                         if self.emit_metadata {
                             log_event.insert("file_size", LogValue::Integer(file.size as i64));
                             log_event.insert(
@@ -245,7 +256,7 @@ impl Controller {
                             "@timestamp",
                             LogValue::Bytes(Utc::now().to_rfc3339().into()),
                         );
-                        all_events.push(Event::Log(log_event));
+                        batch.push(Event::Log(log_event));
                     }
                     counter!("file_list_files_found_total").increment(n as u64);
                 }
@@ -267,7 +278,7 @@ impl Controller {
                             "@timestamp",
                             LogValue::Bytes(Utc::now().to_rfc3339().into()),
                         );
-                        all_events.push(Event::Log(log_event));
+                        batch.push(Event::Log(log_event));
                     }
                     counter!("file_list_files_found_total").increment(n as u64);
                 }
@@ -289,14 +300,72 @@ impl Controller {
                             "@timestamp",
                             LogValue::Bytes(Utc::now().to_rfc3339().into()),
                         );
-                        all_events.push(Event::Log(log_event));
+                        batch.push(Event::Log(log_event));
                     }
                     counter!("file_list_files_found_total").increment(n as u64);
                 }
+                ListRequest::RawLogsDiscover(d) => {
+                    for hour_prefix in &d.hour_prefixes {
+                        let hour_partition = hour_prefix
+                            .trim_end_matches('/')
+                            .split('/')
+                            .last()
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let components = self.file_lister.list_subdir_names(hour_prefix).await?;
+                        for comp in &components {
+                            let prefix = format!("{}{}/", hour_prefix, comp);
+                            let files = self
+                                .file_lister
+                                .list_files_at(&prefix, Some("*.log"), true)
+                                .await?;
+                            let n = files.len();
+                            for file in &files {
+                                let mut log_event = LogEvent::default();
+                                log_event.insert("file_path", LogValue::Bytes(file.path.clone().into()));
+                                log_event.insert("data_type", LogValue::Bytes(Bytes::from_static(b"file")));
+                                log_event.insert("hour_partition", LogValue::Bytes(hour_partition.clone().into()));
+                                log_event.insert("component", LogValue::Bytes(comp.clone().into()));
+                                if self.emit_metadata {
+                                    log_event.insert("file_size", LogValue::Integer(file.size as i64));
+                                    log_event.insert(
+                                        "last_modified",
+                                        LogValue::Bytes(file.last_modified.to_rfc3339().into()),
+                                    );
+                                    log_event.insert("bucket", LogValue::Bytes(file.bucket.clone().into()));
+                                    log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
+                                }
+                                if self.emit_content {
+                                    match self.file_lister.get_file_bytes(&file.path, self.decompress_gzip).await {
+                                        Ok(content) => {
+                                            let msg = String::from_utf8_lossy(&content).into_owned();
+                                            log_event.insert("message", LogValue::Bytes(msg.into()));
+                                        }
+                                        Err(e) => {
+                                            error!("file_list: failed to get content for {}: {}", file.path, e);
+                                        }
+                                    }
+                                }
+                                log_event.insert(
+                                    "@timestamp",
+                                    LogValue::Bytes(Utc::now().to_rfc3339().into()),
+                                );
+                                batch.push(Event::Log(log_event));
+                            }
+                            counter!("file_list_files_found_total").increment(n as u64);
+                            if !batch.is_empty() {
+                                self.out.send_batch(std::mem::take(&mut batch)).await?;
+                            }
+                        }
+                    }
+                }
+            }
+            if !batch.is_empty() {
+                self.out.send_batch(batch).await?;
             }
         }
 
-        Ok(all_events)
+        Ok(())
     }
 
     fn emit_file_events_to_vec(&self, files: &[FileMetadata]) -> vector::Result<Vec<Event>> {

@@ -217,6 +217,8 @@ emit_metadata = true
 
 - **`decompress_gzip`** (optional, default: true): When `emit_content` is true, decompress before emitting if either (1) path ends with `.gz` or `.log.gz`, or (2) content starts with gzip magic bytes (`1f 8b`), so misnamed or extension-less gzip data is still decompressed.
 
+- **`raw_log_components`** (optional, for raw_logs only): Component subdirs under `merged-logs/{YYYYMMDDHH}/` (e.g. `tidb`, `loki`, `operator`). **When not set = discover at runtime**: for each hour prefix we list with delimiter to get immediate subdir names (all components that actually exist in the bucket). Set explicitly to sync only a subset.
+
 ## Usage Examples
 
 ### Example 1: Raw logs + Conprof (types-based, paths in code)
