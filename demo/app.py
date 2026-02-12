@@ -29,11 +29,13 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import psutil
 import toml
+import boto3
+from botocore.exceptions import ClientError
 
 app = Flask(__name__)
 CORS(app)
@@ -309,6 +311,149 @@ def generate_vector_config(
     
     # Convert to TOML string
     return toml.dumps(config)
+
+
+def generate_sync_logs_vector_config(
+    task_id: str,
+    source_bucket: str,
+    dest_bucket: str,
+    dest_prefix: str,
+    *,
+    cluster_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    types: Optional[List[str]] = None,
+    source_prefix: Optional[str] = None,
+    pattern: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    max_keys: int = 10000,
+    cloud_provider: str = "aws",
+    region: Optional[str] = "us-west-2",
+    max_file_bytes: int = 32 * 1024 * 1024,
+    content_format: str = "text",
+) -> str:
+    """生成用于同步日志文件的 Vector 配置。
+
+    全流程在 Vector 内完成：file_list 拉取并解压文件，官方 aws_s3 sink 按 batch 聚合写入目标 bucket。
+    Demo 仅生成配置并启动 Vector，不包含任何拷贝业务逻辑。
+
+    支持两种模式：
+    1) types 模式：传入 cluster_id, project_id, types (如 ["raw_logs"]), start_time, end_time
+    2) 前缀模式：传入 source_prefix，可选 pattern 和 start_time/end_time
+    """
+    endpoint = f"s3://{source_bucket}"
+    data_dir = Path(f"/tmp/vector-data/{task_id}")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    file_list_source = {
+        "type": "file_list",
+        "endpoint": endpoint,
+        "cloud_provider": cloud_provider,
+        "max_keys": max_keys,
+        "poll_interval_secs": 0,  # one-shot
+        "emit_metadata": True,
+        "emit_content": True,
+        "decompress_gzip": True,
+    }
+    if region:
+        file_list_source["region"] = region
+
+    if types and len(types) > 0:
+        file_list_source["cluster_id"] = cluster_id
+        if project_id:
+            file_list_source["project_id"] = project_id
+        file_list_source["types"] = types
+        if start_time:
+            file_list_source["start_time"] = start_time
+        if end_time:
+            file_list_source["end_time"] = end_time
+    else:
+        if not source_prefix:
+            raise ValueError("sync_logs: 请提供 source_prefix 或 types")
+        file_list_source["prefix"] = source_prefix.rstrip("/") + "/"
+        if pattern:
+            file_list_source["pattern"] = pattern
+        if start_time:
+            file_list_source["time_range_start"] = start_time
+        if end_time:
+            file_list_source["time_range_end"] = end_time
+
+    dest_prefix_normalized = dest_prefix.rstrip("/") + "/" if dest_prefix else ""
+
+    # 使用官方 aws_s3 sink：encoding 用 message 字段，batch 控制每对象大小，默认 gzip 压缩上传省容量
+    sink_encoding = "text" if content_format == "text" else "json"
+    aws_s3_sink = {
+        "type": "aws_s3",
+        "inputs": ["file_list"],
+        "bucket": dest_bucket,
+        "key_prefix": dest_prefix_normalized,
+        "encoding": {"codec": sink_encoding},
+        "batch": {"max_bytes": max_file_bytes},
+        "compression": "gzip",
+    }
+    if region:
+        aws_s3_sink["region"] = region
+
+    config = {
+        "data_dir": str(data_dir),
+        "api": {"enabled": True, "address": "127.0.0.1:0"},
+        "sources": {"file_list": file_list_source},
+        "sinks": {"to_s3": aws_s3_sink},
+    }
+    return toml.dumps(config)
+
+
+def run_vector_sync(
+    task_id: str,
+    config_content: str,
+    vector_binary: str,
+    timeout_secs: int = 300,
+    env_extra: Optional[Dict[str, str]] = None,
+) -> Tuple[bool, Optional[str]]:
+    """同步执行 Vector，等待退出。返回 (成功, 错误信息)。"""
+    config_file = CONFIG_DIR / f"{task_id}_sync_logs.toml"
+    config_file.write_text(config_content)
+    env = os.environ.copy()
+    if env_extra:
+        env.update(env_extra)
+    env["TASK_ID"] = task_id
+    cmd = [vector_binary, "--config", str(config_file)]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_secs,
+            env=env,
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "")[:500]
+            return False, err or f"Vector exited with code {result.returncode}"
+        return True, None
+    except subprocess.TimeoutExpired:
+        return False, f"Vector 执行超时 ({timeout_secs}s)"
+    except Exception as e:
+        return False, str(e)
+
+
+def parse_file_list_output(output_path: Path) -> List[str]:
+    """从 file_list 的 file sink 输出（JSONL）中解析出 file_path 列表。"""
+    if not output_path.exists():
+        return []
+    keys = []
+    for line in output_path.read_text().strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            # file_list 事件字段：file_path 为 bucket 内相对路径
+            path = obj.get("file_path") or obj.get("full_path")
+            if path:
+                keys.append(path)
+        except json.JSONDecodeError:
+            continue
+    return keys
 
 
 def start_vector_process(
@@ -921,6 +1066,416 @@ def list_tasks():
     return jsonify({
         "tasks": list(tasks.values())
     })
+
+
+def list_s3_files_with_boto3(
+    bucket: str,
+    prefix: str,
+    pattern: Optional[str] = None,
+    time_range_start: Optional[str] = None,
+    time_range_end: Optional[str] = None,
+    max_keys: int = 10000,
+) -> List[Dict[str, any]]:
+    """List files from S3 bucket using boto3 with filtering
+    
+    Returns list of file metadata dictionaries.
+    """
+    s3_client = boto3.client('s3')
+    
+    files = []
+    paginator = s3_client.get_paginator('list_objects_v2')
+    
+    # Parse time range
+    start_dt = None
+    end_dt = None
+    if time_range_start:
+        try:
+            start_dt = datetime.fromisoformat(time_range_start.replace('Z', '+00:00'))
+        except:
+            pass
+    if time_range_end:
+        try:
+            end_dt = datetime.fromisoformat(time_range_end.replace('Z', '+00:00'))
+        except:
+            pass
+    
+    # Compile pattern if provided
+    import re
+    pattern_regex = None
+    if pattern:
+        # Convert glob pattern to regex
+        regex_str = pattern.replace('*', '.*').replace('?', '.')
+        regex_str = regex_str.replace('{YYYYMMDDHH}', r'\d{10}')
+        pattern_regex = re.compile(f'^{regex_str}$')
+    
+    try:
+        page_iterator = paginator.paginate(
+            Bucket=bucket,
+            Prefix=prefix,
+            MaxKeys=1000  # S3 API limit per page
+        )
+        
+        for page in page_iterator:
+            if 'Contents' not in page:
+                continue
+                
+            for obj in page['Contents']:
+                key = obj['Key']
+                last_modified = obj['LastModified']
+                size = obj['Size']
+                
+                # Filter by time range
+                if start_dt and last_modified < start_dt:
+                    continue
+                if end_dt and last_modified > end_dt:
+                    continue
+                
+                # Filter by pattern
+                if pattern_regex and not pattern_regex.search(key):
+                    continue
+                
+                files.append({
+                    "key": key,
+                    "size": size,
+                    "last_modified": last_modified.isoformat(),
+                })
+                
+                if len(files) >= max_keys:
+                    break
+            
+            if len(files) >= max_keys:
+                break
+                
+    except ClientError as e:
+        raise Exception(f"Failed to list S3 files: {str(e)}")
+    
+    return files
+
+
+def copy_s3_files_with_boto3(
+    source_bucket: str,
+    source_keys: List[str],
+    dest_bucket: str,
+    dest_prefix: str,
+    source_prefix: Optional[str] = None,
+) -> Dict[str, any]:
+    """Copy files from source S3 bucket to destination using boto3
+    
+    Args:
+        source_bucket: Source S3 bucket name
+        source_keys: List of source S3 keys to copy
+        dest_bucket: Destination S3 bucket name
+        dest_prefix: Destination prefix (files will be copied under this prefix)
+        source_prefix: Optional source prefix to remove from keys when building dest path
+    
+    Returns:
+        Dict with copy results: {"copied": count, "failed": count, "errors": [...]}
+    """
+    s3_client = boto3.client('s3')
+    
+    copied = 0
+    failed = 0
+    errors = []
+    
+    dest_prefix = dest_prefix.rstrip('/')
+    if source_prefix:
+        source_prefix = source_prefix.rstrip('/')
+    
+    for source_key in source_keys:
+        try:
+            # Remove leading slash if present
+            source_key = source_key.lstrip('/')
+            
+            # Build destination key
+            # If source_prefix is provided, remove it from source_key to get relative path
+            if source_prefix and source_key.startswith(source_prefix):
+                relative_path = source_key[len(source_prefix):].lstrip('/')
+                dest_key = f"{dest_prefix}/{relative_path}" if relative_path else dest_prefix
+            else:
+                # Use full source key under dest_prefix
+                dest_key = f"{dest_prefix}/{source_key}"
+            
+            # Copy object (server-side copy, no data transfer through our server)
+            copy_source = {
+                'Bucket': source_bucket,
+                'Key': source_key
+            }
+            
+            s3_client.copy_object(
+                CopySource=copy_source,
+                Bucket=dest_bucket,
+                Key=dest_key
+            )
+            
+            copied += 1
+            if copied % 100 == 0:
+                print(f"[S3 Copy] Progress: {copied}/{len(source_keys)} files copied...")
+            else:
+                print(f"[S3 Copy] ✓ Copied s3://{source_bucket}/{source_key} -> s3://{dest_bucket}/{dest_key}")
+            
+        except ClientError as e:
+            failed += 1
+            error_msg = f"Failed to copy {source_key}: {str(e)}"
+            errors.append(error_msg)
+            print(f"[S3 Copy] ❌ {error_msg}")
+        except Exception as e:
+            failed += 1
+            error_msg = f"Unexpected error copying {source_key}: {str(e)}"
+            errors.append(error_msg)
+            print(f"[S3 Copy] ❌ {error_msg}")
+    
+    return {
+        "copied": copied,
+        "failed": failed,
+        "errors": errors[:10]  # Limit to first 10 errors
+    }
+
+
+@app.route("/api/v1/sync-logs", methods=["POST"])
+def sync_logs():
+    """同步日志：由 Vector 完成全流程（file_list 拉取+解压 -> content_to_s3 聚合写入目标 bucket）。
+
+    Demo 仅生成 Vector 配置并执行 Vector，不包含任何拷贝业务逻辑。
+
+    请求体（二选一）：
+    A) 按类型（如 TiDB raw_logs）：
+    {
+        "source_bucket": "my-bucket",
+        "dest_bucket": "dest-bucket",
+        "dest_prefix": "backup/logs/",
+        "cluster_id": "10324983984131567830",
+        "project_id": "1372813089209061633",
+        "types": ["raw_logs"],
+        "time_range": { "start": "2026-01-08T00:00:00Z", "end": "2026-01-08T23:59:59Z" },
+        "region": "us-west-2",
+        "max_keys": 10000,
+        "max_file_bytes": 33554432,
+        "content_format": "text"
+    }
+    B) 按前缀：
+    {
+        "source_bucket": "my-bucket",
+        "source_prefix": "path/to/logs/",
+        "dest_bucket": "dest-bucket",
+        "dest_prefix": "backup/",
+        "pattern": "*.log.gz",
+        "time_range": { "start": "...", "end": "..." },
+        "region": "us-west-2",
+        "max_keys": 10000
+    }
+    region 可选，默认 "us-west-2"。结果写入 dest_bucket/dest_prefix（part-00001.txt 等）。
+    """
+    try:
+        data = request.json or {}
+        source_bucket = data.get("source_bucket")
+        dest_bucket = data.get("dest_bucket")
+        dest_prefix = data.get("dest_prefix", "")
+        if not source_bucket or not dest_bucket:
+            return jsonify({"error": "缺少 source_bucket 或 dest_bucket"}), 400
+
+        task_id = str(uuid.uuid4())
+        time_range = data.get("time_range") or {}
+        start_time = time_range.get("start")
+        end_time = time_range.get("end")
+        max_keys = data.get("max_keys", 10000)
+        cloud_provider = data.get("cloud_provider", "aws")
+        region = data.get("region", "us-west-2")
+        max_file_bytes = data.get("max_file_bytes", 32 * 1024 * 1024)
+        content_format = data.get("content_format", "text")
+
+        types = data.get("types")
+        if types and len(types) > 0:
+            cluster_id = data.get("cluster_id")
+            project_id = data.get("project_id")
+            if not cluster_id:
+                return jsonify({"error": "使用 types 时需提供 cluster_id"}), 400
+            if not start_time or not end_time:
+                return jsonify({"error": "使用 types（如 raw_logs）时需提供 time_range.start 与 time_range.end"}), 400
+            source_prefix = None
+            pattern = None
+        else:
+            source_prefix = data.get("source_prefix")
+            if not source_prefix:
+                return jsonify({"error": "请提供 source_prefix 或 types"}), 400
+            pattern = data.get("pattern")
+            cluster_id = project_id = None
+
+        vector_binary_path = Path(VECTOR_BINARY)
+        if not vector_binary_path.exists() or not os.access(vector_binary_path, os.X_OK):
+            project_root = Path(__file__).parent.parent
+            for name in ("debug", "release"):
+                candidate = project_root / "target" / name / "vector"
+                if candidate.exists() and os.access(candidate, os.X_OK):
+                    vector_binary_path = candidate
+                    break
+        if not vector_binary_path.exists() or not os.access(vector_binary_path, os.X_OK):
+            return jsonify({"error": "未找到 Vector 可执行文件，请先编译"}), 500
+        vector_binary = str(vector_binary_path.resolve())
+
+        config_content = generate_sync_logs_vector_config(
+            task_id=task_id,
+            source_bucket=source_bucket,
+            dest_bucket=dest_bucket,
+            dest_prefix=dest_prefix,
+            cluster_id=cluster_id,
+            project_id=project_id,
+            types=types,
+            source_prefix=source_prefix,
+            pattern=pattern,
+            start_time=start_time,
+            end_time=end_time,
+            max_keys=max_keys,
+            cloud_provider=cloud_provider,
+            region=region,
+            max_file_bytes=max_file_bytes,
+            content_format=content_format,
+        )
+
+        ok, err = run_vector_sync(task_id, config_content, vector_binary, timeout_secs=300)
+        if not ok:
+            return jsonify({"error": f"Vector 执行失败: {err}", "task_id": task_id}), 500
+
+        tasks[task_id] = {
+            "task_id": task_id,
+            "status": "completed",
+            "type": "sync_logs",
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "config": {
+                "source_bucket": source_bucket,
+                "dest_bucket": dest_bucket,
+                "dest_prefix": dest_prefix.rstrip("/") + "/" if dest_prefix else "",
+            },
+            "result": {"message": "由 Vector file_list + 官方 aws_s3 sink 完成，结果在目标 bucket 对应 prefix 下"},
+        }
+
+        return jsonify({
+            "message": "同步完成（Vector file_list 拉取解压 + 官方 aws_s3 sink 写入目标）",
+            "task_id": task_id,
+            "status": "completed",
+            "dest_bucket": dest_bucket,
+            "dest_prefix": dest_prefix.rstrip("/") + "/" if dest_prefix else "",
+        }), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v1/copy-files", methods=["POST"])
+def copy_files():
+    """Copy files from source S3 bucket to destination S3 bucket
+    
+    Request body:
+    {
+        "source_bucket": "my-source-bucket",
+        "source_prefix": "path/to/files/",
+        "dest_bucket": "my-dest-bucket",
+        "dest_prefix": "backup/",
+        "pattern": "{YYYYMMDDHH}/*.log",  # Optional
+        "time_range": {  # Optional
+            "start": "2026-01-08T00:00:00Z",
+            "end": "2026-01-08T23:59:59Z"
+        },
+        "max_keys": 10000  # Optional, default 10000
+    }
+    
+    This endpoint:
+    1. Uses boto3 to list files from source bucket
+    2. Uses boto3 to copy files to destination bucket
+    """
+    try:
+        data = request.json
+        
+        # Validate required fields
+        required_fields = ["source_bucket", "source_prefix", "dest_bucket", "dest_prefix"]
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        task_id = str(uuid.uuid4())
+        
+        # Extract optional parameters
+        pattern = data.get("pattern")
+        time_range = data.get("time_range")
+        time_range_start = None
+        time_range_end = None
+        if time_range:
+            time_range_start = time_range.get("start")
+            time_range_end = time_range.get("end")
+        max_keys = data.get("max_keys", 10000)
+        
+        print(f"[Copy Task {task_id}] Step 1: Listing files from s3://{data['source_bucket']}/{data['source_prefix']}...")
+        
+        # Step 1: List files using boto3 (more reliable than Vector for this use case)
+        file_list = list_s3_files_with_boto3(
+            bucket=data["source_bucket"],
+            prefix=data["source_prefix"],
+            pattern=pattern,
+            time_range_start=time_range_start,
+            time_range_end=time_range_end,
+            max_keys=max_keys,
+        )
+        
+        if not file_list:
+            return jsonify({
+                "message": "No files found matching criteria",
+                "task_id": task_id,
+                "files_found": 0,
+                "copied": 0
+            }), 200
+        
+        print(f"[Copy Task {task_id}] Found {len(file_list)} files, starting copy...")
+        
+        # Step 2: Copy files using boto3
+        source_keys = [f["key"] for f in file_list]
+        copy_result = copy_s3_files_with_boto3(
+            source_bucket=data["source_bucket"],
+            source_keys=source_keys,
+            dest_bucket=data["dest_bucket"],
+            dest_prefix=data["dest_prefix"],
+            source_prefix=data["source_prefix"],  # Preserve relative path structure
+        )
+        
+        # Store task info
+        tasks[task_id] = {
+            "task_id": task_id,
+            "status": "completed",
+            "type": "copy",
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "config": {
+                "source_bucket": data["source_bucket"],
+                "source_prefix": data["source_prefix"],
+                "dest_bucket": data["dest_bucket"],
+                "dest_prefix": data["dest_prefix"],
+            },
+            "result": {
+                "files_found": len(file_list),
+                "copied": copy_result["copied"],
+                "failed": copy_result["failed"],
+            }
+        }
+        
+        return jsonify({
+            "message": f"Copy task completed",
+            "task_id": task_id,
+            "status": "completed",
+            "files_found": len(file_list),
+            "copied": copy_result["copied"],
+            "failed": copy_result["failed"],
+            "errors": copy_result["errors"] if copy_result["failed"] > 0 else None
+        }), 200
+        
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "File listing timed out"}), 500
+    except Exception as e:
+        print(f"Error copying files: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
