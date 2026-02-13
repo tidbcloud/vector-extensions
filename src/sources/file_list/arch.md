@@ -270,31 +270,41 @@ start_time = "2026-01-08T00:00:00Z"
 end_time = "2026-01-08T23:59:59Z"
 ```
 
-### Example 3: Sync logs (download + decompress + aggregate to S3)
+### Example 3: Sync logs (download + decompress + write to local mysql)
 
-全流程在 Vector 内完成：file_list 拉取并解压，官方 aws_s3 sink 按 batch 写回 S3。
+全流程在 Vector 内完成：file_list 拉取并解压，写到本地mysql。
 
 ```toml
+[api]
+enabled = true
+address = "127.0.0.1:0"
+
 [sources.file_list]
 type = "file_list"
-endpoint = "s3://source-bucket"
+endpoint = "s3://o11y-prod-shared-us-west-2-staging"
 cloud_provider = "aws"
-cluster_id = "10324983984131567830"
-project_id = "1372813089209061633"
-types = ["raw_logs"]
-start_time = "2026-01-08T00:00:00Z"
-end_time = "2026-01-08T23:59:59Z"
+max_keys = 500
+poll_interval_secs = 0
+emit_metadata = true
 emit_content = true
+emit_per_line = true
 decompress_gzip = true
+line_parse_regexes = [ "level=(?P<level>\\S+)\\s+ts=(?P<log_timestamp>[^\\s]+)\\s+caller=(?P<logger>[^\\s]+)\\s+msg=\"(?P<message_body>[^\"]*)\"",]
+region = "us-west-2"
+cluster_id = "o11y"
+types = [ "raw_logs",]
+start_time = "2026-02-04T11:00:00Z"
+end_time = "2026-02-04T11:15:00Z"
+raw_log_components = [ "loki",]
 
-[sinks.to_s3]
-type = "aws_s3"
-inputs = ["file_list"]
-bucket = "dest-bucket"
-key_prefix = "backup/logs/"
-encoding = { codec = "text" }
-batch = { max_bytes = 33554432 }
-compression = "none"
+[sinks.tidb_sink]
+type = "tidb"
+inputs = [ "file_list",]
+connection_string = "mysql://root:root@localhost:3306/testdb"
+table = "parsed_logs"
+batch_size = 1000
+max_connections = 10
+connection_timeout = 30
 ```
 
 ### Example 4: Full pipeline (raw_logs with components → S3 by component/hour)

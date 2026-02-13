@@ -5,10 +5,10 @@
 #        3) 如需读 S3，请 export AWS 凭证
 #
 # 使用自定义解析 line_parse_regexes 匹配 Loki/Go logfmt 格式：
-#   level=info ts=2026-02-04T10:57:20.549Z caller=foo.go:123 msg="..."
-# 命名捕获与表列一致：level, log_timestamp, logger, message_body
+#   level=info ts=... caller=... [其他 key=value] msg="..."
+# caller 与 msg 之间可能有 index-store=... 等，用 .*? 允许中间任意内容；命名捕获与表列一致
 
-curl -s -m 120 -X POST http://127.0.0.1:8080/api/v1/sync-logs-to-mysql \
+curl -s -X POST http://127.0.0.1:8080/api/v1/sync-logs-to-mysql \
   -H "Content-Type: application/json" \
   -d '{
     "source_bucket": "o11y-prod-shared-us-west-2-staging",
@@ -18,11 +18,10 @@ curl -s -m 120 -X POST http://127.0.0.1:8080/api/v1/sync-logs-to-mysql \
     "raw_log_components": ["loki"],
     "parse_lines": true,
     "line_parse_regexes": [
-      "level=(?P<level>\\S+)\\s+ts=(?P<log_timestamp>[^\\s]+)\\s+caller=(?P<logger>[^\\s]+)\\s+msg=\"(?P<message_body>[^\"]*)\""
+      "level=(?P<level>\\S+)\\s+ts=(?P<log_timestamp>[^\\s]+)\\s+caller=(?P<logger>[^\\s]+).*?msg=\"(?P<message_body>[^\"]*)\""
     ],
     "mysql_connection": "mysql://root:root@localhost:3306/testdb",
     "mysql_table": "parsed_logs",
     "max_keys": 500,
-    "region": "us-west-2",
-    "timeout_secs": 120
+    "region": "us-west-2"
   }'
