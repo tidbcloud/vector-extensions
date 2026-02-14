@@ -557,7 +557,9 @@ def run_vector_sync(
     timeout_secs: int = 300,
     env_extra: Optional[Dict[str, str]] = None,
 ) -> Tuple[bool, Optional[str], Optional[Path]]:
-    """同步执行 Vector，等待退出。返回 (成功, 错误信息, Vector 日志文件路径)。"""
+    """同步执行 Vector，等待退出。返回 (成功, 错误信息, Vector 日志文件路径)。
+    日志实时写入 log_file，任务执行期间即可 tail -f 查看，无需等任务结束。
+    """
     config_file = CONFIG_DIR / f"{task_id}_sync_logs.toml"
     log_file = CONFIG_DIR / f"{task_id}_sync_logs.log"
     config_file.write_text(config_content)
@@ -567,27 +569,46 @@ def run_vector_sync(
     env["TASK_ID"] = task_id
     cmd = [vector_binary, "--config", str(config_file)]
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_secs,
-            env=env,
-        )
-        # 始终把 Vector 的 stdout/stderr 写入日志文件，便于排查“成功但桶里无文件”等问题
+        # 实时写入日志：Vector 的 stdout/stderr 直接写到文件，执行中即可 tail -f 查看
         with open(log_file, "w", encoding="utf-8") as f:
-            f.write("=== Vector stdout ===\n")
-            f.write(result.stdout or "")
-            f.write("\n=== Vector stderr ===\n")
-            f.write(result.stderr or "")
-        if result.returncode != 0:
-            err = (result.stderr or result.stdout or "")[:500]
-            return False, err or f"Vector exited with code {result.returncode}", log_file
+            f.write("=== Vector (stdout + stderr) ===\n")
+            f.flush()
+            proc = subprocess.Popen(
+                cmd,
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+            try:
+                proc.wait(timeout=timeout_secs)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                return False, f"Vector 执行超时 ({timeout_secs}s)", log_file
+        if proc.returncode != 0:
+            err = _read_tail(log_file, max_chars=500)
+            return False, err or f"Vector exited with code {proc.returncode}", log_file
         return True, None, log_file
-    except subprocess.TimeoutExpired:
-        return False, f"Vector 执行超时 ({timeout_secs}s)", None
     except Exception as e:
         return False, str(e), None
+
+
+def _read_tail(path: Path, max_chars: int = 500) -> str:
+    """Read up to max_chars from the end of the file (for error message)."""
+    if not path.exists():
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            if size <= max_chars:
+                f.seek(0)
+                return f.read()
+            f.seek(size - max_chars)
+            return f.read()
+    except Exception:
+        return ""
 
 
 def parse_file_list_output(output_path: Path) -> List[str]:

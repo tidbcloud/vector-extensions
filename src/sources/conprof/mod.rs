@@ -18,6 +18,39 @@ mod tools;
 pub mod topology;
 mod upstream;
 
+/// Topology discovery mode: PD+etcd (default) or Kubernetes pod labels (for quick rollback).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Configurable)]
+#[serde(rename_all = "lowercase")]
+pub enum TopologyMode {
+    /// Discover via PD API and etcd (TiDB/TiProxy from etcd, TiKV/TiFlash from PD stores).
+    #[default]
+    Pd,
+    /// Discover via Kubernetes: list pods with the configured component label and map label value to instance type.
+    K8s,
+}
+
+/// K8s topology config. Used when `topology_mode = "k8s"`.
+/// Which components to collect and which instance_type (profile) to use is fully configurable via `component_label_to_instance_type`.
+#[configurable_component]
+#[derive(Debug, Clone)]
+pub struct TopologyK8sConfig {
+    /// Label key used to read component from each pod (e.g. `pingcap.com/component` or `tags.tidbcloud.com/component`).
+    #[serde(default = "default_topology_k8s_component_label_key")]
+    pub component_label_key: String,
+
+    /// Namespace to list pods in. If unset, uses the pod's own namespace (from service account).
+    pub namespace: Option<String>,
+
+    /// Map: component label value -> instance_type. Only pods whose label value is a key in this map are collected; the value selects which profile config to use (e.g. `tidb`, `tikv`, `tikv_worker`, `coprocessor_worker`). Any label name is allowed as key.
+    /// Example: `"worker-tidb" = "tidb"`, `"tikv-worker" = "tikv_worker"`, `"coprocessor-worker" = "coprocessor_worker"`.
+    #[serde(default)]
+    pub component_label_to_instance_type: std::collections::HashMap<String, String>,
+}
+
+fn default_topology_k8s_component_label_key() -> String {
+    "pingcap.com/component".to_string()
+}
+
 /// PLACEHOLDER
 #[configurable_component(source("conprof"))]
 #[derive(Debug, Clone)]
@@ -27,6 +60,13 @@ pub struct ConprofConfig {
 
     /// PLACEHOLDER
     pub tls: Option<TlsConfig>,
+
+    /// How to discover instances to profile: `pd` (PD API + etcd) or `k8s` (Kubernetes pod labels). Use `k8s` for quick rollback when PD/etcd is unavailable.
+    #[serde(default)]
+    pub topology_mode: TopologyMode,
+
+    /// Required when `topology_mode = "k8s"`. Ignored otherwise.
+    pub topology_k8s: Option<TopologyK8sConfig>,
 
     /// PLACEHOLDER
     #[serde(default = "default_topology_fetch_interval")]
@@ -52,6 +92,28 @@ pub struct ComponentsProfileTypes {
     pub tiproxy: ProfileTypes,
     /// PLACEHOLDER
     pub lightning: ProfileTypes,
+    /// K8s label e.g. tikv-worker: profile config for this component.
+    #[serde(default = "default_tikv_worker_profile_types")]
+    pub tikv_worker: ProfileTypes,
+    /// K8s label e.g. coprocessor-worker: profile config for this component.
+    #[serde(default = "default_coprocessor_worker_profile_types")]
+    pub coprocessor_worker: ProfileTypes,
+}
+
+impl ComponentsProfileTypes {
+    /// Returns the profile types for the given instance type (e.g. which profiles to collect).
+    pub fn for_instance(&self, t: topology::InstanceType) -> ProfileTypes {
+        match t {
+            topology::InstanceType::PD => self.pd,
+            topology::InstanceType::TiDB => self.tidb,
+            topology::InstanceType::TiKV => self.tikv,
+            topology::InstanceType::TiFlash => self.tiflash,
+            topology::InstanceType::TiProxy => self.tiproxy,
+            topology::InstanceType::Lightning => self.lightning,
+            topology::InstanceType::TikvWorker => self.tikv_worker,
+            topology::InstanceType::CoprocessorWorker => self.coprocessor_worker,
+        }
+    }
 }
 
 /// PLACEHOLDER
@@ -59,8 +121,11 @@ pub struct ComponentsProfileTypes {
 pub struct ProfileTypes {
     /// PLACEHOLDER
     pub cpu: bool,
-    /// PLACEHOLDER
+    /// Collect heap via HTTP (pprof).
     pub heap: bool,
+    /// TiKV only: collect heap via perl+jeprof (jemalloc). Can be used with or without heap; typically one of heap or jeheap for TiKV.
+    #[serde(default)]
+    pub jeheap: bool,
     /// PLACEHOLDER
     pub mutex: bool,
     /// PLACEHOLDER
@@ -71,6 +136,14 @@ pub const fn default_topology_fetch_interval() -> f64 {
     30.0
 }
 
+pub const fn default_tikv_worker_profile_types() -> ProfileTypes {
+    default_tikv_profile_types()
+}
+
+pub const fn default_coprocessor_worker_profile_types() -> ProfileTypes {
+    default_tikv_profile_types()
+}
+
 pub const fn default_components_profile_types() -> ComponentsProfileTypes {
     ComponentsProfileTypes {
         pd: default_go_profile_types(),
@@ -79,6 +152,8 @@ pub const fn default_components_profile_types() -> ComponentsProfileTypes {
         tiflash: default_tiflash_profile_types(),
         tiproxy: default_go_profile_types(),
         lightning: default_go_profile_types(),
+        tikv_worker: default_tikv_worker_profile_types(),
+        coprocessor_worker: default_coprocessor_worker_profile_types(),
     }
 }
 
@@ -86,6 +161,7 @@ pub const fn default_go_profile_types() -> ProfileTypes {
     ProfileTypes {
         cpu: true,
         heap: true,
+        jeheap: false,
         mutex: true,
         goroutine: true,
     }
@@ -95,6 +171,7 @@ pub const fn default_tikv_profile_types() -> ProfileTypes {
     ProfileTypes {
         cpu: false,
         heap: true,
+        jeheap: false,
         mutex: false,
         goroutine: false,
     }
@@ -104,6 +181,7 @@ pub const fn default_tiflash_profile_types() -> ProfileTypes {
     ProfileTypes {
         cpu: false,
         heap: false,
+        jeheap: false,
         mutex: false,
         goroutine: false,
     }
@@ -114,6 +192,8 @@ impl GenerateConfig for ConprofConfig {
         toml::Value::try_from(Self {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
             components_profile_types: default_components_profile_types(),
         })
@@ -125,25 +205,71 @@ impl GenerateConfig for ConprofConfig {
 #[typetag::serde(name = "conprof")]
 impl SourceConfig for ConprofConfig {
     async fn build(&self, cx: SourceContext) -> vector::Result<Source> {
-        self.validate_tls()?;
+        self.validate()?;
 
         let pd_address = self.pd_address.clone();
         let tls = self.tls.clone();
+        let topology_mode = self.topology_mode;
+        let topology_k8s = self.topology_k8s.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
-        let enable_tikv_heap_profile = self.components_profile_types.tikv.heap;
+        let components_profile_types = self.components_profile_types;
+        let proxy = cx.proxy.clone();
+        let out = cx.out;
+        let shutdown = cx.shutdown;
         Ok(Box::pin(async move {
-            Controller::new(
-                pd_address,
+            let topo_fetcher = match topology_mode {
+                TopologyMode::Pd => {
+                    let f = match crate::sources::conprof::topology::fetch::TopologyFetcher::new(
+                        pd_address,
+                        tls.clone(),
+                        &proxy,
+                    )
+                    .await
+                    {
+                        Ok(x) => x,
+                        Err(e) => {
+                            error!(message = "Failed to create PD topology fetcher.", %e);
+                            return Err(());
+                        }
+                    };
+                    crate::sources::conprof::topology::fetch::TopologyFetcherKind::Pd(f)
+                }
+                TopologyMode::K8s => {
+                    let k8s_config = match topology_k8s {
+                        Some(c) => c,
+                        None => {
+                            error!(message = "topology_k8s is required when topology_mode = \"k8s\"");
+                            return Err(());
+                        }
+                    };
+                    let f = match crate::sources::conprof::topology::fetch::K8sTopologyFetcher::new(
+                        k8s_config,
+                    )
+                    .await
+                    {
+                        Ok(x) => x,
+                        Err(e) => {
+                            error!(message = "Failed to create K8s topology fetcher.", %e);
+                            return Err(());
+                        }
+                    };
+                    crate::sources::conprof::topology::fetch::TopologyFetcherKind::K8s(f)
+                }
+            };
+            let controller = match Controller::new_with_topo_fetcher(
+                topo_fetcher,
                 topology_fetch_interval,
-                enable_tikv_heap_profile,
+                components_profile_types,
                 tls,
-                &cx.proxy,
-                cx.out,
-            )
-            .await
-            .map_err(|error| error!(message = "Source failed.", %error))?
-            .run(cx.shutdown)
-            .await;
+                out,
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(message = "Failed to create controller.", %e);
+                    return Err(());
+                }
+            };
+            controller.run(shutdown).await;
             Ok(())
         }))
     }
@@ -162,6 +288,14 @@ impl SourceConfig for ConprofConfig {
 }
 
 impl ConprofConfig {
+    fn validate(&self) -> vector::Result<()> {
+        if self.topology_mode == TopologyMode::K8s && self.topology_k8s.is_none() {
+            return Err("topology_k8s is required when topology_mode = \"k8s\".".into());
+        }
+        self.validate_tls()?;
+        Ok(())
+    }
+
     fn validate_tls(&self) -> vector::Result<()> {
         if self.tls.is_none() {
             return Ok(());
@@ -214,8 +348,8 @@ mod tests {
     }
 
     #[test]
-    fn test_default_enable_tikv_heap_profile() {
-        assert_eq!(default_components_profile_types().tikv.heap, true);
+    fn test_default_components_profile_types_tikv_heap() {
+        assert!(default_components_profile_types().tikv.heap);
     }
 
     #[test]
@@ -223,6 +357,8 @@ mod tests {
         let config = ConprofConfig {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };
@@ -237,6 +373,8 @@ mod tests {
         let config = ConprofConfig {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };
@@ -248,6 +386,8 @@ mod tests {
         let config = ConprofConfig {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: None,
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };
@@ -259,6 +399,8 @@ mod tests {
         let config = ConprofConfig {
             pd_address: "127.0.0.1:2379".to_owned(),
             tls: Some(TlsConfig::default()),
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };
@@ -284,6 +426,8 @@ mod tests {
                 key_file: Some(key_file.clone()),
                 ..Default::default()
             }),
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };
@@ -304,6 +448,8 @@ mod tests {
                 key_file: None,
                 ..Default::default()
             }),
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };
@@ -328,6 +474,8 @@ mod tests {
                 key_file: None,
                 ..Default::default()
             }),
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };
@@ -348,6 +496,8 @@ mod tests {
                 key_file: Some(key_file),
                 ..Default::default()
             }),
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };
@@ -370,6 +520,8 @@ mod tests {
                 key_file: None,
                 ..Default::default()
             }),
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };
@@ -386,6 +538,8 @@ mod tests {
                 key_file: Some(PathBuf::from("/nonexistent/client.key")),
                 ..Default::default()
             }),
+            topology_mode: TopologyMode::Pd,
+            topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
         };

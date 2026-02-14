@@ -8,9 +8,10 @@ use vector_lib::{event::LogEvent, internal_event::InternalEvent, tls::TlsConfig}
 
 use crate::sources::conprof::{
     shutdown::ShutdownSubscriber,
-    tools::fetch_raw,
     topology::{Component, InstanceType},
+    ComponentsProfileTypes,
 };
+use crate::sources::conprof::tools::fetch_raw;
 use crate::utils::http::build_reqwest_client;
 
 pub struct ConprofSource {
@@ -22,9 +23,7 @@ pub struct ConprofSource {
 
     tls: Option<TlsConfig>,
     out: SourceSender,
-    // init_retry_delay: Duration,
-    // retry_delay: Duration,
-    enable_tikv_heap_profile: bool,
+    components_profile_types: ComponentsProfileTypes,
 }
 
 impl ConprofSource {
@@ -32,8 +31,7 @@ impl ConprofSource {
         component: Component,
         tls: Option<TlsConfig>,
         out: SourceSender,
-        // init_retry_delay: Duration,
-        enable_tikv_heap_profile: bool,
+        components_profile_types: ComponentsProfileTypes,
     ) -> Option<Self> {
         let client = match build_reqwest_client(tls.clone(), None, None).await {
             Ok(client) => client,
@@ -57,9 +55,7 @@ impl ConprofSource {
 
                 tls,
                 out,
-                // init_retry_delay,
-                // retry_delay: init_retry_delay,
-                enable_tikv_heap_profile,
+                components_profile_types,
             }),
             None => None,
         }
@@ -74,57 +70,62 @@ impl ConprofSource {
     }
 
     async fn run_loop(&mut self, mut shutdown: ShutdownSubscriber) {
+        let profile = self.components_profile_types.for_instance(self.instance_type);
         loop {
             let mut ts = Utc::now().timestamp();
             ts -= ts % 60;
             let next_minute_ts = ts + 60;
-            match self.instance_type {
-                InstanceType::TiDB
-                | InstanceType::PD
-                | InstanceType::TiProxy
-                | InstanceType::Lightning => {
-                    self.fetch_goroutine_impl(
-                        format!(
-                            "{}-{}-goroutine-{}",
-                            ts, self.instance_type, self.instance_b64
-                        ),
-                        shutdown.clone(),
-                    )
-                    .await;
-                    self.fetch_mutex_impl(
-                        format!("{}-{}-mutex-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
-                    self.fetch_heap_impl(
-                        format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
-                    self.fetch_cpu_impl(
-                        format!("{}-{}-cpu-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
-                }
-                InstanceType::TiKV => {
-                    self.fetch_cpu_impl(
-                        format!("{}-{}-cpu-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
-                    if self.enable_tikv_heap_profile {
-                        self.fetch_heap_with_jeprof_impl(
-                            format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
-                            shutdown.clone(),
-                        )
-                        .await;
-                    }
-                }
-                InstanceType::TiFlash => {
-                    // do nothing.
-                }
-            };
+            // Fully driven by components_profile_types; no hardcoded instance_type branches
+            if profile.goroutine {
+                self.fetch_goroutine_impl(
+                    format!(
+                        "{}-{}-goroutine-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
+            if profile.mutex {
+                self.fetch_mutex_impl(
+                    format!(
+                        "{}-{}-mutex-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
+            if profile.heap {
+                self.fetch_heap_impl(
+                    format!(
+                        "{}-{}-heap-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
+            if profile.jeheap {
+                self.fetch_heap_with_jeprof_impl(
+                    format!(
+                        "{}-{}-heap-jeprof-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
+            if profile.cpu {
+                self.fetch_cpu_impl(
+                    format!(
+                        "{}-{}-cpu-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
             let now = Utc::now().timestamp();
             if now < next_minute_ts {
                 tokio::select! {
@@ -420,7 +421,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        ).await;
         // Should succeed
         assert!(result.is_some());
     }
@@ -436,7 +442,12 @@ mod tests {
             secondary_port: 8123,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        ).await;
         // TiFlash has conprof address, so it should succeed
         assert!(result.is_some());
         let source = result.unwrap();
@@ -454,7 +465,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -484,7 +500,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -512,7 +533,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -540,7 +566,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -568,7 +599,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -592,7 +628,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -620,7 +661,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -648,7 +694,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -676,7 +727,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -704,7 +760,12 @@ mod tests {
             secondary_port: 2379,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        ).await;
         assert!(result.is_some());
     }
 
@@ -718,7 +779,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        ).await;
         assert!(result.is_some());
     }
 
@@ -732,7 +798,12 @@ mod tests {
             secondary_port: 8286,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        ).await;
         assert!(result.is_some());
     }
 
@@ -746,11 +817,16 @@ mod tests {
             secondary_port: 20180,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, true).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        ).await;
         assert!(result.is_some());
         let source = result.unwrap();
         assert_eq!(source.instance_type, InstanceType::TiKV);
-        assert!(source.enable_tikv_heap_profile);
+        assert!(source.components_profile_types.tikv.heap);
     }
 
     #[tokio::test]
@@ -763,7 +839,12 @@ mod tests {
             secondary_port: 20180,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, true)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -795,7 +876,12 @@ mod tests {
             secondary_port: 2379,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -834,7 +920,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -867,7 +958,12 @@ mod tests {
             secondary_port: 8286,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -900,7 +996,12 @@ mod tests {
             secondary_port: 20180,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -933,7 +1034,12 @@ mod tests {
             secondary_port: 20180,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, true)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -966,7 +1072,12 @@ mod tests {
             secondary_port: 8123,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -992,7 +1103,12 @@ mod tests {
             secondary_port: 10080,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+        )
             .await
             .unwrap();
 
@@ -1196,20 +1312,21 @@ mod tests {
 
     #[test]
     fn test_tikv_heap_profile_conditional() {
-        // Test TiKV heap profile conditional logic
-        let enable_tikv_heap_profile_true = true;
-        let enable_tikv_heap_profile_false = false;
+        // Test TiKV heap profile conditional logic (driven by components_profile_types.tikv.heap)
+        let profile_types = crate::sources::conprof::default_components_profile_types();
+        assert!(profile_types.tikv.heap, "default has TiKV heap enabled");
 
-        if enable_tikv_heap_profile_true {
-            // Should fetch heap with jeprof
-            assert!(true, "Should fetch when enabled");
-        }
-
-        if enable_tikv_heap_profile_false {
-            assert!(false, "Should not fetch when disabled");
-        } else {
-            assert!(true, "Should skip when disabled");
-        }
+        let profile_types_no_heap = crate::sources::conprof::ComponentsProfileTypes {
+            tikv: crate::sources::conprof::ProfileTypes {
+                cpu: false,
+                heap: false,
+                jeheap: false,
+                mutex: false,
+                goroutine: false,
+            },
+            ..profile_types
+        };
+        assert!(!profile_types_no_heap.tikv.heap, "can disable TiKV heap via config");
     }
 
     #[test]
@@ -1414,20 +1531,11 @@ mod tests {
     }
 
     #[test]
-    fn test_enable_tikv_heap_profile_flag() {
-        // Test enable_tikv_heap_profile flag logic
-        let enable_true = true;
-        let enable_false = false;
-
-        // Test conditional logic
-        if enable_true {
-            // Should fetch heap with jeprof
-            assert!(enable_true);
-        }
-
-        if !enable_false {
-            // Should not fetch heap with jeprof
-            assert!(!enable_false);
-        }
+    fn test_tikv_heap_profile_driven_by_components_profile_types() {
+        // Default TiKV: heap=true (HTTP), jeheap=false. For jeprof use heap: false, jeheap: true.
+        let types = crate::sources::conprof::default_components_profile_types();
+        assert!(types.tikv.heap);
+        assert!(!types.tikv.jeheap);
+        assert!(!types.tikv.cpu);
     }
 }

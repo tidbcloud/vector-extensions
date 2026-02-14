@@ -1,3 +1,5 @@
+mod k8s;
+pub use k8s::K8sTopologyFetcher;
 mod lightning;
 mod models;
 mod pd;
@@ -55,6 +57,8 @@ pub enum FetchError {
     FetchTiProxyTopology { source: tiproxy::FetchError },
     #[snafu(display("Failed to fetch lightning topology: {}", source))]
     FetchLightningTopology { source: lightning::FetchError },
+    #[snafu(display("Failed to fetch K8s topology: {}", source))]
+    FetchK8sTopology { source: k8s::FetchError },
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -80,6 +84,28 @@ impl TopologyFetcherTrait for TopologyFetcher {
         components: &mut HashSet<Component>,
     ) -> Result<(), FetchError> {
         self.get_up_components_impl(components).await
+    }
+}
+
+/// Topology fetcher kind: PD+etcd or K8s labels. Used to switch mode for quick rollback.
+pub enum TopologyFetcherKind {
+    Pd(TopologyFetcher),
+    K8s(k8s::K8sTopologyFetcher),
+}
+
+#[async_trait::async_trait]
+impl TopologyFetcherTrait for TopologyFetcherKind {
+    async fn get_up_components(
+        &mut self,
+        components: &mut HashSet<Component>,
+    ) -> Result<(), FetchError> {
+        match self {
+            TopologyFetcherKind::Pd(f) => f.get_up_components(components).await,
+            TopologyFetcherKind::K8s(f) => f
+                .get_up_components(components)
+                .await
+                .context(FetchK8sTopologySnafu),
+        }
     }
 }
 
@@ -666,7 +692,7 @@ mod tests {
         use crate::sources::conprof::topology::{Component, InstanceType};
         let mut components = HashSet::new();
 
-        // Add all component types
+        // Add all component types (including K8s-only TikvWorker, CoprocessorWorker)
         let component_types = vec![
             InstanceType::PD,
             InstanceType::TiDB,
@@ -674,18 +700,27 @@ mod tests {
             InstanceType::TiFlash,
             InstanceType::TiProxy,
             InstanceType::Lightning,
+            InstanceType::TikvWorker,
+            InstanceType::CoprocessorWorker,
         ];
 
         for instance_type in component_types {
+            let (primary, secondary) = match instance_type {
+                InstanceType::PD => (2379, 2379),
+                InstanceType::TiKV | InstanceType::TikvWorker | InstanceType::CoprocessorWorker => {
+                    (20160, 20180)
+                }
+                _ => (4000, 10080),
+            };
             components.insert(Component {
                 instance_type,
                 host: "127.0.0.1".to_string(),
-                primary_port: 4000,
-                secondary_port: 10080,
+                primary_port: primary,
+                secondary_port: secondary,
             });
         }
 
-        assert_eq!(components.len(), 6);
+        assert_eq!(components.len(), 8);
     }
 
     #[test]

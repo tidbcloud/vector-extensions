@@ -45,14 +45,47 @@ Vector Pipeline
 pub struct ConprofConfig {
     pub pd_address: String,
     pub tls: Option<TlsConfig>,
+    pub topology_mode: TopologyMode,       // "pd" | "k8s", default "pd"
+    pub topology_k8s: Option<TopologyK8sConfig>,  // required when topology_mode = "k8s"
     pub topology_fetch_interval_seconds: f64,
     pub components_profile_types: ComponentsProfileTypes,
 }
 ```
 
+### Topology mode (quick rollback)
+
+- **`topology_mode = "pd"`** (default): Discover instances via PD API and etcd (TiDB/TiProxy from etcd, TiKV/TiFlash from PD stores). Requires `pd_address` and optional `tls`.
+- **`topology_mode = "k8s"`**: Discover instances via Kubernetes pod labels. Use when PD/etcd is unavailable or for quick rollback. Requires `topology_k8s`; `pd_address` is not used for topology in this mode.
+
+When `topology_mode = "k8s"`, which components to collect and which profile config to use are **fully configurable** via `topology_k8s.component_label_to_instance_type`: keys = component label values to collect (any name), values = instance type for profile lookup (`pd`, `tidb`, `tikv`, `tiflash`, `tiproxy`, `lightning`, `tikv_worker`, `coprocessor_worker`).
+
+```toml
+[sources.conprof]
+type = "conprof"
+pd_address = "db-pd:2379"
+topology_mode = "k8s"
+topology_k8s.component_label_key = "pingcap.com/component"
+# topology_k8s.namespace = "mynamespace"   # optional
+
+# Which components to collect and which profile to use (key = label value, value = instance_type)
+[topology_k8s.component_label_to_instance_type]
+"pd" = "pd"
+"tidb" = "tidb"
+"worker-tidb" = "tidb"
+"tikv" = "tikv"
+"tikv-worker" = "tikv_worker"
+"coprocessor-worker" = "coprocessor_worker"
+"write-tiflash" = "tiflash"
+"tiproxy" = "tiproxy"
+# Any other label name is allowed; value must be one of the instance types above.
+```
+
+- Only pods whose component label value is a **key** in this map are collected.
+- The **value** selects which profile config to use (`components_profile_types.tidb`, `.tikv_worker`, etc.). Separate config for `tikv`, `tikv_worker`, `coprocessor_worker` lets you enable/disable or tune profiles per component.
+
 ### ComponentsProfileTypes
 
-Configures profiling types for each component:
+Configures which profile types to collect per component. There is no separate "enable TiKV heap" flag; use `components_profile_types.tikv.heap` (and the same pattern for other components). Adding or changing profile types for any component is done via config only.
 
 ```rust
 pub struct ComponentsProfileTypes {
@@ -60,15 +93,20 @@ pub struct ComponentsProfileTypes {
     pub tidb: ProfileTypes,
     pub tikv: ProfileTypes,
     pub tiflash: ProfileTypes,
+    pub tiproxy: ProfileTypes,
+    pub lightning: ProfileTypes,
+    pub tikv_worker: ProfileTypes,      // K8s e.g. "tikv-worker"
+    pub coprocessor_worker: ProfileTypes, // K8s e.g. "coprocessor-worker"
 }
 ```
 
 ### Profile Types
 
-- **CPU**: CPU profiling
-- **Memory**: Memory profiling
-- **Heap**: Heap profiling
-- **Goroutine**: Goroutine profiling
+- **cpu**: CPU profiling
+- **heap**: Collect heap via HTTP (pprof).
+- **jeheap**: TiKV only. Collect heap via perl+jeprof (jemalloc). Can enable with or without heap; typically TiKV uses either heap (HTTP) or jeheap (jeprof).
+- **mutex**: Mutex profiling
+- **goroutine**: Goroutine profiling
 
 ## Data Collection Process
 
