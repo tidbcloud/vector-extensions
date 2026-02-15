@@ -49,6 +49,7 @@ pub struct ConprofConfig {
     pub topology_k8s: Option<TopologyK8sConfig>,  // required when topology_mode = "k8s"
     pub topology_fetch_interval_seconds: f64,
     pub components_profile_types: ComponentsProfileTypes,
+    pub jeprof_fetch_mode: JeprofFetchMode,  // "perl" (default) | "rust", for jeheap fetch only
 }
 ```
 
@@ -104,7 +105,7 @@ pub struct ComponentsProfileTypes {
 
 - **cpu**: CPU profiling
 - **heap**: Collect heap via HTTP (pprof).
-- **jeheap**: TiKV only. Collect heap via perl+jeprof (jemalloc). Can enable with or without heap; typically TiKV uses either heap (HTTP) or jeheap (jeprof).
+- **jeheap**: TiKV only. Collect heap via jeprof (jemalloc). Fetch mode: `jeprof_fetch_mode` = `perl` (default) or `rust`. Both produce the same output (symbol header + raw heap) for offline `jeprof --text`; **rust** does not require Perl/curl. See `doc/conprof-jeprof-fetch-modes.md`.
 - **mutex**: Mutex profiling
 - **goroutine**: Goroutine profiling
 

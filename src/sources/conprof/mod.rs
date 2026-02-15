@@ -18,6 +18,24 @@ mod tools;
 pub mod topology;
 mod upstream;
 
+/// How to fetch jeprof/jeheap raw profile.
+///
+/// **Perl** (default): runs `jeprof --raw <url>`. Full flow: GET heap → parse PCs → POST
+/// `/pprof/symbol` → output symbol header + raw heap body. Self-contained for offline analysis.
+///
+/// **Rust**: same behavior as Perl but in-process (no Perl/curl): GET heap → parse text format
+/// for PCs → POST symbol, GET cmdline → build same symbol header + raw body. Output is
+/// compatible with `jeprof --raw`. See `doc/conprof-jeprof-fetch-modes.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Configurable)]
+#[serde(rename_all = "lowercase")]
+pub enum JeprofFetchMode {
+    /// Full jeprof --raw flow: symbol fetch + header + raw heap (original behavior).
+    #[default]
+    Perl,
+    /// Same as Perl output: symbol header + raw heap (no Perl dependency).
+    Rust,
+}
+
 /// Topology discovery mode: PD+etcd (default) or Kubernetes pod labels (for quick rollback).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Configurable)]
 #[serde(rename_all = "lowercase")]
@@ -75,6 +93,10 @@ pub struct ConprofConfig {
     /// PLACEHOLDER
     #[serde(default = "default_components_profile_types")]
     pub components_profile_types: ComponentsProfileTypes,
+
+    /// How to fetch jeprof/jeheap: `perl` (default, full symbolized --raw format) or `rust` (raw heap body only). See `doc/conprof-jeprof-fetch-modes.md`.
+    #[serde(default)]
+    pub jeprof_fetch_mode: JeprofFetchMode,
 }
 
 /// PLACEHOLDER
@@ -196,6 +218,7 @@ impl GenerateConfig for ConprofConfig {
             topology_k8s: None,
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
             components_profile_types: default_components_profile_types(),
+            jeprof_fetch_mode: JeprofFetchMode::Perl,
         })
         .unwrap()
     }
@@ -213,6 +236,7 @@ impl SourceConfig for ConprofConfig {
         let topology_k8s = self.topology_k8s.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
         let components_profile_types = self.components_profile_types;
+        let jeprof_fetch_mode = self.jeprof_fetch_mode;
         let proxy = cx.proxy.clone();
         let out = cx.out;
         let shutdown = cx.shutdown;
@@ -260,6 +284,7 @@ impl SourceConfig for ConprofConfig {
                 topo_fetcher,
                 topology_fetch_interval,
                 components_profile_types,
+                jeprof_fetch_mode,
                 tls,
                 out,
             ) {
