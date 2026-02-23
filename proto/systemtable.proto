@@ -16,7 +16,7 @@ syntax = "proto3";
 
 package systemtable.v1;
 
-option go_package = "github.com/pingcap/tidb/pkg/systemtable/proto/v1;systemtablev1";
+option go_package = "github.com/pingcap/tidb/pkg/util/stmtsummary/v3/proto/v1;stmtsummaryv3proto";
 
 // ============================================================================
 // SYSTEM TABLE API - FINAL VERSION
@@ -60,6 +60,31 @@ service SystemTablePullService {
 
     // Get table schema (for tools/debugging)
     rpc DescribeTable(DescribeTableRequest) returns (DescribeTableResponse);
+}
+
+// ============================================================================
+// PUSH TARGET CONTROL SERVICE - Vector→TiDB registration
+// ============================================================================
+//
+// This service enables Vector to proactively discover and register with TiDB,
+// eliminating the need for TiDB to configure Vector's endpoint manually.
+//
+// Flow:
+// 1. Vector discovers TiDB instances via PD
+// 2. Vector calls RegisterPushTarget on each TiDB's status port
+// 3. TiDB creates/updates its pusher with the provided endpoint and config
+// 4. TiDB starts pushing statement data to Vector
+//
+service StatementPushControl {
+    // Vector calls this to register itself as a push target for TiDB.
+    // TiDB will create or update its pusher to send statements to Vector.
+    rpc RegisterPushTarget(RegisterPushTargetRequest) returns (RegisterPushTargetResponse);
+
+    // Vector calls this to unregister (e.g., during shutdown).
+    rpc UnregisterPushTarget(UnregisterPushTargetRequest) returns (UnregisterPushTargetResponse);
+
+    // Vector calls this to update configuration on registered TiDB instances.
+    rpc UpdatePushConfig(UpdatePushConfigRequest) returns (UpdatePushConfigResponse);
 }
 
 // ============================================================================
@@ -135,6 +160,133 @@ message PingResponse {
     // Server capabilities
     repeated string supported_tables = 10;
     string protocol_version = 11;
+
+    // Collection configuration pushed from Vector to TiDB
+    optional CollectionConfig collection_config = 20;
+}
+
+// Vector pushes this configuration to TiDB during Ping handshake.
+// TiDB applies these settings to its local aggregator and pusher.
+message CollectionConfig {
+    // Aggregation window duration in seconds
+    int32 aggregation_window_secs = 1;
+
+    // Whether to collect internal queries
+    bool enable_internal_query = 2;
+
+    // Push parameters
+    int32 push_batch_size = 10;
+    int32 push_interval_secs = 11;
+    int32 push_timeout_secs = 12;
+
+    // Memory protection
+    int32 max_digests_per_window = 20;
+    int64 max_memory_bytes = 21;
+    string eviction_strategy = 22;       // "drop_new" / "evict_lru" / "aggregate_to_other"
+    double early_flush_threshold = 23;
+
+    // Retry strategy
+    int32 retry_max_attempts = 30;
+    int32 retry_initial_delay_ms = 31;
+    int32 retry_max_delay_ms = 32;
+
+    // Dynamic extended metric definitions
+    repeated ExtendedMetricDef extended_metrics = 40;
+
+    // Configuration version for change detection
+    int64 config_version = 50;
+}
+
+// Definition for an extended metric that TiDB should collect.
+message ExtendedMetricDef {
+    string name = 1;
+    string type = 2;        // "int64" / "double" / "string" / "bool"
+    string source = 3;      // Metric source path
+    bool enabled = 4;
+    string aggregation = 5; // "sum" / "max" / "min" / "avg"
+}
+
+// ============================================================================
+// PUSH TARGET CONTROL MESSAGES
+// ============================================================================
+
+// Request from Vector to TiDB to register as a push target.
+message RegisterPushTargetRequest {
+    // Vector's gRPC endpoint where TiDB should push statements
+    string vector_endpoint = 1;
+
+    // Collection configuration that TiDB should use
+    CollectionConfig collection_config = 2;
+
+    // Vector identification
+    string vector_instance_id = 3;
+    string vector_version = 4;
+
+    // TLS configuration for TiDB to connect to Vector
+    optional TLSConfig tls_config = 5;
+}
+
+// Response from TiDB to Vector's registration request.
+message RegisterPushTargetResponse {
+    bool success = 1;
+    string message = 2;
+
+    // The configuration that TiDB applied (may include defaults)
+    CollectionConfig applied_config = 3;
+
+    // Timestamp when registration was applied
+    int64 registered_at_ms = 4;
+}
+
+// Request from Vector to TiDB to unregister as a push target.
+message UnregisterPushTargetRequest {
+    // Vector's instance ID (to identify which Vector is unregistering)
+    string vector_instance_id = 1;
+
+    // Whether to stop pushing immediately (vs. finish pending batches)
+    bool stop_immediately = 2;
+}
+
+// Response from TiDB to Vector's unregistration request.
+message UnregisterPushTargetResponse {
+    bool success = 1;
+    string message = 2;
+
+    // Timestamp when unregistration was completed
+    int64 unregistered_at_ms = 3;
+}
+
+// Request from Vector to update configuration on TiDB.
+message UpdatePushConfigRequest {
+    // New collection configuration
+    CollectionConfig collection_config = 1;
+
+    // Vector's instance ID (for verification)
+    string vector_instance_id = 2;
+}
+
+// Response from TiDB to Vector's config update request.
+message UpdatePushConfigResponse {
+    bool success = 1;
+    string message = 2;
+
+    // The configuration that TiDB applied
+    CollectionConfig applied_config = 3;
+
+    // Timestamp when config was updated
+    int64 updated_at_ms = 4;
+}
+
+// TLS configuration for Vector←→TiDB connections.
+message TLSConfig {
+    bool enabled = 1;
+
+    // For TiDB client connecting to Vector
+    string ca_file = 10;           // CA certificate for verifying Vector
+    string server_name = 11;       // Expected server name for Vector
+
+    // For Vector server (Vector provides these to TiDB)
+    bytes ca_cert = 20;            // CA certificate (if using mTLS)
 }
 
 // ============================================================================

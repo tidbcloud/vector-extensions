@@ -187,8 +187,9 @@ impl Controller {
     /// Update collectors based on new TiDB components
     async fn update_collectors(&mut self, new_components: HashSet<Component>) {
         let tables = self.tables.clone();
+        let default_method = self.collection_method.clone();
 
-        // Separate tables into cluster-level and instance-level
+        // Separate tables into cluster-level and instance-level, then by collection method
         let (cluster_tables, instance_tables): (Vec<_>, Vec<_>) = tables
             .iter()
             .partition(|table| table.source_table.starts_with("CLUSTER_"));
@@ -199,44 +200,79 @@ impl Controller {
             instance_tables.len()
         );
 
-        // For cluster-level tables, only start one collector on the primary instance
+        // Helper to get collection method for a table
+        let get_method = |table: &TableConfig| -> CollectionMethod {
+            if let Some(ref method) = table.collection_method {
+                CollectionMethod::from_string(method).unwrap_or_else(|_| default_method.clone())
+            } else {
+                default_method.clone()
+            }
+        };
+
+        // For cluster-level tables, group by collection method
+        // Each group gets its own collector
         if !cluster_tables.is_empty() {
             let primary_component = new_components.iter().next().cloned();
             if let Some(primary_component) = primary_component {
-                let cluster_collector_key = format!(
-                    "{}:{}_cluster",
-                    primary_component.host, primary_component.primary_port
-                );
-                if !self.running_collectors.contains_key(&cluster_collector_key) {
-                    let cluster_tables_owned: Vec<TableConfig> =
-                        cluster_tables.into_iter().cloned().collect();
-                    self.start_collector_with_tables(
-                        &primary_component,
-                        cluster_tables_owned,
-                        &cluster_collector_key,
-                    )
-                    .await;
+                // Group cluster tables by collection method
+                let mut method_groups: HashMap<CollectionMethod, Vec<TableConfig>> = HashMap::new();
+                for table in &cluster_tables {
+                    let method = get_method(table);
+                    method_groups
+                        .entry(method)
+                        .or_insert_with(Vec::new)
+                        .push((*table).clone());
+                }
+
+                for (method, group_tables) in method_groups {
+                    let collector_key = format!(
+                        "{}:{}_cluster_{}",
+                        primary_component.host,
+                        primary_component.primary_port,
+                        method.to_string()
+                    );
+                    if !self.running_collectors.contains_key(&collector_key) {
+                        self.start_collector_with_tables(
+                            &primary_component,
+                            group_tables,
+                            &collector_key,
+                            method,
+                        )
+                        .await;
+                    }
                 }
             }
         }
 
-        // For instance-level tables, start collectors on all instances
+        // For instance-level tables, group by collection method
         if !instance_tables.is_empty() {
+            // Group instance tables by collection method
+            let mut method_groups: HashMap<CollectionMethod, Vec<TableConfig>> = HashMap::new();
+            for table in &instance_tables {
+                let method = get_method(table);
+                method_groups
+                    .entry(method)
+                    .or_insert_with(Vec::new)
+                    .push((*table).clone());
+            }
+
             for component in &new_components {
-                let instance_collector_key =
-                    format!("{}:{}_instance", component.host, component.primary_port);
-                if !self
-                    .running_collectors
-                    .contains_key(&instance_collector_key)
-                {
-                    let instance_tables_owned: Vec<TableConfig> =
-                        instance_tables.iter().map(|t| (*t).clone()).collect();
-                    self.start_collector_with_tables(
-                        component,
-                        instance_tables_owned,
-                        &instance_collector_key,
-                    )
-                    .await;
+                for (method, group_tables) in &method_groups {
+                    let collector_key = format!(
+                        "{}:{}_instance_{}",
+                        component.host,
+                        component.primary_port,
+                        method.to_string()
+                    );
+                    if !self.running_collectors.contains_key(&collector_key) {
+                        self.start_collector_with_tables(
+                            component,
+                            group_tables.clone(),
+                            &collector_key,
+                            method.clone(),
+                        )
+                        .await;
+                    }
                 }
             }
         }
@@ -266,9 +302,10 @@ impl Controller {
         component: &Component,
         tables: Vec<TableConfig>,
         collector_key: &str,
+        collection_method: CollectionMethod,
     ) {
         // Validate table compatibility with collection method
-        if self.collection_method == CollectionMethod::Coprocessor {
+        if collection_method == CollectionMethod::Coprocessor {
             for table in &tables {
                 if !table.source_table.starts_with("CLUSTER_") {
                     error!(
@@ -283,7 +320,7 @@ impl Controller {
         let table_names: Vec<&str> = tables.iter().map(|t| t.source_table.as_str()).collect();
         info!(
             "Starting {} collector for {}:{} with {} tables: [{}]",
-            self.collection_method,
+            collection_method,
             component.host,
             component.primary_port,
             tables.len(),
@@ -292,7 +329,7 @@ impl Controller {
 
         // Create collector config based on collection method
         let instance = format!("{}:{}", component.host, component.primary_port);
-        let collector_config = match self.collection_method {
+        let collector_config = match collection_method {
             CollectionMethod::Coprocessor => {
                 // For coprocessor method, use coprocessor-specific config
                 // Pass database TLS config for HTTP schema fetching
@@ -334,11 +371,43 @@ impl Controller {
                     self.database_config.tls.clone(),
                 )
             }
+            CollectionMethod::GrpcPush => {
+                // For gRPC push, use secondary_port (status port) for registration
+                // and start a gRPC server on Vector side to receive push data
+                CollectorConfig::for_grpc_push(
+                    instance,
+                    component.host.clone(),
+                    component.secondary_port,
+                    "0.0.0.0".to_string(),
+                    50051, // Vector gRPC port
+                    Some(30),
+                    Some(3),
+                )
+            }
+            CollectionMethod::GrpcPull => {
+                // For gRPC pull, use secondary_port (status port) to query TiDB
+                // via SystemTablePullService::QueryTable
+                CollectorConfig::for_grpc_pull(
+                    instance,
+                    component.host.clone(),
+                    component.secondary_port,
+                    Some(30),
+                    Some(3),
+                )
+            }
         };
 
         // Create collector using simplified factory
-        match CollectorFactory::create_collector(self.collection_method.clone(), collector_config) {
+        // For GrpcPush, we need to pass the first table's config
+        let table_config_for_v3 = tables.first().cloned();
+        match CollectorFactory::create_collector(collection_method.clone(), collector_config, table_config_for_v3) {
             Ok(mut collector) => {
+                // For GrpcPush, set output sender so it can send events directly
+                // instead of relying on the fixed-interval loop
+                if collection_method == CollectionMethod::GrpcPush {
+                    collector.set_output_sender(self.out.clone());
+                }
+
                 // Initialize the collector
                 if let Err(e) = collector.initialize().await {
                     error!(
@@ -357,7 +426,29 @@ impl Controller {
                 // Store table count before moving tables
                 let table_count = tables.len();
 
-                // Start the collector task
+                // For GrpcPush, the collector handles sending internally via set_output_sender
+                // No need to start the run_collector_task loop
+                if collection_method == CollectionMethod::GrpcPush {
+                    info!(
+                        "GrpcPush collector running in push mode - handles sending internally"
+                    );
+                    // Keep the task alive indefinitely (collector runs until shutdown)
+                    let task = CollectorTask {
+                        handle: tokio::spawn(async move {
+                            // Wait forever - the collector's background tasks will keep running
+                            loop {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                            }
+                        }),
+                        collector_type: self.collection_method.clone(),
+                        table_count,
+                    };
+                    self.running_collectors
+                        .insert(collector_key.to_string(), task);
+                    return;
+                }
+
+                // Start the collector task for pull-based collectors
                 let out_clone = self.out.clone();
                 let collection_config_clone = self.collection_config.clone();
                 let handle = tokio::spawn(async move {
@@ -564,12 +655,14 @@ impl Controller {
                     match collector.collect_table_data(table).await {
                         Ok(result) => {
                             let row_count = result.data.len();
-                            info!(
-                                "Collected {} rows from table {} using {}",
-                                row_count,
-                                table.source_table,
-                                collector.collection_method()
-                            );
+                            if row_count > 0 {
+                                info!(
+                                    "Collected {} rows from table {} using {}",
+                                    row_count,
+                                    table.source_table,
+                                    collector.collection_method()
+                                );
+                            }
                             for row_data in &result.data {
                                 let event = create_event_from_result(&result, row_data.clone());
                                 if let Err(e) = out.send_event(event).await {

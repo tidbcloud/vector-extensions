@@ -157,6 +157,10 @@ pub struct TableConfig {
     /// Whether this table is enabled
     #[configurable(derived)]
     pub enabled: bool,
+    /// Collection method for this table (grpc_push, grpc_pull, coprocessor, sql, http_api)
+    /// If not specified, uses the global default
+    #[configurable(derived)]
+    pub collection_method: Option<String>,
 }
 
 /// Collection interval type
@@ -201,7 +205,7 @@ impl SystemTablesConfig {
                     return Err("missing field `database_name` in `sources.tidb_system_tables` (required for SQL collection method)".into());
                 }
             }
-            "coprocessor" | "http_api" | "custom_grpc" => {
+            "coprocessor" | "http_api" | "custom_grpc" | "grpc_push" | "grpc_pull" | "statement_v3" | "v3" | "v3_push" => {
                 // For coprocessor and other methods, database fields are optional
                 // These methods use gRPC/HTTP to communicate directly with TiKV/PD
                 info!(
@@ -210,7 +214,7 @@ impl SystemTablesConfig {
                 );
             }
             _ => {
-                return Err(format!("unsupported collection method: {}. Supported methods: sql, coprocessor, http_api, custom_grpc", self.collection_method).into());
+                return Err(format!("unsupported collection method: {}. Supported methods: sql, coprocessor, http_api, custom_grpc, grpc_push, grpc_pull", self.collection_method).into());
             }
         }
         Ok(())
@@ -356,6 +360,7 @@ impl GenerateConfig for SystemTablesConfig {
                 collection_interval: "short".to_owned(),
                 where_clause: Some("command != 'Sleep'".to_owned()),
                 enabled: true,
+                collection_method: None,
             }],
             pd_tls: None,
             database_tls: None,

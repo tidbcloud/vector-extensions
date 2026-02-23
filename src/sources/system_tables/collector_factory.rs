@@ -1,17 +1,19 @@
 use crate::sources::system_tables::data_collector::{
     CollectionError, CollectionMethod, CollectorConfig, DataCollector,
 };
-
-use crate::sources::system_tables::collectors::{CoprocessorCollector, SqlCollector};
+use crate::sources::system_tables::TableConfig;
+use crate::sources::system_tables::collectors::{CoprocessorCollector, SqlCollector, GrpcPushCollector, GrpcPullCollector};
 
 /// Simplified collector factory - direct creation without complex abstractions
 pub struct CollectorFactory;
 
 impl CollectorFactory {
     /// Create a collector instance based on method and config
+    /// table_config is required for GrpcPush and GrpcPull
     pub fn create_collector(
         method: CollectionMethod,
         config: CollectorConfig,
+        table_config: Option<TableConfig>,
     ) -> Result<Box<dyn DataCollector>, CollectionError> {
         match method {
             CollectionMethod::Sql => {
@@ -20,6 +22,24 @@ impl CollectorFactory {
             }
             CollectionMethod::Coprocessor => {
                 let collector = CoprocessorCollector::new(config)?;
+                Ok(Box::new(collector))
+            }
+            CollectionMethod::GrpcPush => {
+                let table_cfg = table_config.ok_or_else(|| {
+                    CollectionError::ConfigurationError(
+                        "GrpcPush collector requires table_config".to_string(),
+                    )
+                })?;
+                let collector = GrpcPushCollector::new(config, table_cfg)?;
+                Ok(Box::new(collector))
+            }
+            CollectionMethod::GrpcPull => {
+                let table_cfg = table_config.ok_or_else(|| {
+                    CollectionError::ConfigurationError(
+                        "GrpcPull collector requires table_config".to_string(),
+                    )
+                })?;
+                let collector = GrpcPullCollector::new(config, table_cfg)?;
                 Ok(Box::new(collector))
             }
             CollectionMethod::HttpApi => Err(CollectionError::ConfigurationError(
@@ -51,7 +71,7 @@ mod tests {
         };
 
         let config = CollectorConfig::for_sql("test_sql".to_string(), database_config);
-        let result = CollectorFactory::create_collector(CollectionMethod::Sql, config);
+        let result = CollectorFactory::create_collector(CollectionMethod::Sql, config, None);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().collection_method(), CollectionMethod::Sql);
@@ -68,7 +88,7 @@ mod tests {
             None,
         );
 
-        let result = CollectorFactory::create_collector(CollectionMethod::Coprocessor, config);
+        let result = CollectorFactory::create_collector(CollectionMethod::Coprocessor, config, None);
 
         assert!(result.is_ok());
         assert_eq!(
@@ -88,7 +108,7 @@ mod tests {
         );
 
         assert!(
-            CollectorFactory::create_collector(CollectionMethod::HttpApi, http_config).is_err()
+            CollectorFactory::create_collector(CollectionMethod::HttpApi, http_config, None).is_err()
         );
 
         let grpc_config = CollectorConfig::for_http_api(
@@ -100,7 +120,7 @@ mod tests {
         );
 
         assert!(
-            CollectorFactory::create_collector(CollectionMethod::CustomGrpc, grpc_config).is_err()
+            CollectorFactory::create_collector(CollectionMethod::CustomGrpc, grpc_config, None).is_err()
         );
     }
 }

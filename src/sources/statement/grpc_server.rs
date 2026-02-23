@@ -34,7 +34,8 @@ pub mod proto {
 
 use proto::system_table_push_service_server::{SystemTablePushService, SystemTablePushServiceServer};
 use proto::{
-    BatchMetadata, PingRequest, PingResponse, PushResponse, Statement, StatementBatch,
+    BatchMetadata, CollectionConfig, ExtendedMetricDef, PingRequest, PingResponse, PushResponse,
+    Statement, StatementBatch,
 };
 
 /// Statement receiver handles incoming gRPC push requests from TiDB.
@@ -122,29 +123,31 @@ impl StatementReceiver {
         }
 
         // Check backpressure
-        {
+        // Note: MutexGuard must be dropped before any .await to satisfy Send bound.
+        let bp_action = {
             let mut bp = self.backpressure.lock().unwrap();
             let load = self.calculate_current_load();
-            let action = bp.update_load(load);
+            bp.update_load(load)
+        };
 
-            match action {
-                BackpressureAction::Reject => {
-                    self.health_checker.record_grpc_error();
-                    return Ok(PushResponse {
-                        success: false,
-                        message: format!("server under load (load: {:.2}), rejecting requests", load),
-                        received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
-                        accepted_count: 0,
-                        rejected_count: batch.statements.len() as i32,
-                        errors: vec!["server under load".to_string()],
-                    });
-                }
-                BackpressureAction::Throttle => {
-                    // Add a small delay to throttle the request
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                }
-                BackpressureAction::Accept => {}
+        match bp_action {
+            BackpressureAction::Reject => {
+                let load = self.calculate_current_load();
+                self.health_checker.record_grpc_error();
+                return Ok(PushResponse {
+                    success: false,
+                    message: format!("server under load (load: {:.2}), rejecting requests", load),
+                    received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    accepted_count: 0,
+                    rejected_count: batch.statements.len() as i32,
+                    errors: vec!["server under load".to_string()],
+                });
             }
+            BackpressureAction::Throttle => {
+                // Add a small delay to throttle the request
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            BackpressureAction::Accept => {}
         }
 
         self.push_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -260,7 +263,11 @@ impl StatementReceiver {
 
     /// Returns current metrics.
     pub fn metrics(&self) -> ReceiverMetrics {
-        self.health_check()
+        ReceiverMetrics {
+            statements_received: self.statements_received.load(std::sync::atomic::Ordering::Relaxed),
+            statements_stored: self.statements_stored.load(std::sync::atomic::Ordering::Relaxed),
+            push_requests: self.push_requests.load(std::sync::atomic::Ordering::Relaxed),
+        }
     }
 
     /// Returns health checker reference.
@@ -335,12 +342,31 @@ impl SystemTablePushService for StatementService {
         let req = request.into_inner();
         debug!("Ping from cluster={} instance={}", req.cluster_id, req.instance_id);
 
+        let policy = &self.receiver.config.collection_policy;
+        let collection_config = CollectionConfig {
+            aggregation_window_secs: policy.aggregation_window_secs as i32,
+            enable_internal_query: policy.enable_internal_query,
+            push_batch_size: policy.push_batch_size as i32,
+            push_interval_secs: policy.push_interval_secs as i32,
+            push_timeout_secs: policy.push_timeout_secs as i32,
+            max_digests_per_window: policy.max_digests_per_window as i32,
+            max_memory_bytes: policy.max_memory_bytes as i64,
+            eviction_strategy: policy.eviction_strategy.clone(),
+            early_flush_threshold: policy.early_flush_threshold,
+            retry_max_attempts: policy.retry_max_attempts as i32,
+            retry_initial_delay_ms: policy.retry_initial_delay_ms as i32,
+            retry_max_delay_ms: policy.retry_max_delay_ms as i32,
+            extended_metrics: Vec::new(),
+            config_version: policy.config_version as i64,
+        };
+
         Ok(Response::new(PingResponse {
             ok: true,
             version: env!("CARGO_PKG_VERSION").to_string(),
             server_timestamp_ms: chrono::Utc::now().timestamp_millis(),
             supported_tables: vec!["STATEMENTS_SUMMARY".to_string()],
             protocol_version: "1.0".to_string(),
+            collection_config: Some(collection_config),
         }))
     }
 }
@@ -368,6 +394,19 @@ mod tests {
         });
 
         let response = service.ping(request).await.unwrap();
-        assert!(response.get_ref().ok);
+        let resp = response.get_ref();
+        assert!(resp.ok);
+
+        // Verify collection_config is populated with defaults
+        let cc = resp.collection_config.as_ref().expect("collection_config should be present");
+        assert_eq!(cc.aggregation_window_secs, 60);
+        assert_eq!(cc.push_batch_size, 1000);
+        assert_eq!(cc.push_interval_secs, 60);
+        assert_eq!(cc.push_timeout_secs, 30);
+        assert_eq!(cc.max_digests_per_window, 10000);
+        assert_eq!(cc.max_memory_bytes, 64 * 1024 * 1024);
+        assert_eq!(cc.eviction_strategy, "aggregate_to_other");
+        assert!((cc.early_flush_threshold - 0.8).abs() < f64::EPSILON);
+        assert_eq!(cc.retry_max_attempts, 3);
     }
 }

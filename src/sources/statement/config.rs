@@ -33,6 +33,14 @@ pub struct StatementConfig {
     /// Processing configuration
     #[serde(default)]
     pub processing: ProcessingConfig,
+
+    /// Collection policy pushed to TiDB during Ping handshake
+    #[serde(default)]
+    pub collection_policy: CollectionPolicy,
+
+    /// Topology discovery configuration for finding TiDB instances
+    #[serde(default)]
+    pub topology: TopologyConfig,
 }
 
 impl Default for StatementConfig {
@@ -42,6 +50,85 @@ impl Default for StatementConfig {
             storage: StorageConfig::default(),
             contract: ContractConfig::default(),
             processing: ProcessingConfig::default(),
+            collection_policy: CollectionPolicy::default(),
+            topology: TopologyConfig::default(),
+        }
+    }
+}
+
+/// Collection policy that Vector pushes to TiDB during Ping.
+/// TiDB applies these settings to its aggregator and pusher.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionPolicy {
+    /// Aggregation window duration in seconds
+    #[serde(default = "default_aggregation_window_secs")]
+    pub aggregation_window_secs: u32,
+
+    /// Whether to collect internal queries
+    #[serde(default)]
+    pub enable_internal_query: bool,
+
+    /// Maximum number of statements per push batch
+    #[serde(default = "default_push_batch_size")]
+    pub push_batch_size: u32,
+
+    /// Push interval in seconds
+    #[serde(default = "default_push_interval_secs")]
+    pub push_interval_secs: u32,
+
+    /// Push timeout in seconds
+    #[serde(default = "default_push_timeout_secs")]
+    pub push_timeout_secs: u32,
+
+    /// Maximum unique digests per aggregation window
+    #[serde(default = "default_max_digests_per_window")]
+    pub max_digests_per_window: u32,
+
+    /// Maximum memory in bytes for aggregation buffer
+    #[serde(default = "default_max_memory_bytes")]
+    pub max_memory_bytes: u64,
+
+    /// Eviction strategy: "drop_new", "evict_lru", "aggregate_to_other"
+    #[serde(default = "default_eviction_strategy")]
+    pub eviction_strategy: String,
+
+    /// Early flush threshold (0.0 - 1.0)
+    #[serde(default = "default_early_flush_threshold")]
+    pub early_flush_threshold: f64,
+
+    /// Maximum retry attempts for push
+    #[serde(default = "default_retry_max_attempts")]
+    pub retry_max_attempts: u32,
+
+    /// Initial retry delay in milliseconds
+    #[serde(default = "default_retry_initial_delay_ms")]
+    pub retry_initial_delay_ms: u32,
+
+    /// Maximum retry delay in milliseconds
+    #[serde(default = "default_retry_max_delay_ms")]
+    pub retry_max_delay_ms: u32,
+
+    /// Configuration version for change detection
+    #[serde(default)]
+    pub config_version: u64,
+}
+
+impl Default for CollectionPolicy {
+    fn default() -> Self {
+        Self {
+            aggregation_window_secs: default_aggregation_window_secs(),
+            enable_internal_query: false,
+            push_batch_size: default_push_batch_size(),
+            push_interval_secs: default_push_interval_secs(),
+            push_timeout_secs: default_push_timeout_secs(),
+            max_digests_per_window: default_max_digests_per_window(),
+            max_memory_bytes: default_max_memory_bytes(),
+            eviction_strategy: default_eviction_strategy(),
+            early_flush_threshold: default_early_flush_threshold(),
+            retry_max_attempts: default_retry_max_attempts(),
+            retry_initial_delay_ms: default_retry_initial_delay_ms(),
+            retry_max_delay_ms: default_retry_max_delay_ms(),
+            config_version: 0,
         }
     }
 }
@@ -240,6 +327,32 @@ impl Default for ProcessingConfig {
     }
 }
 
+/// Topology discovery configuration for finding TiDB instances.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopologyConfig {
+    /// PD address for topology discovery
+    #[serde(default)]
+    pub pd_address: Option<String>,
+
+    /// How often to refresh topology (seconds)
+    #[serde(default = "default_topology_fetch_interval")]
+    pub fetch_interval_secs: u64,
+
+    /// Enable automatic discovery of TiDB instances
+    #[serde(default = "default_true")]
+    pub auto_discovery_enabled: bool,
+}
+
+impl Default for TopologyConfig {
+    fn default() -> Self {
+        Self {
+            pd_address: None,
+            fetch_interval_secs: default_topology_fetch_interval(),
+            auto_discovery_enabled: true,
+        }
+    }
+}
+
 // Default value functions
 fn default_grpc_address() -> String {
     "0.0.0.0".to_string()
@@ -297,6 +410,55 @@ fn default_workers() -> usize {
     4
 }
 
+fn default_topology_fetch_interval() -> u64 {
+    30 // 30 seconds
+}
+
+// CollectionPolicy default value functions
+fn default_aggregation_window_secs() -> u32 {
+    60
+}
+
+fn default_push_batch_size() -> u32 {
+    1000
+}
+
+fn default_push_interval_secs() -> u32 {
+    60
+}
+
+fn default_push_timeout_secs() -> u32 {
+    30
+}
+
+fn default_max_digests_per_window() -> u32 {
+    10000
+}
+
+fn default_max_memory_bytes() -> u64 {
+    64 * 1024 * 1024 // 64 MB
+}
+
+fn default_eviction_strategy() -> String {
+    "aggregate_to_other".to_string()
+}
+
+fn default_early_flush_threshold() -> f64 {
+    0.8
+}
+
+fn default_retry_max_attempts() -> u32 {
+    3
+}
+
+fn default_retry_initial_delay_ms() -> u32 {
+    1000
+}
+
+fn default_retry_max_delay_ms() -> u32 {
+    30000
+}
+
 impl StatementConfig {
     /// Returns the gRPC server bind address.
     pub fn grpc_bind_address(&self) -> String {
@@ -311,5 +473,127 @@ impl StatementConfig {
     /// Returns the flush interval duration.
     pub fn flush_interval(&self) -> Duration {
         Duration::from_secs(self.storage.flush_interval_secs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collection_policy_defaults() {
+        let policy = CollectionPolicy::default();
+        assert_eq!(policy.aggregation_window_secs, 60);
+        assert!(!policy.enable_internal_query);
+        assert_eq!(policy.push_batch_size, 1000);
+        assert_eq!(policy.push_interval_secs, 60);
+        assert_eq!(policy.push_timeout_secs, 30);
+        assert_eq!(policy.max_digests_per_window, 10000);
+        assert_eq!(policy.max_memory_bytes, 64 * 1024 * 1024);
+        assert_eq!(policy.eviction_strategy, "aggregate_to_other");
+        assert!((policy.early_flush_threshold - 0.8).abs() < f64::EPSILON);
+        assert_eq!(policy.retry_max_attempts, 3);
+        assert_eq!(policy.retry_initial_delay_ms, 1000);
+        assert_eq!(policy.retry_max_delay_ms, 30000);
+        assert_eq!(policy.config_version, 0);
+    }
+
+    #[test]
+    fn test_collection_policy_in_statement_config() {
+        let config = StatementConfig::default();
+        // CollectionPolicy should be populated with defaults
+        assert_eq!(config.collection_policy.aggregation_window_secs, 60);
+        assert_eq!(config.collection_policy.push_batch_size, 1000);
+        assert_eq!(config.collection_policy.max_memory_bytes, 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_collection_policy_serde_roundtrip() {
+        let policy = CollectionPolicy {
+            aggregation_window_secs: 120,
+            enable_internal_query: true,
+            push_batch_size: 500,
+            push_interval_secs: 30,
+            push_timeout_secs: 15,
+            max_digests_per_window: 5000,
+            max_memory_bytes: 128 * 1024 * 1024,
+            eviction_strategy: "evict_lru".to_string(),
+            early_flush_threshold: 0.9,
+            retry_max_attempts: 5,
+            retry_initial_delay_ms: 2000,
+            retry_max_delay_ms: 60000,
+            config_version: 42,
+        };
+
+        let json = serde_json::to_string(&policy).unwrap();
+        let deserialized: CollectionPolicy = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.aggregation_window_secs, 120);
+        assert!(deserialized.enable_internal_query);
+        assert_eq!(deserialized.push_batch_size, 500);
+        assert_eq!(deserialized.push_interval_secs, 30);
+        assert_eq!(deserialized.push_timeout_secs, 15);
+        assert_eq!(deserialized.max_digests_per_window, 5000);
+        assert_eq!(deserialized.max_memory_bytes, 128 * 1024 * 1024);
+        assert_eq!(deserialized.eviction_strategy, "evict_lru");
+        assert!((deserialized.early_flush_threshold - 0.9).abs() < f64::EPSILON);
+        assert_eq!(deserialized.retry_max_attempts, 5);
+        assert_eq!(deserialized.retry_initial_delay_ms, 2000);
+        assert_eq!(deserialized.retry_max_delay_ms, 60000);
+        assert_eq!(deserialized.config_version, 42);
+    }
+
+    #[test]
+    fn test_collection_policy_serde_defaults_from_empty() {
+        // Deserializing from empty JSON should use serde defaults
+        let json = "{}";
+        let policy: CollectionPolicy = serde_json::from_str(json).unwrap();
+
+        assert_eq!(policy.aggregation_window_secs, 60);
+        assert!(!policy.enable_internal_query);
+        assert_eq!(policy.push_batch_size, 1000);
+        assert_eq!(policy.push_interval_secs, 60);
+        assert_eq!(policy.push_timeout_secs, 30);
+        assert_eq!(policy.max_digests_per_window, 10000);
+        assert_eq!(policy.max_memory_bytes, 64 * 1024 * 1024);
+        assert_eq!(policy.eviction_strategy, "aggregate_to_other");
+        assert!((policy.early_flush_threshold - 0.8).abs() < f64::EPSILON);
+        assert_eq!(policy.retry_max_attempts, 3);
+        assert_eq!(policy.retry_initial_delay_ms, 1000);
+        assert_eq!(policy.retry_max_delay_ms, 30000);
+        assert_eq!(policy.config_version, 0);
+    }
+
+    #[test]
+    fn test_collection_policy_partial_serde_override() {
+        // Only override some fields, rest should use defaults
+        let json = r#"{"aggregation_window_secs": 300, "max_memory_bytes": 268435456}"#;
+        let policy: CollectionPolicy = serde_json::from_str(json).unwrap();
+
+        assert_eq!(policy.aggregation_window_secs, 300);
+        assert_eq!(policy.max_memory_bytes, 256 * 1024 * 1024);
+        // Defaults preserved
+        assert_eq!(policy.push_batch_size, 1000);
+        assert_eq!(policy.push_interval_secs, 60);
+        assert_eq!(policy.eviction_strategy, "aggregate_to_other");
+    }
+
+    #[test]
+    fn test_statement_config_with_collection_policy_serde() {
+        let json = r#"{
+            "collection_policy": {
+                "aggregation_window_secs": 120,
+                "push_batch_size": 500,
+                "eviction_strategy": "drop_new"
+            }
+        }"#;
+        let config: StatementConfig = serde_json::from_str(json).unwrap();
+
+        assert_eq!(config.collection_policy.aggregation_window_secs, 120);
+        assert_eq!(config.collection_policy.push_batch_size, 500);
+        assert_eq!(config.collection_policy.eviction_strategy, "drop_new");
+        // Other collection_policy defaults
+        assert_eq!(config.collection_policy.push_interval_secs, 60);
+        assert_eq!(config.collection_policy.max_digests_per_window, 10000);
     }
 }

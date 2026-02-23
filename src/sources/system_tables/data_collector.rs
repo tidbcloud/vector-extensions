@@ -45,6 +45,10 @@ pub enum CollectionMethod {
     HttpApi,
     /// Custom gRPC service collection
     CustomGrpc,
+    /// gRPC push-based collection (e.g., STATEMENTS_SUMMARY)
+    GrpcPush,
+    /// gRPC pull-based collection (SystemTablePullService::QueryTable)
+    GrpcPull,
 }
 
 impl fmt::Display for CollectionMethod {
@@ -54,6 +58,8 @@ impl fmt::Display for CollectionMethod {
             CollectionMethod::Coprocessor => write!(f, "coprocessor"),
             CollectionMethod::HttpApi => write!(f, "http_api"),
             CollectionMethod::CustomGrpc => write!(f, "custom_grpc"),
+            CollectionMethod::GrpcPush => write!(f, "grpc_push"),
+            CollectionMethod::GrpcPull => write!(f, "grpc_pull"),
         }
     }
 }
@@ -65,8 +71,10 @@ impl CollectionMethod {
             "coprocessor" => Ok(CollectionMethod::Coprocessor),
             "http_api" | "http" => Ok(CollectionMethod::HttpApi),
             "custom_grpc" | "grpc" => Ok(CollectionMethod::CustomGrpc),
+            "grpc_push" | "push" | "statement_v3" | "v3" | "v3_push" => Ok(CollectionMethod::GrpcPush),
+            "grpc_pull" | "pull" => Ok(CollectionMethod::GrpcPull),
             _ => Err(CollectionError::ConfigurationError(format!(
-                "Unknown collection method: {}. Supported: sql, coprocessor, http_api, custom_grpc",
+                "Unknown collection method: {}. Supported: sql, coprocessor, http_api, custom_grpc, grpc_push, grpc_pull",
                 s
             ))),
         }
@@ -137,6 +145,32 @@ pub enum CollectorConfigType {
         #[allow(dead_code)]
         max_retries: u32,
     },
+    /// gRPC push-based collector configuration
+    GrpcPush {
+        /// TiDB status host (for RegisterPushTarget)
+        host: String,
+        /// TiDB status port (gRPC)
+        status_port: u16,
+        /// Vector's gRPC listen address for receiving push data
+        vector_grpc_address: String,
+        /// Vector's gRPC listen port
+        vector_grpc_port: u16,
+        /// gRPC timeout
+        grpc_timeout_secs: u64,
+        /// Max retries
+        max_retries: u32,
+    },
+    /// gRPC pull-based collector configuration
+    GrpcPull {
+        /// TiDB status host
+        host: String,
+        /// TiDB status port (gRPC)
+        status_port: u16,
+        /// gRPC timeout
+        grpc_timeout_secs: u64,
+        /// Max retries
+        max_retries: u32,
+    },
 }
 
 impl CollectorConfig {
@@ -187,6 +221,48 @@ impl CollectorConfig {
             },
         }
     }
+
+    /// Create configuration for gRPC push collector
+    pub fn for_grpc_push(
+        instance: String,
+        host: String,
+        status_port: u16,
+        vector_grpc_address: String,
+        vector_grpc_port: u16,
+        grpc_timeout_secs: Option<u64>,
+        max_retries: Option<u32>,
+    ) -> Self {
+        Self {
+            instance,
+            config_type: CollectorConfigType::GrpcPush {
+                host,
+                status_port,
+                vector_grpc_address,
+                vector_grpc_port,
+                grpc_timeout_secs: grpc_timeout_secs.unwrap_or(30),
+                max_retries: max_retries.unwrap_or(3),
+            },
+        }
+    }
+
+    /// Create configuration for gRPC pull collector
+    pub fn for_grpc_pull(
+        instance: String,
+        host: String,
+        status_port: u16,
+        grpc_timeout_secs: Option<u64>,
+        max_retries: Option<u32>,
+    ) -> Self {
+        Self {
+            instance,
+            config_type: CollectorConfigType::GrpcPull {
+                host,
+                status_port,
+                grpc_timeout_secs: grpc_timeout_secs.unwrap_or(30),
+                max_retries: max_retries.unwrap_or(3),
+            },
+        }
+    }
 }
 
 /// Abstract trait for data collectors
@@ -209,6 +285,10 @@ pub trait DataCollector: Send + Sync + 'static {
 
     /// Get collector health status
     async fn health_check(&self) -> Result<(), CollectionError>;
+
+    /// Set output sender for push-based collectors (optional)
+    /// If implemented, the collector will send events directly instead of returning them
+    fn set_output_sender(&mut self, _sender: vector::SourceSender) {}
 }
 
 /// Utility functions for collection
@@ -373,6 +453,7 @@ mod tests {
                 collection_interval: "short".to_string(),
                 where_clause: None,
                 enabled: true,
+                collection_method: None,
             },
             collection_method: CollectionMethod::Coprocessor,
             timestamp: chrono::Utc::now(),

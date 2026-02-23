@@ -359,7 +359,7 @@ impl RateLimiter {
             let wait_time = Duration::from_millis(
                 (tokens_needed * 1000 / self.refill_rate.max(1)) as u64,
             );
-            Ok(wait_time)
+            Err(wait_time)
         }
     }
 

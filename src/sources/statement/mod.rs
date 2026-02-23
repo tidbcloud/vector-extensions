@@ -18,6 +18,7 @@
 //! statistics from TiDB instances and stores them in S3 as Parquet files.
 
 pub mod config;
+pub mod controller;
 pub mod grpc_server;
 pub mod contract;
 pub mod schema;
@@ -25,5 +26,6 @@ pub mod storage;
 pub mod health;
 
 pub use config::StatementConfig;
+pub use controller::Controller;
 pub use grpc_server::StatementReceiver;
 pub use health::{HealthChecker, HealthStatus, BackpressureState, BackpressureAction, RateLimiter};
