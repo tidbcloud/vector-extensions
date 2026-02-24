@@ -5,15 +5,119 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use vector::SourceSender;
 
 use crate::sources::system_tables::data_collector::{
     CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
-    CollectorConfigType, DataCollector,
+    CollectorConfigType, CollectionPolicyConfig, DataCollector,
 };
 use crate::sources::system_tables::TableConfig;
+use base64::Engine;
+
+/// Rate limiter for incoming requests (token bucket)
+#[derive(Clone)]
+struct RateLimiter {
+    tokens: Arc<std::sync::atomic::AtomicU64>,
+    max_tokens: u64,
+    refill_rate: u64,
+    last_refill: Arc<tokio::sync::RwLock<std::time::Instant>>,
+}
+
+impl RateLimiter {
+    fn new(max_tokens: u64, refill_rate: u64) -> Self {
+        Self {
+            tokens: Arc::new(std::sync::atomic::AtomicU64::new(max_tokens)),
+            max_tokens,
+            refill_rate,
+            last_refill: Arc::new(tokio::sync::RwLock::new(std::time::Instant::now())),
+        }
+    }
+
+    /// Attempts to consume a token without blocking
+    async fn try_acquire(&self) -> bool {
+        self.refill().await;
+        let current = self.tokens.load(std::sync::atomic::Ordering::Relaxed);
+        if current == 0 {
+            return false;
+        }
+        match self.tokens.compare_exchange(
+            current,
+            current - 1,
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        ) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+
+    /// Refills tokens based on elapsed time
+    async fn refill(&self) {
+        let mut last = self.last_refill.write().await;
+        let elapsed = last.elapsed();
+        if elapsed < std::time::Duration::from_secs(1) {
+            return;
+        }
+        let tokens_to_add = (elapsed.as_secs() as u64) * self.refill_rate;
+        let current = self.tokens.load(std::sync::atomic::Ordering::Relaxed);
+        let new_count = (current + tokens_to_add).min(self.max_tokens);
+        self.tokens.store(new_count, std::sync::atomic::Ordering::Relaxed);
+        *last = std::time::Instant::now();
+    }
+
+    /// Returns the current token count
+    fn available_tokens(&self) -> u64 {
+        self.tokens.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Backpressure state for handling high load
+#[derive(Clone)]
+struct BackpressureState {
+    enabled: bool,
+    threshold: f64,
+    reject_threshold: f64,
+    current_load: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl BackpressureState {
+    fn new(threshold: f64, reject_threshold: f64) -> Self {
+        Self {
+            enabled: false,
+            threshold,
+            reject_threshold,
+            current_load: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Updates the current load and returns action to take
+    fn update_load(&self, load: f64) -> BackpressureAction {
+        self.current_load.store((load * 100.0) as u64, std::sync::atomic::Ordering::Relaxed);
+
+        if load > self.reject_threshold {
+            BackpressureAction::Reject
+        } else if load > self.threshold {
+            BackpressureAction::Throttle
+        } else {
+            BackpressureAction::Accept
+        }
+    }
+
+    /// Gets the current load
+    fn current_load(&self) -> f64 {
+        self.current_load.load(std::sync::atomic::Ordering::Relaxed) as f64 / 100.0
+    }
+}
+
+/// Action to take based on backpressure state
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackpressureAction {
+    Accept,
+    Throttle,
+    Reject,
+}
 
 pub mod proto {
     tonic::include_proto!("systemtable.v1");
@@ -82,6 +186,14 @@ pub struct GrpcPushCollector {
     table_config: Option<TableConfig>,
     /// The type of table this collector handles
     table_type: PushTableType,
+    /// Rate limiter (None means unlimited)
+    rate_limiter: Option<RateLimiter>,
+    /// Backpressure state
+    backpressure: BackpressureState,
+    /// Collection policy configuration
+    collection_policy: CollectionPolicyConfig,
+    /// Buffer capacity for backpressure calculation
+    buffer_capacity: usize,
 }
 
 impl GrpcPushCollector {
@@ -92,6 +204,10 @@ impl GrpcPushCollector {
                 status_port,
                 vector_grpc_address,
                 vector_grpc_port,
+                rate_limit,
+                backpressure_threshold,
+                backpressure_reject_threshold,
+                collection_policy,
                 ..
             } => {
                 // Determine table type based on table_config
@@ -100,6 +216,21 @@ impl GrpcPushCollector {
                 } else {
                     PushTableType::Other(table_config.source_table.clone())
                 };
+
+                // Initialize rate limiter if rate_limit > 0
+                let rate_limiter = if rate_limit > 0 {
+                    // Use rate_limit as both max_tokens and refill_rate for simplicity
+                    // This gives us rate_limit tokens per second
+                    Some(RateLimiter::new(rate_limit as u64, rate_limit as u64))
+                } else {
+                    None
+                };
+
+                // Initialize backpressure state
+                let backpressure = BackpressureState::new(
+                    backpressure_threshold,
+                    backpressure_reject_threshold,
+                );
 
                 Ok(Self {
                     instance: config.instance,
@@ -113,6 +244,10 @@ impl GrpcPushCollector {
                     output_sender: None,
                     table_config: Some(table_config),
                     table_type,
+                    rate_limiter,
+                    backpressure,
+                    collection_policy,
+                    buffer_capacity: 10000, // Default buffer capacity
                 })
             }
             _ => Err(CollectionError::ConfigurationError(
@@ -225,22 +360,7 @@ impl GrpcPushCollector {
             vector_instance_id: format!("vector-{}", std::process::id()),
             vector_version: env!("CARGO_PKG_VERSION").to_string(),
             tls_config: None,
-            collection_config: Some(CollectionConfig {
-                aggregation_window_secs: 10,
-                push_batch_size: 100,
-                push_interval_secs: 10,
-                push_timeout_secs: 30,
-                max_digests_per_window: 1000,
-                max_memory_bytes: 64 * 1024 * 1024,
-                enable_internal_query: false,
-                eviction_strategy: "aggregate_to_other".to_string(),
-                early_flush_threshold: 0.8,
-                retry_max_attempts: 3,
-                retry_initial_delay_ms: 100,
-                retry_max_delay_ms: 10000,
-                extended_metrics: vec![],
-                config_version: 1,
-            }),
+            collection_config: Some(self.collection_policy.to_proto()),
         });
 
         let response = client.register_push_target(request).await.map_err(|e| {
@@ -263,6 +383,10 @@ impl GrpcPushCollector {
     fn start_grpc_server(&mut self) {
         let addr = format!("{}:{}", self.vector_grpc_address, self.vector_grpc_port);
         let buffer = self.buffer.clone();
+        let rate_limiter = self.rate_limiter.clone();
+        let backpressure = self.backpressure.clone();
+        let buffer_capacity = self.buffer_capacity;
+        let collection_policy = self.collection_policy.clone();
 
         let handle = tokio::spawn(async move {
             let addr = addr.parse().expect("Invalid gRPC bind address");
@@ -270,6 +394,10 @@ impl GrpcPushCollector {
 
             let service = GrpcPushService {
                 buffer,
+                rate_limiter,
+                backpressure,
+                buffer_capacity,
+                collection_policy,
             };
 
             if let Err(e) = tonic::transport::Server::builder()
@@ -288,6 +416,10 @@ impl GrpcPushCollector {
 /// gRPC service implementation — receives push data from TiDB
 struct GrpcPushService {
     buffer: StatementBuffer,
+    rate_limiter: Option<RateLimiter>,
+    backpressure: BackpressureState,
+    buffer_capacity: usize,
+    collection_policy: CollectionPolicyConfig,
 }
 
 #[tonic::async_trait]
@@ -302,33 +434,220 @@ impl SystemTablePushService for GrpcPushService {
         let instance_id = metadata.map(|m| m.instance_id.clone()).unwrap_or_default();
         let stmt_count = batch.statements.len();
 
+        // Check rate limiter first
+        if let Some(ref limiter) = self.rate_limiter {
+            if !limiter.try_acquire().await {
+                warn!(
+                    "Rate limit exceeded, rejecting {} statements from {}/{}",
+                    stmt_count, cluster_id, instance_id
+                );
+                return Ok(tonic::Response::new(PushResponse {
+                    success: false,
+                    message: "Rate limit exceeded".to_string(),
+                    received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    accepted_count: 0,
+                    rejected_count: stmt_count as i32,
+                    errors: vec!["Rate limit exceeded".to_string()],
+                }));
+            }
+        }
+
+        // Check backpressure (based on buffer size)
+        let buffer_size = self.buffer.lock().await.len();
+        let buffer_load = buffer_size as f64 / self.buffer_capacity as f64;
+        let bp_action = self.backpressure.update_load(buffer_load);
+
+        match bp_action {
+            BackpressureAction::Reject => {
+                warn!(
+                    "Backpressure REJECT: buffer {}/{} ({:.1}%), rejecting {} statements from {}/{}",
+                    buffer_size, self.buffer_capacity, buffer_load * 100.0, stmt_count, cluster_id, instance_id
+                );
+                return Ok(tonic::Response::new(PushResponse {
+                    success: false,
+                    message: format!("Backpressure: buffer {:.0}% full, rejecting", buffer_load * 100.0),
+                    received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    accepted_count: 0,
+                    rejected_count: stmt_count as i32,
+                    errors: vec![format!("Backpressure: buffer {:.0}% full", buffer_load * 100.0)],
+                }));
+            }
+            BackpressureAction::Throttle => {
+                warn!(
+                    "Backpressure THROTTLE: buffer {}/{} ({:.1}%), throttling {} statements from {}/{}",
+                    buffer_size, self.buffer_capacity, buffer_load * 100.0, stmt_count, cluster_id, instance_id
+                );
+            }
+            BackpressureAction::Accept => {
+                debug!(
+                    "Processing {} statements from {}/{} (buffer: {}/{} = {:.1}%)",
+                    stmt_count, cluster_id, instance_id, buffer_size, self.buffer_capacity, buffer_load * 100.0
+                );
+            }
+        }
+
         info!(
             "Received push from TiDB {}/{}: {} statements",
             cluster_id, instance_id, stmt_count
         );
 
-        // Convert proto statements to HashMap<String, Value>
+        // Convert proto statements to HashMap<String, Value> - full 80+ fields
         let mut rows = Vec::with_capacity(stmt_count);
         for stmt in &batch.statements {
             let mut row: HashMap<String, Value> = HashMap::new();
+
+            // ====================================================================
+            // IDENTITY FIELDS
+            // ====================================================================
             row.insert("DIGEST".to_string(), Value::String(stmt.digest.clone()));
-            row.insert("DIGEST_TEXT".to_string(), Value::String(stmt.normalized_sql.clone()));
-            row.insert("STMT_TYPE".to_string(), Value::String(stmt.stmt_type.clone()));
+            row.insert("PLAN_DIGEST".to_string(), Value::String(stmt.plan_digest.clone()));
             row.insert("SCHEMA_NAME".to_string(), Value::String(stmt.schema_name.clone()));
+            row.insert("DIGEST_TEXT".to_string(), Value::String(stmt.normalized_sql.clone()));
             row.insert("TABLE_NAMES".to_string(), Value::String(stmt.table_names.clone()));
+            row.insert("STMT_TYPE".to_string(), Value::String(stmt.stmt_type.clone()));
+
+            // ====================================================================
+            // SAMPLE DATA
+            // ====================================================================
+            row.insert("SAMPLE_SQL".to_string(), Value::String(stmt.sample_sql.clone()));
+            row.insert("SAMPLE_PLAN".to_string(), Value::String(stmt.sample_plan.clone()));
+            row.insert("PREV_SQL".to_string(), Value::String(stmt.prev_sql.clone()));
+
+            // ====================================================================
+            // EXECUTION STATISTICS
+            // ====================================================================
             row.insert("EXEC_COUNT".to_string(), Value::Number(stmt.exec_count.into()));
+            row.insert("SUM_ERRORS".to_string(), Value::Number(stmt.sum_errors.into()));
+            row.insert("SUM_WARNINGS".to_string(), Value::Number(stmt.sum_warnings.into()));
+
+            // ====================================================================
+            // LATENCY METRICS (microseconds)
+            // ====================================================================
             row.insert("SUM_LATENCY".to_string(), Value::Number(stmt.sum_latency_us.into()));
-            row.insert("AVG_LATENCY".to_string(), Value::Number(stmt.avg_latency_us.into()));
-            row.insert("MAX_LATENCY".to_string(), Value::Number(stmt.max_latency_us.into()));
-            row.insert("MIN_LATENCY".to_string(), Value::Number(stmt.min_latency_us.into()));
+            row.insert("SUM_LATENCY_US".to_string(), Value::Number(stmt.sum_latency_us.into()));
+            row.insert("MAX_LATENCY_US".to_string(), Value::Number(stmt.max_latency_us.into()));
+            row.insert("MIN_LATENCY_US".to_string(), Value::Number(stmt.min_latency_us.into()));
+            row.insert("AVG_LATENCY_US".to_string(), Value::Number(stmt.avg_latency_us.into()));
+            row.insert("P50_LATENCY_US".to_string(), Value::Number(stmt.p50_latency_us.into()));
+            row.insert("P95_LATENCY_US".to_string(), Value::Number(stmt.p95_latency_us.into()));
+            row.insert("P99_LATENCY_US".to_string(), Value::Number(stmt.p99_latency_us.into()));
+
+            // ====================================================================
+            // PARSE/COMPILE METRICS
+            // ====================================================================
+            row.insert("SUM_PARSE_LATENCY_US".to_string(), Value::Number(stmt.sum_parse_latency_us.into()));
+            row.insert("MAX_PARSE_LATENCY_US".to_string(), Value::Number(stmt.max_parse_latency_us.into()));
+            row.insert("SUM_COMPILE_LATENCY_US".to_string(), Value::Number(stmt.sum_compile_latency_us.into()));
+            row.insert("MAX_COMPILE_LATENCY_US".to_string(), Value::Number(stmt.max_compile_latency_us.into()));
+
+            // ====================================================================
+            // RESOURCE USAGE
+            // ====================================================================
+            row.insert("SUM_MEM_BYTES".to_string(), Value::Number(stmt.sum_mem_bytes.into()));
+            row.insert("MAX_MEM_BYTES".to_string(), Value::Number(stmt.max_mem_bytes.into()));
+            row.insert("SUM_DISK_BYTES".to_string(), Value::Number(stmt.sum_disk_bytes.into()));
+            row.insert("MAX_DISK_BYTES".to_string(), Value::Number(stmt.max_disk_bytes.into()));
+            row.insert("SUM_TIDB_CPU_US".to_string(), Value::Number(stmt.sum_tidb_cpu_us.into()));
+            row.insert("SUM_TIKV_CPU_US".to_string(), Value::Number(stmt.sum_tikv_cpu_us.into()));
+
+            // ====================================================================
+            // TIKV COPROCESSOR METRICS
+            // ====================================================================
+            row.insert("SUM_NUM_COP_TASKS".to_string(), Value::Number(stmt.sum_num_cop_tasks.into()));
+            row.insert("SUM_PROCESS_TIME_US".to_string(), Value::Number(stmt.sum_process_time_us.into()));
+            row.insert("MAX_PROCESS_TIME_US".to_string(), Value::Number(stmt.max_process_time_us.into()));
+            row.insert("SUM_WAIT_TIME_US".to_string(), Value::Number(stmt.sum_wait_time_us.into()));
+            row.insert("MAX_WAIT_TIME_US".to_string(), Value::Number(stmt.max_wait_time_us.into()));
+
+            // ====================================================================
+            // KEY SCAN METRICS
+            // ====================================================================
+            row.insert("SUM_TOTAL_KEYS".to_string(), Value::Number(stmt.sum_total_keys.into()));
+            row.insert("MAX_TOTAL_KEYS".to_string(), Value::Number(stmt.max_total_keys.into()));
+            row.insert("SUM_PROCESSED_KEYS".to_string(), Value::Number(stmt.sum_processed_keys.into()));
+            row.insert("MAX_PROCESSED_KEYS".to_string(), Value::Number(stmt.max_processed_keys.into()));
+
+            // ====================================================================
+            // TRANSACTION METRICS
+            // ====================================================================
+            row.insert("COMMIT_COUNT".to_string(), Value::Number(stmt.commit_count.into()));
+            row.insert("SUM_PREWRITE_TIME_US".to_string(), Value::Number(stmt.sum_prewrite_time_us.into()));
+            row.insert("MAX_PREWRITE_TIME_US".to_string(), Value::Number(stmt.max_prewrite_time_us.into()));
+            row.insert("SUM_COMMIT_TIME_US".to_string(), Value::Number(stmt.sum_commit_time_us.into()));
+            row.insert("MAX_COMMIT_TIME_US".to_string(), Value::Number(stmt.max_commit_time_us.into()));
+            row.insert("SUM_WRITE_KEYS".to_string(), Value::Number(stmt.sum_write_keys.into()));
+            row.insert("MAX_WRITE_KEYS".to_string(), Value::Number(stmt.max_write_keys.into()));
+            row.insert("SUM_WRITE_SIZE_BYTES".to_string(), Value::Number(stmt.sum_write_size_bytes.into()));
+            row.insert("MAX_WRITE_SIZE_BYTES".to_string(), Value::Number(stmt.max_write_size_bytes.into()));
+
+            // ====================================================================
+            // ROW STATISTICS
+            // ====================================================================
             row.insert("SUM_AFFECTED_ROWS".to_string(), Value::Number(stmt.sum_affected_rows.into()));
             row.insert("SUM_RESULT_ROWS".to_string(), Value::Number(stmt.sum_result_rows.into()));
+            row.insert("MAX_RESULT_ROWS".to_string(), Value::Number(stmt.max_result_rows.into()));
+            row.insert("MIN_RESULT_ROWS".to_string(), Value::Number(stmt.min_result_rows.into()));
+
+            // ====================================================================
+            // PLAN CACHE
+            // ====================================================================
+            row.insert("PLAN_IN_CACHE".to_string(), Value::Bool(stmt.plan_in_cache));
+            row.insert("PLAN_CACHE_HITS".to_string(), Value::Number(stmt.plan_cache_hits.into()));
+
+            // ====================================================================
+            // TIMESTAMPS
+            // ====================================================================
+            row.insert("FIRST_SEEN_MS".to_string(), Value::Number(stmt.first_seen_ms.into()));
+            row.insert("LAST_SEEN_MS".to_string(), Value::Number(stmt.last_seen_ms.into()));
+
+            // ====================================================================
+            // FLAGS
+            // ====================================================================
+            row.insert("IS_INTERNAL".to_string(), Value::Bool(stmt.is_internal));
+            row.insert("PREPARED".to_string(), Value::Bool(stmt.prepared));
+
+            // ====================================================================
+            // MULTI-TENANCY
+            // ====================================================================
+            row.insert("KEYSPACE_NAME".to_string(), Value::String(stmt.keyspace_name.clone()));
+            row.insert("KEYSPACE_ID".to_string(), Value::Number(stmt.keyspace_id.into()));
+            row.insert("RESOURCE_GROUP_NAME".to_string(), Value::String(stmt.resource_group_name.clone()));
+
+            // ====================================================================
+            // CLUSTER METADATA
+            // ====================================================================
             row.insert("CLUSTER_ID".to_string(), Value::String(cluster_id.clone()));
             row.insert("INSTANCE_ID".to_string(), Value::String(instance_id.clone()));
+
+            // ====================================================================
+            // BATCH METADATA
+            // ====================================================================
             if let Some(ref m) = batch.metadata {
                 row.insert("WINDOW_START_MS".to_string(), Value::Number(m.window_start_ms.into()));
                 row.insert("WINDOW_END_MS".to_string(), Value::Number(m.window_end_ms.into()));
+                row.insert("BATCH_SEQUENCE".to_string(), Value::Number(m.batch_sequence.into()));
+                row.insert("BATCH_TIMESTAMP_MS".to_string(), Value::Number(m.batch_timestamp_ms.into()));
+                row.insert("SCHEMA_VERSION".to_string(), Value::String(m.schema_version.clone()));
+                row.insert("SCHEMA_ID".to_string(), Value::Number(m.schema_id.into()));
             }
+
+            // ====================================================================
+            // EXTENDED METRICS (dynamic)
+            // ====================================================================
+            for (key, value) in &stmt.extended_metrics {
+                let json_value = match &value.value {
+                    Some(proto::metric_value::Value::Int64Val(v)) => Value::Number((*v).into()),
+                    Some(proto::metric_value::Value::DoubleVal(v)) => {
+                        Value::Number(serde_json::Number::from_f64(*v).unwrap_or(serde_json::Number::from(0)))
+                    }
+                    Some(proto::metric_value::Value::StringVal(v)) => Value::String(v.clone()),
+                    Some(proto::metric_value::Value::BoolVal(v)) => Value::Bool(*v),
+                    Some(proto::metric_value::Value::BytesVal(v)) => Value::String(base64::prelude::BASE64_STANDARD.encode(v)),
+                    None => Value::Null,
+                };
+                row.insert(key.clone(), json_value);
+            }
+
             rows.push(row);
         }
 
@@ -379,22 +698,7 @@ impl SystemTablePushService for GrpcPushService {
             server_timestamp_ms: chrono::Utc::now().timestamp_millis(),
             supported_tables: vec!["STATEMENTS_SUMMARY".to_string()],
             protocol_version: "1.0".to_string(),
-            collection_config: Some(CollectionConfig {
-                aggregation_window_secs: 10,
-                push_batch_size: 100,
-                push_interval_secs: 10,
-                push_timeout_secs: 30,
-                max_digests_per_window: 1000,
-                max_memory_bytes: 64 * 1024 * 1024,
-                enable_internal_query: false,
-                eviction_strategy: "aggregate_to_other".to_string(),
-                early_flush_threshold: 0.8,
-                retry_max_attempts: 3,
-                retry_initial_delay_ms: 100,
-                retry_max_delay_ms: 10000,
-                extended_metrics: vec![],
-                config_version: 1,
-            }),
+            collection_config: Some(self.collection_policy.to_proto()),
         }))
     }
 }

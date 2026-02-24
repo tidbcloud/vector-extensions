@@ -382,6 +382,10 @@ impl Controller {
                     50051, // Vector gRPC port
                     Some(30),
                     Some(3),
+                    None, // rate_limit - None means unlimited
+                    None, // backpressure_threshold - use default
+                    None, // backpressure_reject_threshold - use default
+                    None, // collection_policy - use default
                 )
             }
             CollectionMethod::GrpcPull => {

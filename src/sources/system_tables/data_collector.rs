@@ -5,7 +5,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::sources::system_tables::{CollectionConfig, DatabaseConfig, TableConfig};
+use crate::sources::system_tables::{CollectionConfig as VectorCollectionConfig, DatabaseConfig, TableConfig};
+
+/// Re-export proto CollectionConfig for use in CollectionPolicyConfig
+pub use crate::sources::system_tables::collectors::grpc_push_collector::proto::CollectionConfig as ProtoCollectionConfig;
 
 /// Global counter for generating unique incremental IDs
 static GLOBAL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -77,6 +80,82 @@ impl CollectionMethod {
                 "Unknown collection method: {}. Supported: sql, coprocessor, http_api, custom_grpc, grpc_push, grpc_pull",
                 s
             ))),
+        }
+    }
+}
+
+/// Configuration for collection policy (14 parameters)
+#[derive(Debug, Clone)]
+pub struct CollectionPolicyConfig {
+    /// Aggregation window duration in seconds
+    pub aggregation_window_secs: i32,
+    /// Push batch size
+    pub push_batch_size: i32,
+    /// Push interval in seconds
+    pub push_interval_secs: i32,
+    /// Push timeout in seconds
+    pub push_timeout_secs: i32,
+    /// Max digests per aggregation window
+    pub max_digests_per_window: i32,
+    /// Max memory bytes for statement summary
+    pub max_memory_bytes: i64,
+    /// Whether to collect internal queries
+    pub enable_internal_query: bool,
+    /// Eviction strategy: "drop_new", "evict_lru", "aggregate_to_other"
+    pub eviction_strategy: String,
+    /// Early flush threshold (0.0-1.0)
+    pub early_flush_threshold: f64,
+    /// Retry max attempts
+    pub retry_max_attempts: i32,
+    /// Retry initial delay in ms
+    pub retry_initial_delay_ms: i32,
+    /// Retry max delay in ms
+    pub retry_max_delay_ms: i32,
+    /// Backpressure throttle threshold (0.0-1.0), default 0.8
+    pub backpressure_throttle_threshold: f64,
+    /// Backpressure reject threshold (0.0-1.0), default 0.95
+    pub backpressure_reject_threshold: f64,
+}
+
+impl Default for CollectionPolicyConfig {
+    fn default() -> Self {
+        Self {
+            aggregation_window_secs: 10,
+            push_batch_size: 100,
+            push_interval_secs: 10,
+            push_timeout_secs: 30,
+            max_digests_per_window: 1000,
+            max_memory_bytes: 64 * 1024 * 1024,
+            enable_internal_query: false,
+            eviction_strategy: "aggregate_to_other".to_string(),
+            early_flush_threshold: 0.8,
+            retry_max_attempts: 3,
+            retry_initial_delay_ms: 100,
+            retry_max_delay_ms: 10000,
+            backpressure_throttle_threshold: 0.8,
+            backpressure_reject_threshold: 0.95,
+        }
+    }
+}
+
+impl CollectionPolicyConfig {
+    /// Convert to proto CollectionConfig
+    pub fn to_proto(&self) -> ProtoCollectionConfig {
+        ProtoCollectionConfig {
+            aggregation_window_secs: self.aggregation_window_secs,
+            push_batch_size: self.push_batch_size,
+            push_interval_secs: self.push_interval_secs,
+            push_timeout_secs: self.push_timeout_secs,
+            max_digests_per_window: self.max_digests_per_window,
+            max_memory_bytes: self.max_memory_bytes,
+            enable_internal_query: self.enable_internal_query,
+            eviction_strategy: self.eviction_strategy.clone(),
+            early_flush_threshold: self.early_flush_threshold,
+            retry_max_attempts: self.retry_max_attempts,
+            retry_initial_delay_ms: self.retry_initial_delay_ms,
+            retry_max_delay_ms: self.retry_max_delay_ms,
+            extended_metrics: vec![],
+            config_version: 1,
         }
     }
 }
@@ -159,6 +238,14 @@ pub enum CollectorConfigType {
         grpc_timeout_secs: u64,
         /// Max retries
         max_retries: u32,
+        /// Rate limit (requests per second), 0 = unlimited
+        rate_limit: u32,
+        /// Backpressure threshold (0.0-1.0), triggers throttle at this load
+        backpressure_threshold: f64,
+        /// Backpressure reject threshold (0.0-1.0), rejects at this load
+        backpressure_reject_threshold: f64,
+        /// Collection policy configuration
+        collection_policy: CollectionPolicyConfig,
     },
     /// gRPC pull-based collector configuration
     GrpcPull {
@@ -231,7 +318,12 @@ impl CollectorConfig {
         vector_grpc_port: u16,
         grpc_timeout_secs: Option<u64>,
         max_retries: Option<u32>,
+        rate_limit: Option<u32>,
+        backpressure_threshold: Option<f64>,
+        backpressure_reject_threshold: Option<f64>,
+        collection_policy: Option<CollectionPolicyConfig>,
     ) -> Self {
+        let policy = collection_policy.unwrap_or_default();
         Self {
             instance,
             config_type: CollectorConfigType::GrpcPush {
@@ -241,6 +333,10 @@ impl CollectorConfig {
                 vector_grpc_port,
                 grpc_timeout_secs: grpc_timeout_secs.unwrap_or(30),
                 max_retries: max_retries.unwrap_or(3),
+                rate_limit: rate_limit.unwrap_or(0),
+                backpressure_threshold: backpressure_threshold.unwrap_or(policy.backpressure_throttle_threshold),
+                backpressure_reject_threshold: backpressure_reject_threshold.unwrap_or(policy.backpressure_reject_threshold),
+                collection_policy: policy,
             },
         }
     }
@@ -368,7 +464,7 @@ pub mod utils {
     /// Parse collection interval
     pub fn parse_collection_interval(
         interval_str: &str,
-        collection_config: &CollectionConfig,
+        collection_config: &VectorCollectionConfig,
     ) -> u64 {
         match interval_str {
             "short" => collection_config.short_interval,
@@ -390,7 +486,7 @@ pub mod utils {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::system_tables::{CollectionConfig, TableConfig};
+    use crate::sources::system_tables::{CollectionConfig as VectorCollectionConfig, TableConfig};
     use vector_lib::event::Event;
 
     #[test]
@@ -416,7 +512,7 @@ mod tests {
 
     #[test]
     fn test_parse_collection_interval() {
-        let config = CollectionConfig {
+        let config = VectorCollectionConfig {
             short_interval: 5,
             long_interval: 1800,
             retention_days: 7,
