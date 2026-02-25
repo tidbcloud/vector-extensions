@@ -72,7 +72,7 @@ impl FileLister {
     pub fn compile_pattern(pattern: &str) -> vector::Result<Regex> {
         // Use a placeholder that won't be escaped, then substitute the real regex after escaping
         const PLACEHOLDER: &str = "__TEN_DIGITS_PLACEHOLDER__";
-        let mut regex_str = pattern.replace("{YYYYMMDDHH}", PLACEHOLDER);
+        let regex_str = pattern.replace("{YYYYMMDDHH}", PLACEHOLDER);
 
         // Replace * with .* for regex (escape other special chars)
         let mut escaped = String::new();

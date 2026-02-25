@@ -308,7 +308,9 @@ impl ConprofSource {
         filename: String,
         mut shutdown: ShutdownSubscriber,
     ) {
-        let url = format!("{}/debug/pprof/heap", self.uri);
+        // Use ?debug=1 so TiKV/Go pprof returns text format; required for jeprof native to parse PCs and symbolize.
+        let url = format!("{}/debug/pprof/heap?debug=1", self.uri);
+        info!(message = "Fetching jeheap (jeprof)", instance_type = %self.instance_type, %url);
         let resp = match self.jeprof_fetch_mode {
             JeprofFetchMode::Perl => {
                 tokio::select! {
@@ -329,10 +331,12 @@ impl ConprofSource {
                 event.insert("filename", filename);
                 if self.out.send_event(event).await.is_err() {
                     StreamClosedError { count: 1 }.emit();
+                } else {
+                    info!(message = "jeheap (jeprof) fetched and emitted", instance_type = %self.instance_type, filename = %filename, size_bytes = body.len());
                 }
             }
             Err(err) => {
-                error!(message = "Failed to fetch heap with jeprof", instance_type = %self.instance_type, mode = ?self.jeprof_fetch_mode, %err);
+                error!(message = "Failed to fetch jeheap (heap with jeprof)", instance_type = %self.instance_type, mode = ?self.jeprof_fetch_mode, %err);
             }
         }
     }

@@ -82,6 +82,7 @@ topology_k8s.component_label_key = "pingcap.com/component"
 ```
 
 - Only pods whose component label value is a **key** in this map are collected.
+- **Port for pprof/metrics**: For each pod, the conprof port is taken from the pod annotation `prometheus.io/port` when present (e.g. TiDB Operator sets this to `19000` for coprocessor-worker); otherwise a default port per instance type is used (e.g. 20180 for TiKV/tikv-worker/coprocessor-worker).
 - The **value** selects which profile config to use (`components_profile_types.tidb`, `.tikv_worker`, etc.). Separate config for `tikv`, `tikv_worker`, `coprocessor_worker` lets you enable/disable or tune profiles per component.
 
 ### ComponentsProfileTypes

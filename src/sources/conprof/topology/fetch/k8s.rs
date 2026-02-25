@@ -26,6 +26,9 @@ pub enum FetchError {
     },
 }
 
+/// Annotation key for metrics/pprof port (e.g. TiDB Operator sets `prometheus.io/port: "19000"` on coprocessor-worker).
+const PROMETHEUS_PORT_ANNOTATION: &str = "prometheus.io/port";
+
 /// Default status/conprof port per instance type (same as PD/etcd discovery).
 fn default_port_for_instance_type(t: InstanceType) -> u16 {
     match t {
@@ -37,6 +40,20 @@ fn default_port_for_instance_type(t: InstanceType) -> u16 {
         InstanceType::Lightning => 8289,
         InstanceType::TikvWorker | InstanceType::CoprocessorWorker => 20180,
     }
+}
+
+/// Prefer port from pod annotation `prometheus.io/port` (used by TiDB Operator for metrics/pprof), fallback to default.
+fn port_from_pod_or_default(pod: &Pod, instance_type: InstanceType) -> u16 {
+    let default = default_port_for_instance_type(instance_type);
+    let annotations = match &pod.metadata.annotations {
+        Some(a) => a,
+        None => return default,
+    };
+    let s = match annotations.get(PROMETHEUS_PORT_ANNOTATION) {
+        Some(v) => v.trim(),
+        None => return default,
+    };
+    s.parse::<u16>().unwrap_or(default)
 }
 
 pub struct K8sTopologyFetcher {
@@ -101,7 +118,7 @@ impl K8sTopologyFetcher {
                 Some(ip) if !ip.is_empty() => ip.clone(),
                 _ => continue,
             };
-            let port = default_port_for_instance_type(instance_type);
+            let port = port_from_pod_or_default(&pod, instance_type);
             components.insert(Component {
                 instance_type,
                 host: pod_ip,
@@ -115,6 +132,10 @@ impl K8sTopologyFetcher {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use k8s_openapi::api::core::v1::Pod;
+
     use super::*;
 
     #[test]
@@ -133,5 +154,57 @@ mod tests {
         assert_eq!(default_port_for_instance_type(InstanceType::TiFlash), 20292);
         assert_eq!(default_port_for_instance_type(InstanceType::TikvWorker), 20180);
         assert_eq!(default_port_for_instance_type(InstanceType::CoprocessorWorker), 20180);
+    }
+
+    #[test]
+    fn test_port_from_pod_or_default() {
+        // No annotations: use default (20180 for coprocessor-worker).
+        let pod = Pod {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                annotations: None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            port_from_pod_or_default(&pod, InstanceType::CoprocessorWorker),
+            20180
+        );
+
+        // prometheus.io/port=19000: use 19000 (e.g. TiDB coprocessor-worker).
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            PROMETHEUS_PORT_ANNOTATION.to_string(),
+            "19000".to_string(),
+        );
+        let pod = Pod {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                annotations: Some(annotations),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            port_from_pod_or_default(&pod, InstanceType::CoprocessorWorker),
+            19000
+        );
+
+        // Invalid port in annotation: fallback to default.
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            PROMETHEUS_PORT_ANNOTATION.to_string(),
+            "not-a-port".to_string(),
+        );
+        let pod = Pod {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                annotations: Some(annotations),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            port_from_pod_or_default(&pod, InstanceType::CoprocessorWorker),
+            20180
+        );
     }
 }
