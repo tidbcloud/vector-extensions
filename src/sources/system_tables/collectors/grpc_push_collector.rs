@@ -499,136 +499,135 @@ impl SystemTablePushService for GrpcPushService {
             // ====================================================================
             // IDENTITY FIELDS
             // ====================================================================
-            row.insert("DIGEST".to_string(), Value::String(stmt.digest.clone()));
-            row.insert("PLAN_DIGEST".to_string(), Value::String(stmt.plan_digest.clone()));
-            row.insert("SCHEMA_NAME".to_string(), Value::String(stmt.schema_name.clone()));
-            row.insert("DIGEST_TEXT".to_string(), Value::String(stmt.normalized_sql.clone()));
-            row.insert("TABLE_NAMES".to_string(), Value::String(stmt.table_names.clone()));
-            row.insert("STMT_TYPE".to_string(), Value::String(stmt.stmt_type.clone()));
+            row.insert("digest".to_string(), Value::String(stmt.digest.clone()));
+            row.insert("plan_digest".to_string(), Value::String(stmt.plan_digest.clone()));
+            row.insert("schema_name".to_string(), Value::String(stmt.schema_name.clone()));
+            row.insert("normalized_sql".to_string(), Value::String(stmt.normalized_sql.clone()));
+            row.insert("table_names".to_string(), Value::String(stmt.table_names.clone()));
+            row.insert("stmt_type".to_string(), Value::String(stmt.stmt_type.clone()));
 
             // ====================================================================
             // SAMPLE DATA
             // ====================================================================
-            row.insert("SAMPLE_SQL".to_string(), Value::String(stmt.sample_sql.clone()));
-            row.insert("SAMPLE_PLAN".to_string(), Value::String(stmt.sample_plan.clone()));
-            row.insert("PREV_SQL".to_string(), Value::String(stmt.prev_sql.clone()));
+            row.insert("sample_sql".to_string(), Value::String(stmt.sample_sql.clone()));
+            row.insert("sample_plan".to_string(), Value::String(stmt.sample_plan.clone()));
+            row.insert("prev_sql".to_string(), Value::String(stmt.prev_sql.clone()));
 
             // ====================================================================
             // EXECUTION STATISTICS
             // ====================================================================
-            row.insert("EXEC_COUNT".to_string(), Value::Number(stmt.exec_count.into()));
-            row.insert("SUM_ERRORS".to_string(), Value::Number(stmt.sum_errors.into()));
-            row.insert("SUM_WARNINGS".to_string(), Value::Number(stmt.sum_warnings.into()));
+            row.insert("exec_count".to_string(), Value::Number(stmt.exec_count.into()));
+            row.insert("sum_errors".to_string(), Value::Number(stmt.sum_errors.into()));
+            row.insert("sum_warnings".to_string(), Value::Number(stmt.sum_warnings.into()));
 
             // ====================================================================
             // LATENCY METRICS (microseconds)
             // ====================================================================
-            row.insert("SUM_LATENCY".to_string(), Value::Number(stmt.sum_latency_us.into()));
-            row.insert("SUM_LATENCY_US".to_string(), Value::Number(stmt.sum_latency_us.into()));
-            row.insert("MAX_LATENCY_US".to_string(), Value::Number(stmt.max_latency_us.into()));
-            row.insert("MIN_LATENCY_US".to_string(), Value::Number(stmt.min_latency_us.into()));
-            row.insert("AVG_LATENCY_US".to_string(), Value::Number(stmt.avg_latency_us.into()));
-            row.insert("P50_LATENCY_US".to_string(), Value::Number(stmt.p50_latency_us.into()));
-            row.insert("P95_LATENCY_US".to_string(), Value::Number(stmt.p95_latency_us.into()));
-            row.insert("P99_LATENCY_US".to_string(), Value::Number(stmt.p99_latency_us.into()));
+            row.insert("sum_latency".to_string(), Value::Number(stmt.sum_latency_us.into()));
+            row.insert("max_latency".to_string(), Value::Number(stmt.max_latency_us.into()));
+            row.insert("min_latency".to_string(), Value::Number(stmt.min_latency_us.into()));
+            row.insert("avg_latency".to_string(), Value::Number(stmt.avg_latency_us.into()));
+            row.insert("p50_latency".to_string(), Value::Number(stmt.p50_latency_us.into()));
+            row.insert("p95_latency".to_string(), Value::Number(stmt.p95_latency_us.into()));
+            row.insert("p99_latency".to_string(), Value::Number(stmt.p99_latency_us.into()));
 
             // ====================================================================
             // PARSE/COMPILE METRICS
             // ====================================================================
-            row.insert("SUM_PARSE_LATENCY_US".to_string(), Value::Number(stmt.sum_parse_latency_us.into()));
-            row.insert("MAX_PARSE_LATENCY_US".to_string(), Value::Number(stmt.max_parse_latency_us.into()));
-            row.insert("SUM_COMPILE_LATENCY_US".to_string(), Value::Number(stmt.sum_compile_latency_us.into()));
-            row.insert("MAX_COMPILE_LATENCY_US".to_string(), Value::Number(stmt.max_compile_latency_us.into()));
+            row.insert("sum_parse_latency".to_string(), Value::Number(stmt.sum_parse_latency_us.into()));
+            row.insert("max_parse_latency".to_string(), Value::Number(stmt.max_parse_latency_us.into()));
+            row.insert("sum_compile_latency".to_string(), Value::Number(stmt.sum_compile_latency_us.into()));
+            row.insert("max_compile_latency".to_string(), Value::Number(stmt.max_compile_latency_us.into()));
 
             // ====================================================================
             // RESOURCE USAGE
             // ====================================================================
-            row.insert("SUM_MEM_BYTES".to_string(), Value::Number(stmt.sum_mem_bytes.into()));
-            row.insert("MAX_MEM_BYTES".to_string(), Value::Number(stmt.max_mem_bytes.into()));
-            row.insert("SUM_DISK_BYTES".to_string(), Value::Number(stmt.sum_disk_bytes.into()));
-            row.insert("MAX_DISK_BYTES".to_string(), Value::Number(stmt.max_disk_bytes.into()));
-            row.insert("SUM_TIDB_CPU_US".to_string(), Value::Number(stmt.sum_tidb_cpu_us.into()));
-            row.insert("SUM_TIKV_CPU_US".to_string(), Value::Number(stmt.sum_tikv_cpu_us.into()));
+            row.insert("sum_mem_bytes".to_string(), Value::Number(stmt.sum_mem_bytes.into()));
+            row.insert("max_mem_bytes".to_string(), Value::Number(stmt.max_mem_bytes.into()));
+            row.insert("sum_disk_bytes".to_string(), Value::Number(stmt.sum_disk_bytes.into()));
+            row.insert("max_disk_bytes".to_string(), Value::Number(stmt.max_disk_bytes.into()));
+            row.insert("sum_tidb_cpu".to_string(), Value::Number(stmt.sum_tidb_cpu_us.into()));
+            row.insert("sum_tikv_cpu".to_string(), Value::Number(stmt.sum_tikv_cpu_us.into()));
 
             // ====================================================================
             // TIKV COPROCESSOR METRICS
             // ====================================================================
-            row.insert("SUM_NUM_COP_TASKS".to_string(), Value::Number(stmt.sum_num_cop_tasks.into()));
-            row.insert("SUM_PROCESS_TIME_US".to_string(), Value::Number(stmt.sum_process_time_us.into()));
-            row.insert("MAX_PROCESS_TIME_US".to_string(), Value::Number(stmt.max_process_time_us.into()));
-            row.insert("SUM_WAIT_TIME_US".to_string(), Value::Number(stmt.sum_wait_time_us.into()));
-            row.insert("MAX_WAIT_TIME_US".to_string(), Value::Number(stmt.max_wait_time_us.into()));
+            row.insert("sum_num_cop_tasks".to_string(), Value::Number(stmt.sum_num_cop_tasks.into()));
+            row.insert("sum_process_time".to_string(), Value::Number(stmt.sum_process_time_us.into()));
+            row.insert("max_process_time".to_string(), Value::Number(stmt.max_process_time_us.into()));
+            row.insert("sum_wait_time".to_string(), Value::Number(stmt.sum_wait_time_us.into()));
+            row.insert("max_wait_time".to_string(), Value::Number(stmt.max_wait_time_us.into()));
 
             // ====================================================================
             // KEY SCAN METRICS
             // ====================================================================
-            row.insert("SUM_TOTAL_KEYS".to_string(), Value::Number(stmt.sum_total_keys.into()));
-            row.insert("MAX_TOTAL_KEYS".to_string(), Value::Number(stmt.max_total_keys.into()));
-            row.insert("SUM_PROCESSED_KEYS".to_string(), Value::Number(stmt.sum_processed_keys.into()));
-            row.insert("MAX_PROCESSED_KEYS".to_string(), Value::Number(stmt.max_processed_keys.into()));
+            row.insert("sum_total_keys".to_string(), Value::Number(stmt.sum_total_keys.into()));
+            row.insert("max_total_keys".to_string(), Value::Number(stmt.max_total_keys.into()));
+            row.insert("sum_processed_keys".to_string(), Value::Number(stmt.sum_processed_keys.into()));
+            row.insert("max_processed_keys".to_string(), Value::Number(stmt.max_processed_keys.into()));
 
             // ====================================================================
             // TRANSACTION METRICS
             // ====================================================================
-            row.insert("COMMIT_COUNT".to_string(), Value::Number(stmt.commit_count.into()));
-            row.insert("SUM_PREWRITE_TIME_US".to_string(), Value::Number(stmt.sum_prewrite_time_us.into()));
-            row.insert("MAX_PREWRITE_TIME_US".to_string(), Value::Number(stmt.max_prewrite_time_us.into()));
-            row.insert("SUM_COMMIT_TIME_US".to_string(), Value::Number(stmt.sum_commit_time_us.into()));
-            row.insert("MAX_COMMIT_TIME_US".to_string(), Value::Number(stmt.max_commit_time_us.into()));
-            row.insert("SUM_WRITE_KEYS".to_string(), Value::Number(stmt.sum_write_keys.into()));
-            row.insert("MAX_WRITE_KEYS".to_string(), Value::Number(stmt.max_write_keys.into()));
-            row.insert("SUM_WRITE_SIZE_BYTES".to_string(), Value::Number(stmt.sum_write_size_bytes.into()));
-            row.insert("MAX_WRITE_SIZE_BYTES".to_string(), Value::Number(stmt.max_write_size_bytes.into()));
+            row.insert("commit_count".to_string(), Value::Number(stmt.commit_count.into()));
+            row.insert("sum_prewrite_time".to_string(), Value::Number(stmt.sum_prewrite_time_us.into()));
+            row.insert("max_prewrite_time".to_string(), Value::Number(stmt.max_prewrite_time_us.into()));
+            row.insert("sum_commit_time".to_string(), Value::Number(stmt.sum_commit_time_us.into()));
+            row.insert("max_commit_time".to_string(), Value::Number(stmt.max_commit_time_us.into()));
+            row.insert("sum_write_keys".to_string(), Value::Number(stmt.sum_write_keys.into()));
+            row.insert("max_write_keys".to_string(), Value::Number(stmt.max_write_keys.into()));
+            row.insert("sum_write_size_bytes".to_string(), Value::Number(stmt.sum_write_size_bytes.into()));
+            row.insert("max_write_size_bytes".to_string(), Value::Number(stmt.max_write_size_bytes.into()));
 
             // ====================================================================
             // ROW STATISTICS
             // ====================================================================
-            row.insert("SUM_AFFECTED_ROWS".to_string(), Value::Number(stmt.sum_affected_rows.into()));
-            row.insert("SUM_RESULT_ROWS".to_string(), Value::Number(stmt.sum_result_rows.into()));
-            row.insert("MAX_RESULT_ROWS".to_string(), Value::Number(stmt.max_result_rows.into()));
-            row.insert("MIN_RESULT_ROWS".to_string(), Value::Number(stmt.min_result_rows.into()));
+            row.insert("sum_affected_rows".to_string(), Value::Number(stmt.sum_affected_rows.into()));
+            row.insert("sum_result_rows".to_string(), Value::Number(stmt.sum_result_rows.into()));
+            row.insert("max_result_rows".to_string(), Value::Number(stmt.max_result_rows.into()));
+            row.insert("min_result_rows".to_string(), Value::Number(stmt.min_result_rows.into()));
 
             // ====================================================================
             // PLAN CACHE
             // ====================================================================
-            row.insert("PLAN_IN_CACHE".to_string(), Value::Bool(stmt.plan_in_cache));
-            row.insert("PLAN_CACHE_HITS".to_string(), Value::Number(stmt.plan_cache_hits.into()));
+            row.insert("plan_in_cache".to_string(), Value::Bool(stmt.plan_in_cache));
+            row.insert("plan_cache_hits".to_string(), Value::Number(stmt.plan_cache_hits.into()));
 
             // ====================================================================
             // TIMESTAMPS
             // ====================================================================
-            row.insert("FIRST_SEEN_MS".to_string(), Value::Number(stmt.first_seen_ms.into()));
-            row.insert("LAST_SEEN_MS".to_string(), Value::Number(stmt.last_seen_ms.into()));
+            row.insert("first_seen_ms".to_string(), Value::Number(stmt.first_seen_ms.into()));
+            row.insert("last_seen_ms".to_string(), Value::Number(stmt.last_seen_ms.into()));
 
             // ====================================================================
             // FLAGS
             // ====================================================================
-            row.insert("IS_INTERNAL".to_string(), Value::Bool(stmt.is_internal));
-            row.insert("PREPARED".to_string(), Value::Bool(stmt.prepared));
+            row.insert("is_internal".to_string(), Value::Bool(stmt.is_internal));
+            row.insert("prepared".to_string(), Value::Bool(stmt.prepared));
 
             // ====================================================================
             // MULTI-TENANCY
             // ====================================================================
-            row.insert("KEYSPACE_NAME".to_string(), Value::String(stmt.keyspace_name.clone()));
-            row.insert("KEYSPACE_ID".to_string(), Value::Number(stmt.keyspace_id.into()));
-            row.insert("RESOURCE_GROUP_NAME".to_string(), Value::String(stmt.resource_group_name.clone()));
+            row.insert("keyspace_name".to_string(), Value::String(stmt.keyspace_name.clone()));
+            row.insert("keyspace_id".to_string(), Value::Number(stmt.keyspace_id.into()));
+            row.insert("resource_group_name".to_string(), Value::String(stmt.resource_group_name.clone()));
 
             // ====================================================================
             // CLUSTER METADATA
             // ====================================================================
-            row.insert("CLUSTER_ID".to_string(), Value::String(cluster_id.clone()));
-            row.insert("INSTANCE_ID".to_string(), Value::String(instance_id.clone()));
+            row.insert("cluster_id".to_string(), Value::String(cluster_id.clone()));
+            row.insert("instance_id".to_string(), Value::String(instance_id.clone()));
 
             // ====================================================================
             // BATCH METADATA
             // ====================================================================
             if let Some(ref m) = batch.metadata {
-                row.insert("WINDOW_START_MS".to_string(), Value::Number(m.window_start_ms.into()));
-                row.insert("WINDOW_END_MS".to_string(), Value::Number(m.window_end_ms.into()));
-                row.insert("BATCH_SEQUENCE".to_string(), Value::Number(m.batch_sequence.into()));
-                row.insert("BATCH_TIMESTAMP_MS".to_string(), Value::Number(m.batch_timestamp_ms.into()));
-                row.insert("SCHEMA_VERSION".to_string(), Value::String(m.schema_version.clone()));
-                row.insert("SCHEMA_ID".to_string(), Value::Number(m.schema_id.into()));
+                row.insert("window_start_ms".to_string(), Value::Number(m.window_start_ms.into()));
+                row.insert("window_end_ms".to_string(), Value::Number(m.window_end_ms.into()));
+                row.insert("batch_sequence".to_string(), Value::Number(m.batch_sequence.into()));
+                row.insert("batch_timestamp_ms".to_string(), Value::Number(m.batch_timestamp_ms.into()));
+                row.insert("schema_version".to_string(), Value::String(m.schema_version.clone()));
+                row.insert("schema_id".to_string(), Value::Number(m.schema_id.into()));
             }
 
             // ====================================================================
