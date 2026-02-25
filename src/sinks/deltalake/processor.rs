@@ -152,6 +152,7 @@ impl StreamSink<Event> for DeltaLakeSink {
         let mut input = input.ready_chunks(self.write_config.batch_size);
 
         while let Some(events) = input.next().await {
+            info!("DeltaLakeSink received {} events", events.len());
             if let Err(e) = self.process_events(events).await {
                 error!("Failed to process events: {}", e);
             }

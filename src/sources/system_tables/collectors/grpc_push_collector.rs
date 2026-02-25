@@ -319,8 +319,11 @@ impl GrpcPushCollector {
                     };
                     let event = create_event_from_result(&result, row_data.clone());
 
-                    if let Err(e) = sender.send_event(event).await {
-                        error!("Failed to send gRPC push event: {}", e);
+                    match sender.send_event(event).await {
+                        Ok(_) => {},
+                        Err(e) => {
+                            error!("Failed to send gRPC push event: {}", e);
+                        }
                     }
                 }
             }
@@ -725,11 +728,14 @@ impl DataCollector for GrpcPushCollector {
 
         // If output sender is set, start background flusher for real-time processing
         if self.output_sender.is_some() {
+            info!("Starting buffer flusher for GrpcPush collector...");
             self.start_buffer_flusher();
             info!(
                 "gRPC push buffer flusher started for instance {}",
                 self.instance
             );
+        } else {
+            warn!("Output sender not set for GrpcPush collector!");
         }
 
         info!(
