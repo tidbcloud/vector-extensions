@@ -328,7 +328,7 @@ impl ConprofSource {
         match resp {
             Ok(body) => {
                 let mut event = LogEvent::from_str_legacy(BASE64_STANDARD.encode(&body));
-                event.insert("filename", filename);
+                event.insert("filename", filename.clone());
                 if self.out.send_event(event).await.is_err() {
                     StreamClosedError { count: 1 }.emit();
                 } else {
