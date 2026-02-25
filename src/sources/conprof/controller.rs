@@ -254,7 +254,10 @@ impl Controller {
         .await;
         let source = match source {
             Some(source) => source,
-            None => return false,
+            None => {
+                warn!(message = "Could not start conprof source (no address or client build failed)", conprof_source = %component);
+                return false;
+            }
         };
 
         let (shutdown_notifier, shutdown_subscriber) = self.shutdown_subscriber.extend();

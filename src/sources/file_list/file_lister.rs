@@ -70,12 +70,11 @@ impl FileLister {
 
     /// Compile pattern string to regex (public for use with list_files_at from path_resolver).
     pub fn compile_pattern(pattern: &str) -> vector::Result<Regex> {
-        // Replace {YYYYMMDDHH} with regex pattern for 10 digits
-        let mut regex_str = pattern.to_string();
-        regex_str = regex_str.replace("{YYYYMMDDHH}", r"\d{10}");
-        
-        // Replace * with .* for regex (but escape other special chars first)
-        // Escape regex special characters except * and ?
+        // Use a placeholder that won't be escaped, then substitute the real regex after escaping
+        const PLACEHOLDER: &str = "__TEN_DIGITS_PLACEHOLDER__";
+        let mut regex_str = pattern.replace("{YYYYMMDDHH}", PLACEHOLDER);
+
+        // Replace * with .* for regex (escape other special chars)
         let mut escaped = String::new();
         let mut chars = regex_str.chars().peekable();
         while let Some(ch) = chars.next() {
@@ -89,7 +88,8 @@ impl FileLister {
                 _ => escaped.push(ch),
             }
         }
-        
+        escaped = escaped.replace(PLACEHOLDER, r"\d{10}");
+
         Regex::new(&format!("^{}$", escaped))
             .map_err(|e| format!("Invalid pattern '{}': {}", pattern, e).into())
     }

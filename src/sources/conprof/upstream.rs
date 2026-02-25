@@ -155,13 +155,13 @@ impl ConprofSource {
                         Ok(resp) => {
                             let status = resp.status();
                             if !status.is_success() {
-                                error!(message = "Failed to fetch cpu", status = status.as_u16());
+                                error!(message = "Failed to fetch cpu", instance_type = %self.instance_type, status = status.as_u16());
                                 return;
                             }
                             let body = match resp.bytes().await {
                                 Ok(body) => body,
                                 Err(err) => {
-                                    error!(message = "Failed to read body bytes", %err);
+                                    error!(message = "Failed to read body bytes for cpu", instance_type = %self.instance_type, %err);
                                     return;
                                 }
                             };
@@ -172,7 +172,7 @@ impl ConprofSource {
                             }
                         }
                         Err(err) => {
-                            error!(message = "Failed to fetch cpu", %err);
+                            error!(message = "Failed to fetch cpu", instance_type = %self.instance_type, %err);
                         }
                     }
             }
@@ -192,13 +192,13 @@ impl ConprofSource {
                     Ok(resp) => {
                         let status = resp.status();
                         if !status.is_success() {
-                            error!(message = "Failed to fetch heap", status = status.as_u16());
+                            error!(message = "Failed to fetch heap", instance_type = %self.instance_type, status = status.as_u16());
                             return;
                         }
                         let body = match resp.bytes().await {
                             Ok(body) => body,
                             Err(err) => {
-                                error!(message = "Failed to read body bytes", %err);
+                                error!(message = "Failed to read body bytes for heap", instance_type = %self.instance_type, %err);
                                 return;
                             }
                         };
@@ -209,7 +209,7 @@ impl ConprofSource {
                         }
                     }
                     Err(err) => {
-                        error!(message = "Failed to fetch heap", %err);
+                        error!(message = "Failed to fetch heap", instance_type = %self.instance_type, %err);
                     }
                 }
             }
@@ -229,13 +229,13 @@ impl ConprofSource {
                     Ok(resp) => {
                         let status = resp.status();
                         if !status.is_success() {
-                            error!(message = "Failed to fetch mutex", status = status.as_u16());
+                            error!(message = "Failed to fetch mutex", instance_type = %self.instance_type, status = status.as_u16());
                             return;
                         }
                         let body = match resp.bytes().await {
                             Ok(body) => body,
                             Err(err) => {
-                                error!(message = "Failed to read body bytes", %err);
+                                error!(message = "Failed to read body bytes for mutex", instance_type = %self.instance_type, %err);
                                 return;
                             }
                         };
@@ -246,7 +246,7 @@ impl ConprofSource {
                         }
                     }
                     Err(err) => {
-                        error!(message = "Failed to fetch mutex", %err);
+                        error!(message = "Failed to fetch mutex", instance_type = %self.instance_type, %err);
                     }
                 }
             }
@@ -270,13 +270,13 @@ impl ConprofSource {
                     Ok(resp) => {
                         let status = resp.status();
                         if !status.is_success() {
-                            error!(message = "Failed to fetch goroutine", status = status.as_u16());
+                            error!(message = "Failed to fetch goroutine", instance_type = %self.instance_type, status = status.as_u16());
                             return;
                         }
                         let body = match resp.bytes().await {
                             Ok(body) => body,
                             Err(err) => {
-                                error!(message = "Failed to read body bytes", %err);
+                                error!(message = "Failed to read body bytes for goroutine", instance_type = %self.instance_type, %err);
                                 return;
                             }
                         };
@@ -287,7 +287,7 @@ impl ConprofSource {
                         }
                     }
                     Err(err) => {
-                        error!(message = "Failed to fetch goroutine", %err);
+                        error!(message = "Failed to fetch goroutine", instance_type = %self.instance_type, %err);
                     }
                 }
             }
@@ -332,7 +332,7 @@ impl ConprofSource {
                 }
             }
             Err(err) => {
-                error!("Failed to fetch heap with jeprof (mode={:?}): {}", self.jeprof_fetch_mode, err);
+                error!(message = "Failed to fetch heap with jeprof", instance_type = %self.instance_type, mode = ?self.jeprof_fetch_mode, %err);
             }
         }
     }
@@ -1226,7 +1226,9 @@ mod tests {
                 | InstanceType::Lightning => {
                     assert!(should_fetch_multiple);
                 }
-                InstanceType::TiKV => {
+                InstanceType::TiKV
+                | InstanceType::TikvWorker
+                | InstanceType::CoprocessorWorker => {
                     assert!(!should_fetch_multiple);
                 }
                 InstanceType::TiFlash => {

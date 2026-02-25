@@ -85,9 +85,10 @@ impl DuckDBQueryExecutor {
                     )
                     .map_err(|e| format!("Failed to set OSS endpoint: {}", e))?;
                 }
-                // Use path-style for OSS
-                conn.execute("SET s3_use_path_style='false'", [])
-                    .map_err(|e| format!("Failed to set path style: {}", e))?;
+                // Use path-style for OSS (optional: some DuckDB versions don't support this parameter)
+                if let Err(e) = conn.execute("SET s3_use_path_style='false'", []) {
+                    warn!("Could not set s3_use_path_style (may be unsupported in this DuckDB version): {}", e);
+                }
             }
             "gcp" => {
                 // GCP uses gs:// protocol, DuckDB should handle it natively
