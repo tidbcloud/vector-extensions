@@ -14,6 +14,8 @@ pub struct DuckDBQueryExecutor {
     endpoint: String,
     cloud_provider: String,
     memory_limit: Option<String>,
+    /// AWS region for S3. When set, used for DuckDB S3 access; otherwise falls back to AWS_REGION env.
+    region: Option<String>,
 }
 
 impl DuckDBQueryExecutor {
@@ -22,6 +24,7 @@ impl DuckDBQueryExecutor {
         endpoint: String,
         cloud_provider: String,
         memory_limit: Option<String>,
+        region: Option<String>,
     ) -> vector::Result<Self> {
         let connection = Connection::open_in_memory()
             .map_err(|e| format!("Failed to create DuckDB connection: {}", e))?;
@@ -31,6 +34,7 @@ impl DuckDBQueryExecutor {
             endpoint,
             cloud_provider,
             memory_limit,
+            region,
         };
 
         executor.initialize()?;
@@ -100,6 +104,14 @@ impl DuckDBQueryExecutor {
             }
             "aws" | _ => {
                 info!("Configuring AWS S3 credentials...");
+                // Region: config first, then AWS_REGION env (required for S3 access)
+                let region = self
+                    .region
+                    .clone()
+                    .or_else(|| std::env::var("AWS_REGION").ok());
+                if region.is_none() {
+                    warn!("No region in config and AWS_REGION not set. S3 access may fail. Set region in config or AWS_REGION environment variable.");
+                }
                 // AWS S3 - configure credentials using CREATE SECRET
                 // DuckDB requires explicit secret creation for S3 access
                 let access_key_id = std::env::var("AWS_ACCESS_KEY_ID");
@@ -126,13 +138,11 @@ impl DuckDBQueryExecutor {
                             access_key_id_escaped, secret_access_key_escaped
                         );
                         
-                        // Add region if available (required for S3 access)
-                        if let Ok(region) = std::env::var("AWS_REGION") {
+                        // Add region (from config or env, required for S3 access)
+                        if let Some(ref region) = region {
                             let region_escaped = region.replace("'", "''");
                             secret_sql.push_str(&format!(", REGION '{}'", region_escaped));
-                            info!("Including AWS_REGION '{}' in SECRET", region);
-                        } else {
-                            warn!("AWS_REGION not found in environment variables. S3 access may fail. Please set AWS_REGION environment variable.");
+                            info!("Including region '{}' in SECRET (from config or AWS_REGION)", region);
                         }
                         
                         // Add session token if present (for temporary credentials)
@@ -151,7 +161,7 @@ impl DuckDBQueryExecutor {
                             .map_err(|e| format!("Failed to create AWS S3 secret: {}. SQL: {}", e, secret_sql.replace(&access_key_id_escaped, "***").replace(&secret_access_key_escaped, "***")))?;
                         
                         // Also set s3_region via SET command for DuckDB's native S3 functions
-                        if let Ok(region) = std::env::var("AWS_REGION") {
+                        if let Some(ref region) = region {
                             conn.execute(&format!("SET s3_region='{}'", region), [])
                                 .map_err(|e| format!("Failed to set s3_region: {}", e))?;
                             info!("✓ Set s3_region to '{}'", region);
@@ -226,13 +236,11 @@ impl DuckDBQueryExecutor {
                 order_by_column, watermark_val, order_by_column, watermark_val, unique_col, id_val
             ));
         } else if let Some(ref last_watermark) = checkpoint.last_watermark {
-            // Without unique_id_column: Use >= to include records with same timestamp
-            // This is necessary for data completeness when multiple records share the same timestamp.
-            // Note: This may cause duplicate processing of same-timestamp records after restart,
-            // but ensures no data is missed. Users should ensure order_by_column is unique or
-            // provide unique_id_column for precise incremental sync.
+            // Without unique_id_column: Use strict > so we don't re-read the last row next time.
+            // Otherwise "time >= last_watermark" would return the same last row again every poll (infinite duplicate).
+            // For same-timestamp records: either provide unique_id_column, or rely on one batch containing them all.
             let watermark_val = format_time_value(last_watermark);
-            where_clauses.push(format!("{} >= {}", order_by_column, watermark_val));
+            where_clauses.push(format!("{} > {}", order_by_column, watermark_val));
         }
         // Note: If no checkpoint exists, user should specify time range in condition
 
@@ -328,13 +336,17 @@ impl DuckDBQueryExecutor {
         }
 
         if all_rows.is_empty() {
-            // Return empty RecordBatch with schema
+            // Return empty RecordBatch with schema: one empty array per column so schema column count matches
             let fields: Vec<Field> = column_names
                 .iter()
                 .map(|name| Field::new(name.clone(), DataType::Utf8, true))
                 .collect();
             let schema = Arc::new(Schema::new(fields));
-            return Ok(RecordBatch::try_new(schema, vec![]).unwrap());
+            let empty_arrays: Vec<Arc<dyn Array>> = (0..column_count)
+                .map(|_| Arc::new(StringArray::from(vec![] as Vec<Option<&str>>)) as Arc<dyn Array>)
+                .collect();
+            return Ok(RecordBatch::try_new(schema, empty_arrays)
+                .map_err(|e| format!("Failed to create empty RecordBatch: {}", e))?);
         }
 
         // Build schema
@@ -444,6 +456,7 @@ mod tests {
             "s3://bucket/table".to_string(),
             "aws".to_string(),
             None,
+            None,
         )
         .unwrap();
 
@@ -470,6 +483,7 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
             None,
         )
         .unwrap();
@@ -499,6 +513,7 @@ mod tests {
             "s3://bucket/table".to_string(),
             "aws".to_string(),
             None,
+            None,
         )
         .unwrap();
 
@@ -521,6 +536,7 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
             None,
         )
         .unwrap();
@@ -549,6 +565,7 @@ mod tests {
             "s3://bucket/table".to_string(),
             "aws".to_string(),
             None,
+            None,
         )
         .unwrap();
 
@@ -563,9 +580,8 @@ mod tests {
             1000,
         );
 
-        // Without unique_id_column: Use >= to include records with same timestamp
-        // This ensures data completeness when multiple records share the same timestamp
-        assert!(query.contains("time >= '2026-01-01T00:00:00Z'"));
+        // Without unique_id_column: Use strict > to avoid re-reading last row (no infinite duplicate)
+        assert!(query.contains("time > '2026-01-01T00:00:00Z'"));
         // Without unique_id_column, should NOT contain OR condition for same timestamp handling
         assert!(!query.contains(" OR "));
         assert!(query.contains("ORDER BY time ASC"));
@@ -577,6 +593,7 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
             None,
         );
         assert!(executor.is_ok());
@@ -591,6 +608,7 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "oss://bucket/table".to_string(),
             "aliyun".to_string(),
+            None,
             None,
         );
         
@@ -626,6 +644,7 @@ mod tests {
             "gs://bucket/table".to_string(),
             "gcp".to_string(),
             None,
+            None,
         );
         assert!(executor.is_ok());
     }
@@ -635,6 +654,7 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "az://account/container/table".to_string(),
             "azure".to_string(),
+            None,
             None,
         );
         assert!(executor.is_ok());
@@ -649,6 +669,7 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
             None,
         )
         .unwrap();
@@ -690,6 +711,7 @@ mod tests {
             "s3://bucket/table".to_string(),
             "aws".to_string(),
             None,
+            None,
         )
         .unwrap();
 
@@ -725,6 +747,7 @@ mod tests {
             "s3://bucket/table".to_string(),
             "aws".to_string(),
             Some("1GB".to_string()),
+            None,
         );
 
         // Executor creation might fail if delta extension is not available
@@ -756,6 +779,7 @@ mod tests {
             "s3://bucket/table".to_string(),
             "aws".to_string(),
             Some("512MB".to_string()),
+            None,
         );
 
         // Similar to above, initialization might fail due to delta extension
@@ -785,6 +809,7 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
             None,
         );
 
@@ -817,6 +842,7 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
             None,
         );
 

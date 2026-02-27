@@ -8,7 +8,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info};
 use vector::shutdown::ShutdownSignal;
 use vector::SourceSender;
-use vector_lib::event::{Event, LogEvent, Value as LogValue};
+use vector_lib::event::{BatchNotifier, BatchStatus, Event, LogEvent, Value as LogValue};
 
 use crate::sources::delta_lake_watermark::checkpoint::Checkpoint;
 use crate::sources::delta_lake_watermark::duckdb_query::DuckDBQueryExecutor;
@@ -42,6 +42,7 @@ impl Controller {
         acknowledgements: bool,
         unique_id_column: Option<String>,
         duckdb_memory_limit: Option<String>,
+        region: Option<String>,
         out: SourceSender,
     ) -> vector::Result<Self> {
         // Create DuckDB executor
@@ -49,6 +50,7 @@ impl Controller {
             endpoint.clone(),
             cloud_provider,
             duckdb_memory_limit,
+            region,
         )?);
 
         // Get checkpoint path
@@ -94,6 +96,11 @@ impl Controller {
                         Ok(should_continue) => {
                             if !should_continue {
                                 info!("Sync completed, shutting down");
+                                if self.poll_interval.is_zero() {
+                                    // Oneshot mode: Vector doesn't exit when source finishes; force exit so the process terminates.
+                                    info!("Oneshot mode (poll_interval_secs=0): exiting process");
+                                    std::process::exit(0);
+                                }
                                 break;
                             }
                         }
@@ -139,9 +146,10 @@ impl Controller {
         let num_rows = batch.num_rows();
 
         if num_rows == 0 {
-            // No more data - always continue polling (streaming mode)
-            // If user wants one-off mode, they should set a time range in condition
-            // and monitor task completion externally
+            if self.poll_interval.is_zero() {
+                info!("No more data in range (poll_interval_secs=0), sync complete");
+                return Ok(false);
+            }
             info!("No data available, waiting {} seconds before next poll", self.poll_interval.as_secs());
             sleep(self.poll_interval).await;
             return Ok(true);
@@ -189,12 +197,21 @@ impl Controller {
             events.push(Event::Log(log_event));
         }
 
-        // Send events
-        // Note: Vector's SourceSender handles acknowledgements automatically
-        // when can_acknowledge() returns true
+        // When acknowledgements are enabled, attach batch notifier and wait for acks
+        // so that the source exits only after all sent events are acknowledged.
+        let ack_receiver =
+            BatchNotifier::maybe_apply_to(self.acknowledgements, events.as_mut_slice());
+
         self.out.send_batch(events).await.map_err(|e| {
             format!("Failed to send events: {}", e)
         })?;
+
+        if let Some(rx) = ack_receiver {
+            let status = rx.await;
+            if !matches!(status, BatchStatus::Delivered) {
+                debug!("Batch finalization status: {:?}", status);
+            }
+        }
 
         // Update checkpoint with last processed record
         if let Some(ref watermark) = last_watermark {

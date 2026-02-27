@@ -32,7 +32,8 @@ pub struct DeltaLakeWatermarkConfig {
     #[serde(default = "default_cloud_provider")]
     pub cloud_provider: String,
 
-    /// Data directory for storing checkpoints
+    /// Data directory for storing checkpoints. Default: /tmp/vector-tasks/checkpoint
+    #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
 
     /// WHERE condition (SQL WHERE clause without WHERE keyword)
@@ -51,7 +52,8 @@ pub struct DeltaLakeWatermarkConfig {
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 
-    /// Poll interval in seconds (for streaming mode)
+    /// Poll interval in seconds. When 0: sync once then exit when no more data (e.g. time range sync).
+    /// When >0: streaming mode, wait this many seconds between polls when no data.
     #[serde(default = "default_poll_interval_secs")]
     pub poll_interval_secs: u64,
 
@@ -68,10 +70,17 @@ pub struct DeltaLakeWatermarkConfig {
 
     /// DuckDB memory limit (e.g., "2GB")
     pub duckdb_memory_limit: Option<String>,
+
+    /// AWS region for S3 (e.g., "us-west-2"). When set, overrides AWS_REGION env for DuckDB S3 access.
+    pub region: Option<String>,
 }
 
 fn default_cloud_provider() -> String {
     "aws".to_string()
+}
+
+fn default_data_dir() -> PathBuf {
+    PathBuf::from("/tmp/vector-tasks/checkpoint")
 }
 
 fn default_order_by_column() -> String {
@@ -95,7 +104,7 @@ impl GenerateConfig for DeltaLakeWatermarkConfig {
         toml::Value::try_from(Self {
             endpoint: "s3://my-bucket/path/to/delta_table".to_string(),
             cloud_provider: default_cloud_provider(),
-            data_dir: PathBuf::from("/var/lib/vector/checkpoints/"),
+            data_dir: default_data_dir(),
             condition: Some("time >= '2026-01-01T00:00:00Z' AND time <= '2026-02-01T00:00:00Z' AND type = 'error' AND severity > 3".to_string()),
             order_by_column: default_order_by_column(),
             batch_size: default_batch_size(),
@@ -103,6 +112,7 @@ impl GenerateConfig for DeltaLakeWatermarkConfig {
             acknowledgements: default_acknowledgements(),
             unique_id_column: Some("unique_id".to_string()),
             duckdb_memory_limit: Some("2GB".to_string()),
+            region: Some("us-west-2".to_string()),
         })
         .unwrap()
     }
@@ -125,6 +135,7 @@ impl SourceConfig for DeltaLakeWatermarkConfig {
         let acknowledgements = self.acknowledgements;
         let unique_id_column = self.unique_id_column.clone();
         let duckdb_memory_limit = self.duckdb_memory_limit.clone();
+        let region = self.region.clone();
 
         // Clone values for the async block
         let endpoint_clone = endpoint.clone();
@@ -137,6 +148,7 @@ impl SourceConfig for DeltaLakeWatermarkConfig {
         let acknowledgements_clone = acknowledgements;
         let unique_id_column_clone = unique_id_column.clone();
         let duckdb_memory_limit_clone = duckdb_memory_limit.clone();
+        let region_clone = region.clone();
         let out_clone = cx.out;
 
         Ok(Box::pin(async move {
@@ -151,6 +163,7 @@ impl SourceConfig for DeltaLakeWatermarkConfig {
                 acknowledgements_clone,
                 unique_id_column_clone,
                 duckdb_memory_limit_clone,
+                region_clone,
                 out_clone,
             )
             .await
@@ -210,9 +223,8 @@ impl DeltaLakeWatermarkConfig {
         // This is not an error, but users should be aware of the implications
         if self.unique_id_column.is_none() {
             tracing::warn!(
-                "unique_id_column is not provided. The source will use >= for checkpoint recovery, \
-                which may cause duplicate processing of same-timestamp records after restart. \
-                Consider providing unique_id_column (can be any type: ID, UUID, string, integer, etc.) \
+                "unique_id_column is not provided. The source will use strict > for checkpoint recovery. \
+                Same-timestamp records should fit in one batch, or provide unique_id_column (e.g. id, uuid) \
                 for precise incremental sync."
             );
         }
@@ -245,6 +257,7 @@ mod tests {
             acknowledgements: true,
             unique_id_column: None,
             duckdb_memory_limit: None,
+            region: None,
         };
         assert!(config.validate().is_ok());
     }
@@ -262,6 +275,7 @@ mod tests {
             acknowledgements: true,
             unique_id_column: None,
             duckdb_memory_limit: None,
+            region: None,
         };
         assert!(config.validate().is_err());
     }
@@ -279,6 +293,7 @@ mod tests {
             acknowledgements: true,
             unique_id_column: None,
             duckdb_memory_limit: None,
+            region: None,
         };
         assert!(config.validate().is_err());
     }
@@ -300,6 +315,7 @@ mod tests {
             acknowledgements: true,
             unique_id_column: None,
             duckdb_memory_limit: None,
+            region: None,
         };
         assert!(config.validate().is_err());
     }
@@ -318,6 +334,7 @@ mod tests {
             acknowledgements: default_acknowledgements(),
             unique_id_column: None,
             duckdb_memory_limit: None,
+            region: None,
         };
         assert_eq!(config.cloud_provider, "aws");
         assert_eq!(config.order_by_column, "time");
@@ -361,6 +378,7 @@ mod tests {
                 acknowledgements: true,
                 unique_id_column: None,
                 duckdb_memory_limit: None,
+                region: None,
             };
             assert!(config.validate().is_ok(), "Endpoint {} should be valid", endpoint);
         }

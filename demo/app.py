@@ -175,9 +175,10 @@ def generate_vector_config(
         "data_dir": str(checkpoint_dir),
         "order_by_column": order_by_col,  # Configurable column for ordering
         "batch_size": 10000,
-        "poll_interval_secs": 30,
-        "acknowledgements": True,
+        "poll_interval_secs": 0,  # 0 = sync once within time range then exit; >0 = continuous polling
         "duckdb_memory_limit": "2GB",
+        "region": s3_region,  # AWS region for S3 (e.g. us-west-2), required for delta_lake_watermark S3 access
+        "acknowledgements": True,  # source waits for sent events to be acked before exiting
     }
     
     # Set unique_id_column if provided
@@ -1146,13 +1147,12 @@ def create_task():
         mysql_table = data["mysql_table"]
         
         # Prepare environment variables
-        # For delta_lake_watermark source, we need AWS credentials for S3 access
-        # These are typically set via AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
-        # or via IAM roles (in Kubernetes/ECS)
+        # For delta_lake_watermark source, we need AWS credentials and region for S3 access
+        s3_region = data.get("s3_region", "us-west-2")
         script_env = {
             "TASK_ID": task_id,  # For transforms to use
-            # AWS credentials should be set in the environment or via IAM roles
-            # S3_REGION is configured in the delta_lake_watermark source config
+            "AWS_REGION": s3_region,  # Required for delta_lake_watermark S3 access (DuckDB uses this)
+            # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY should be set in the environment or via IAM roles
         }
         
         # Start Vector process
