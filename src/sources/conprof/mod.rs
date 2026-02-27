@@ -120,11 +120,14 @@ pub struct ComponentsProfileTypes {
     /// K8s label e.g. coprocessor-worker: profile config for this component.
     #[serde(default = "default_coprocessor_worker_profile_types")]
     pub coprocessor_worker: ProfileTypes,
+    /// Profile config for unknown instance types (e.g. K8s label values not in the known set).
+    #[serde(default = "default_go_profile_types")]
+    pub default: ProfileTypes,
 }
 
 impl ComponentsProfileTypes {
     /// Returns the profile types for the given instance type (e.g. which profiles to collect).
-    pub fn for_instance(&self, t: topology::InstanceType) -> ProfileTypes {
+    pub fn for_instance(&self, t: &topology::InstanceType) -> ProfileTypes {
         match t {
             topology::InstanceType::PD => self.pd,
             topology::InstanceType::TiDB => self.tidb,
@@ -134,6 +137,7 @@ impl ComponentsProfileTypes {
             topology::InstanceType::Lightning => self.lightning,
             topology::InstanceType::TikvWorker => self.tikv_worker,
             topology::InstanceType::CoprocessorWorker => self.coprocessor_worker,
+            topology::InstanceType::Other(_) => self.default,
         }
     }
 }
@@ -180,6 +184,7 @@ pub const fn default_components_profile_types() -> ComponentsProfileTypes {
         lightning: default_go_profile_types(),
         tikv_worker: default_tikv_worker_profile_types(),
         coprocessor_worker: default_coprocessor_worker_profile_types(),
+        default: default_go_profile_types(),
     }
 }
 

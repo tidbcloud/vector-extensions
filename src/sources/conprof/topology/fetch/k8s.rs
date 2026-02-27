@@ -30,7 +30,7 @@ pub enum FetchError {
 const PROMETHEUS_PORT_ANNOTATION: &str = "prometheus.io/port";
 
 /// Default status/conprof port per instance type (same as PD/etcd discovery).
-fn default_port_for_instance_type(t: InstanceType) -> u16 {
+fn default_port_for_instance_type(t: &InstanceType) -> u16 {
     match t {
         InstanceType::PD => 2379,
         InstanceType::TiDB => 10080,
@@ -39,11 +39,12 @@ fn default_port_for_instance_type(t: InstanceType) -> u16 {
         InstanceType::TiProxy => 8286,
         InstanceType::Lightning => 8289,
         InstanceType::TikvWorker | InstanceType::CoprocessorWorker => 20180,
+        InstanceType::Other(_) => 10080,
     }
 }
 
 /// Prefer port from pod annotation `prometheus.io/port` (used by TiDB Operator for metrics/pprof), fallback to default.
-fn port_from_pod_or_default(pod: &Pod, instance_type: InstanceType) -> u16 {
+fn port_from_pod_or_default(pod: &Pod, instance_type: &InstanceType) -> u16 {
     let default = default_port_for_instance_type(instance_type);
     let annotations = match &pod.metadata.annotations {
         Some(a) => a,
@@ -103,10 +104,8 @@ impl K8sTopologyFetcher {
                 Some(k) => k.as_str(),
                 None => continue,
             };
-            let instance_type = match InstanceType::from_str(instance_type_key) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
+            let instance_type = InstanceType::from_str(instance_type_key)
+                .unwrap_or_else(|_| InstanceType::Other(instance_type_key.to_string()));
             let status = match &pod.status {
                 Some(s) => s,
                 None => continue,
@@ -118,7 +117,7 @@ impl K8sTopologyFetcher {
                 Some(ip) if !ip.is_empty() => ip.clone(),
                 _ => continue,
             };
-            let port = port_from_pod_or_default(&pod, instance_type);
+            let port = port_from_pod_or_default(&pod, &instance_type);
             components.insert(Component {
                 instance_type,
                 host: pod_ip,
@@ -143,17 +142,23 @@ mod tests {
         assert_eq!(InstanceType::from_str("pd").ok(), Some(InstanceType::PD));
         assert_eq!(InstanceType::from_str("tikv_worker").ok(), Some(InstanceType::TikvWorker));
         assert_eq!(InstanceType::from_str("coprocessor_worker").ok(), Some(InstanceType::CoprocessorWorker));
+        assert_eq!(InstanceType::from_str("tikv-worker").ok(), Some(InstanceType::TikvWorker));
         assert!(InstanceType::from_str("unknown").is_err());
+        assert!(InstanceType::from_str("compute-tiflash").is_err());
     }
 
     #[test]
     fn test_default_ports() {
-        assert_eq!(default_port_for_instance_type(InstanceType::PD), 2379);
-        assert_eq!(default_port_for_instance_type(InstanceType::TiDB), 10080);
-        assert_eq!(default_port_for_instance_type(InstanceType::TiKV), 20180);
-        assert_eq!(default_port_for_instance_type(InstanceType::TiFlash), 20292);
-        assert_eq!(default_port_for_instance_type(InstanceType::TikvWorker), 20180);
-        assert_eq!(default_port_for_instance_type(InstanceType::CoprocessorWorker), 20180);
+        assert_eq!(default_port_for_instance_type(&InstanceType::PD), 2379);
+        assert_eq!(default_port_for_instance_type(&InstanceType::TiDB), 10080);
+        assert_eq!(default_port_for_instance_type(&InstanceType::TiKV), 20180);
+        assert_eq!(default_port_for_instance_type(&InstanceType::TiFlash), 20292);
+        assert_eq!(default_port_for_instance_type(&InstanceType::TikvWorker), 20180);
+        assert_eq!(default_port_for_instance_type(&InstanceType::CoprocessorWorker), 20180);
+        assert_eq!(
+            default_port_for_instance_type(&InstanceType::Other("compute-tiflash".to_string())),
+            10080
+        );
     }
 
     #[test]
@@ -167,7 +172,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            port_from_pod_or_default(&pod, InstanceType::CoprocessorWorker),
+            port_from_pod_or_default(&pod, &InstanceType::CoprocessorWorker),
             20180
         );
 
@@ -185,7 +190,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            port_from_pod_or_default(&pod, InstanceType::CoprocessorWorker),
+            port_from_pod_or_default(&pod, &InstanceType::CoprocessorWorker),
             19000
         );
 
@@ -203,7 +208,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            port_from_pod_or_default(&pod, InstanceType::CoprocessorWorker),
+            port_from_pod_or_default(&pod, &InstanceType::CoprocessorWorker),
             20180
         );
     }

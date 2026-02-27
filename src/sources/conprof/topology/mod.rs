@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 pub use fetch::FetchError;
 
-#[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum InstanceType {
     PD,
     TiDB,
@@ -17,6 +17,8 @@ pub enum InstanceType {
     TikvWorker,
     /// Coprocessor worker (separate profile config from TiKV).
     CoprocessorWorker,
+    /// Unknown component label (e.g. from K8s). Uses default profile; type name is for display only.
+    Other(String),
 }
 
 impl fmt::Display for InstanceType {
@@ -30,6 +32,7 @@ impl fmt::Display for InstanceType {
             InstanceType::Lightning => write!(f, "lightning"),
             InstanceType::TikvWorker => write!(f, "tikv_worker"),
             InstanceType::CoprocessorWorker => write!(f, "coprocessor_worker"),
+            InstanceType::Other(s) => write!(f, "{}", s),
         }
     }
 }
@@ -38,7 +41,8 @@ impl FromStr for InstanceType {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
+        let normalized = s.to_lowercase().replace('-', "_");
+        match normalized.as_str() {
             "pd" => Ok(InstanceType::PD),
             "tidb" => Ok(InstanceType::TiDB),
             "tikv" => Ok(InstanceType::TiKV),
@@ -62,7 +66,7 @@ pub struct Component {
 
 impl Component {
     pub fn conprof_address(&self) -> Option<String> {
-        match self.instance_type {
+        match &self.instance_type {
             InstanceType::PD => Some(format!("{}:{}", self.host, self.primary_port)),
             InstanceType::TiDB
             | InstanceType::TiKV
@@ -70,9 +74,8 @@ impl Component {
             | InstanceType::TiProxy
             | InstanceType::Lightning
             | InstanceType::TikvWorker
-            | InstanceType::CoprocessorWorker => {
-                Some(format!("{}:{}", self.host, self.secondary_port))
-            }
+            | InstanceType::CoprocessorWorker
+            | InstanceType::Other(_) => Some(format!("{}:{}", self.host, self.secondary_port)),
         }
     }
 }
@@ -101,6 +104,10 @@ mod tests {
         assert_eq!(InstanceType::Lightning.to_string(), "lightning");
         assert_eq!(InstanceType::TikvWorker.to_string(), "tikv_worker");
         assert_eq!(InstanceType::CoprocessorWorker.to_string(), "coprocessor_worker");
+        assert_eq!(
+            InstanceType::Other("compute-tiflash".to_string()).to_string(),
+            "compute-tiflash"
+        );
     }
 
     #[test]
@@ -212,6 +219,20 @@ mod tests {
         assert_eq!(
             component.conprof_address(),
             Some("127.0.0.1:20180".to_string())
+        );
+    }
+
+    #[test]
+    fn test_component_conprof_address_other() {
+        let component = Component {
+            instance_type: InstanceType::Other("compute-tiflash".to_string()),
+            host: "127.0.0.1".to_string(),
+            primary_port: 10080,
+            secondary_port: 10080,
+        };
+        assert_eq!(
+            component.conprof_address(),
+            Some("127.0.0.1:10080".to_string())
         );
     }
 

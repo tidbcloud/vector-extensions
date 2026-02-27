@@ -74,7 +74,9 @@ impl ConprofSource {
     }
 
     async fn run_loop(&mut self, mut shutdown: ShutdownSubscriber) {
-        let profile = self.components_profile_types.for_instance(self.instance_type);
+        let profile = self
+            .components_profile_types
+            .for_instance(&self.instance_type);
         loop {
             let mut ts = Utc::now().timestamp();
             ts -= ts % 60;
@@ -113,7 +115,7 @@ impl ConprofSource {
             if profile.jeheap {
                 self.fetch_heap_with_jeprof_impl(
                     format!(
-                        "{}-{}-heap-jeprof-{}",
+                        "{}-{}-heap-{}",
                         ts, self.instance_type, self.instance_b64
                     ),
                     shutdown.clone(),
@@ -1219,11 +1221,12 @@ mod tests {
 
             // Verify component structure
             assert!(
-                component.conprof_address().is_some() || instance_type == InstanceType::TiFlash
+                component.conprof_address().is_some()
+                    || matches!(&component.instance_type, InstanceType::TiFlash)
             );
 
             // Test that we can determine which branch to take
-            match instance_type {
+            match &component.instance_type {
                 InstanceType::TiDB
                 | InstanceType::PD
                 | InstanceType::TiProxy
@@ -1237,6 +1240,9 @@ mod tests {
                 }
                 InstanceType::TiFlash => {
                     // Do nothing
+                }
+                InstanceType::Other(_) => {
+                    // Unknown types use default profile (e.g. like TiDB)
                 }
             }
         }
