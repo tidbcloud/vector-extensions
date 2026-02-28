@@ -356,6 +356,25 @@ acknowledgements = true
 - `request_id` or `transaction_id` (string)
 - Any other column that provides uniqueness within the same timestamp
 
+### Using with aws_s3 Sink (text / json / csv)
+
+- **JSON codec**: The sink serializes the whole event, so all Delta columns appear. No extra transform needed.
+- **CSV codec**: You must set `encoding.csv.fields` to the list of column names (same as your Delta table). Each event is one row.
+- **Text codec**: The official aws_s3 sink with `codec = "text"` writes **only the `message` field** of each event. The delta_lake_watermark source emits one row per event with **column names as keys** (e.g. `id`, `name`, `time`); it does **not** set a `message` field unless your Delta table has a column named `message`. So with text codec alone, output is empty.
+
+To get non-empty text output, add a **remap** transform that sets `message` from the event, then use that transform as the sink input. For example, to write each event as one JSON line (same idea as json codec but via the message field):
+
+```toml
+[transforms.delta_to_message]
+type = "remap"
+inputs = ["delta_lake_source"]
+source = '''
+.message = encode_json(.)
+'''
+```
+
+Then in the sink, set `inputs = ["delta_to_message"]` instead of `inputs = ["delta_lake_source"]`. You can also set `.message` to a custom string (e.g. concatenate fields) instead of `encode_json(.)` if you need a different text format.
+
 ## Limitations and Notes
 
 1. **DuckDB Extension**: Requires DuckDB's `delta` extension (or `delta_scan` function)
