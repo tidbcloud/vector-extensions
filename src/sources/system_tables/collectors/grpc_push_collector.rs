@@ -10,8 +10,8 @@ use tracing::{debug, error, info, warn};
 use vector::SourceSender;
 
 use crate::sources::system_tables::data_collector::{
-    CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
-    CollectorConfigType, CollectionPolicyConfig, DataCollector,
+    CollectionError, CollectionMetadata, CollectionMethod, CollectionPolicyConfig,
+    CollectionResult, CollectorConfig, CollectorConfigType, DataCollector,
 };
 use crate::sources::system_tables::TableConfig;
 use base64::Engine;
@@ -63,7 +63,8 @@ impl RateLimiter {
         let tokens_to_add = (elapsed.as_secs() as u64) * self.refill_rate;
         let current = self.tokens.load(std::sync::atomic::Ordering::Relaxed);
         let new_count = (current + tokens_to_add).min(self.max_tokens);
-        self.tokens.store(new_count, std::sync::atomic::Ordering::Relaxed);
+        self.tokens
+            .store(new_count, std::sync::atomic::Ordering::Relaxed);
         *last = std::time::Instant::now();
     }
 
@@ -94,7 +95,8 @@ impl BackpressureState {
 
     /// Updates the current load and returns action to take
     fn update_load(&self, load: f64) -> BackpressureAction {
-        self.current_load.store((load * 100.0) as u64, std::sync::atomic::Ordering::Relaxed);
+        self.current_load
+            .store((load * 100.0) as u64, std::sync::atomic::Ordering::Relaxed);
 
         if load > self.reject_threshold {
             BackpressureAction::Reject
@@ -197,7 +199,10 @@ pub struct GrpcPushCollector {
 }
 
 impl GrpcPushCollector {
-    pub fn new(config: CollectorConfig, table_config: TableConfig) -> Result<Self, CollectionError> {
+    pub fn new(
+        config: CollectorConfig,
+        table_config: TableConfig,
+    ) -> Result<Self, CollectionError> {
         match config.config_type {
             CollectorConfigType::GrpcPush {
                 host,
@@ -227,10 +232,8 @@ impl GrpcPushCollector {
                 };
 
                 // Initialize backpressure state
-                let backpressure = BackpressureState::new(
-                    backpressure_threshold,
-                    backpressure_reject_threshold,
-                );
+                let backpressure =
+                    BackpressureState::new(backpressure_threshold, backpressure_reject_threshold);
 
                 Ok(Self {
                     instance: config.instance,
@@ -320,7 +323,7 @@ impl GrpcPushCollector {
                     let event = create_event_from_result(&result, row_data.clone());
 
                     match sender.send_event(event).await {
-                        Ok(_) => {},
+                        Ok(_) => {}
                         Err(e) => {
                             error!("Failed to send gRPC push event: {}", e);
                         }
@@ -351,9 +354,48 @@ impl GrpcPushCollector {
 
         let mut client = StatementPushControlClient::new(channel);
 
-        // Use the TiDB host as the reachable address (Vector binds 0.0.0.0 but TiDB needs a real IP)
+        // Decide advertise address for TiDB callback.
+        // - Bind address can be 0.0.0.0
+        // - Advertise address must be reachable by TiDB in the cluster
         let reachable_address = if self.vector_grpc_address == "0.0.0.0" {
-            self.host.clone()
+            if let Ok(addr) = std::env::var("VECTOR_GRPC_ADVERTISE_ADDRESS") {
+                if !addr.trim().is_empty() {
+                    info!(
+                        "Using VECTOR_GRPC_ADVERTISE_ADDRESS for push target: {}",
+                        addr
+                    );
+                    addr
+                } else {
+                    self.host.clone()
+                }
+            } else if let Ok(svc_host) = std::env::var("VECTOR_GRPC_SERVICE_HOST") {
+                if !svc_host.trim().is_empty() {
+                    info!(
+                        "Using VECTOR_GRPC_SERVICE_HOST for push target: {}",
+                        svc_host
+                    );
+                    svc_host
+                } else {
+                    self.host.clone()
+                }
+            } else if let Ok(pod_ip) = std::env::var("POD_IP") {
+                if !pod_ip.trim().is_empty() {
+                    info!("Using POD_IP for push target: {}", pod_ip);
+                    pod_ip
+                } else {
+                    warn!(
+                        "No advertise address env found; fallback to TiDB host {} (may be unreachable)",
+                        self.host
+                    );
+                    self.host.clone()
+                }
+            } else {
+                warn!(
+                    "No advertise address env found; fallback to TiDB host {} (may be unreachable)",
+                    self.host
+                );
+                self.host.clone()
+            }
         } else {
             self.vector_grpc_address.clone()
         };
@@ -372,7 +414,10 @@ impl GrpcPushCollector {
 
         let resp = response.into_inner();
         if resp.success {
-            info!("Successfully registered push target with TiDB at {}", endpoint);
+            info!(
+                "Successfully registered push target with TiDB at {}",
+                endpoint
+            );
             Ok(())
         } else {
             Err(CollectionError::NetworkError(format!(
@@ -468,11 +513,17 @@ impl SystemTablePushService for GrpcPushService {
                 );
                 return Ok(tonic::Response::new(PushResponse {
                     success: false,
-                    message: format!("Backpressure: buffer {:.0}% full, rejecting", buffer_load * 100.0),
+                    message: format!(
+                        "Backpressure: buffer {:.0}% full, rejecting",
+                        buffer_load * 100.0
+                    ),
                     received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
                     accepted_count: 0,
                     rejected_count: stmt_count as i32,
-                    errors: vec![format!("Backpressure: buffer {:.0}% full", buffer_load * 100.0)],
+                    errors: vec![format!(
+                        "Backpressure: buffer {:.0}% full",
+                        buffer_load * 100.0
+                    )],
                 }));
             }
             BackpressureAction::Throttle => {
@@ -484,7 +535,12 @@ impl SystemTablePushService for GrpcPushService {
             BackpressureAction::Accept => {
                 debug!(
                     "Processing {} statements from {}/{} (buffer: {}/{} = {:.1}%)",
-                    stmt_count, cluster_id, instance_id, buffer_size, self.buffer_capacity, buffer_load * 100.0
+                    stmt_count,
+                    cluster_id,
+                    instance_id,
+                    buffer_size,
+                    self.buffer_capacity,
+                    buffer_load * 100.0
                 );
             }
         }
@@ -503,104 +559,260 @@ impl SystemTablePushService for GrpcPushService {
             // IDENTITY FIELDS
             // ====================================================================
             row.insert("digest".to_string(), Value::String(stmt.digest.clone()));
-            row.insert("plan_digest".to_string(), Value::String(stmt.plan_digest.clone()));
-            row.insert("schema_name".to_string(), Value::String(stmt.schema_name.clone()));
-            row.insert("normalized_sql".to_string(), Value::String(stmt.normalized_sql.clone()));
-            row.insert("table_names".to_string(), Value::String(stmt.table_names.clone()));
-            row.insert("stmt_type".to_string(), Value::String(stmt.stmt_type.clone()));
+            row.insert(
+                "plan_digest".to_string(),
+                Value::String(stmt.plan_digest.clone()),
+            );
+            row.insert(
+                "schema_name".to_string(),
+                Value::String(stmt.schema_name.clone()),
+            );
+            row.insert(
+                "normalized_sql".to_string(),
+                Value::String(stmt.normalized_sql.clone()),
+            );
+            row.insert(
+                "table_names".to_string(),
+                Value::String(stmt.table_names.clone()),
+            );
+            row.insert(
+                "stmt_type".to_string(),
+                Value::String(stmt.stmt_type.clone()),
+            );
 
             // ====================================================================
             // SAMPLE DATA
             // ====================================================================
-            row.insert("sample_sql".to_string(), Value::String(stmt.sample_sql.clone()));
-            row.insert("sample_plan".to_string(), Value::String(stmt.sample_plan.clone()));
+            row.insert(
+                "sample_sql".to_string(),
+                Value::String(stmt.sample_sql.clone()),
+            );
+            row.insert(
+                "sample_plan".to_string(),
+                Value::String(stmt.sample_plan.clone()),
+            );
             row.insert("prev_sql".to_string(), Value::String(stmt.prev_sql.clone()));
 
             // ====================================================================
             // EXECUTION STATISTICS
             // ====================================================================
-            row.insert("exec_count".to_string(), Value::Number(stmt.exec_count.into()));
-            row.insert("sum_errors".to_string(), Value::Number(stmt.sum_errors.into()));
-            row.insert("sum_warnings".to_string(), Value::Number(stmt.sum_warnings.into()));
+            row.insert(
+                "exec_count".to_string(),
+                Value::Number(stmt.exec_count.into()),
+            );
+            row.insert(
+                "sum_errors".to_string(),
+                Value::Number(stmt.sum_errors.into()),
+            );
+            row.insert(
+                "sum_warnings".to_string(),
+                Value::Number(stmt.sum_warnings.into()),
+            );
 
             // ====================================================================
             // LATENCY METRICS (microseconds)
             // ====================================================================
-            row.insert("sum_latency".to_string(), Value::Number(stmt.sum_latency_us.into()));
-            row.insert("max_latency".to_string(), Value::Number(stmt.max_latency_us.into()));
-            row.insert("min_latency".to_string(), Value::Number(stmt.min_latency_us.into()));
-            row.insert("avg_latency".to_string(), Value::Number(stmt.avg_latency_us.into()));
-            row.insert("p50_latency".to_string(), Value::Number(stmt.p50_latency_us.into()));
-            row.insert("p95_latency".to_string(), Value::Number(stmt.p95_latency_us.into()));
-            row.insert("p99_latency".to_string(), Value::Number(stmt.p99_latency_us.into()));
+            row.insert(
+                "sum_latency".to_string(),
+                Value::Number(stmt.sum_latency_us.into()),
+            );
+            row.insert(
+                "max_latency".to_string(),
+                Value::Number(stmt.max_latency_us.into()),
+            );
+            row.insert(
+                "min_latency".to_string(),
+                Value::Number(stmt.min_latency_us.into()),
+            );
+            row.insert(
+                "avg_latency".to_string(),
+                Value::Number(stmt.avg_latency_us.into()),
+            );
+            row.insert(
+                "p50_latency".to_string(),
+                Value::Number(stmt.p50_latency_us.into()),
+            );
+            row.insert(
+                "p95_latency".to_string(),
+                Value::Number(stmt.p95_latency_us.into()),
+            );
+            row.insert(
+                "p99_latency".to_string(),
+                Value::Number(stmt.p99_latency_us.into()),
+            );
 
             // ====================================================================
             // PARSE/COMPILE METRICS
             // ====================================================================
-            row.insert("sum_parse_latency".to_string(), Value::Number(stmt.sum_parse_latency_us.into()));
-            row.insert("max_parse_latency".to_string(), Value::Number(stmt.max_parse_latency_us.into()));
-            row.insert("sum_compile_latency".to_string(), Value::Number(stmt.sum_compile_latency_us.into()));
-            row.insert("max_compile_latency".to_string(), Value::Number(stmt.max_compile_latency_us.into()));
+            row.insert(
+                "sum_parse_latency".to_string(),
+                Value::Number(stmt.sum_parse_latency_us.into()),
+            );
+            row.insert(
+                "max_parse_latency".to_string(),
+                Value::Number(stmt.max_parse_latency_us.into()),
+            );
+            row.insert(
+                "sum_compile_latency".to_string(),
+                Value::Number(stmt.sum_compile_latency_us.into()),
+            );
+            row.insert(
+                "max_compile_latency".to_string(),
+                Value::Number(stmt.max_compile_latency_us.into()),
+            );
 
             // ====================================================================
             // RESOURCE USAGE
             // ====================================================================
-            row.insert("sum_mem_bytes".to_string(), Value::Number(stmt.sum_mem_bytes.into()));
-            row.insert("max_mem_bytes".to_string(), Value::Number(stmt.max_mem_bytes.into()));
-            row.insert("sum_disk_bytes".to_string(), Value::Number(stmt.sum_disk_bytes.into()));
-            row.insert("max_disk_bytes".to_string(), Value::Number(stmt.max_disk_bytes.into()));
-            row.insert("sum_tidb_cpu".to_string(), Value::Number(stmt.sum_tidb_cpu_us.into()));
-            row.insert("sum_tikv_cpu".to_string(), Value::Number(stmt.sum_tikv_cpu_us.into()));
+            row.insert(
+                "sum_mem_bytes".to_string(),
+                Value::Number(stmt.sum_mem_bytes.into()),
+            );
+            row.insert(
+                "max_mem_bytes".to_string(),
+                Value::Number(stmt.max_mem_bytes.into()),
+            );
+            row.insert(
+                "sum_disk_bytes".to_string(),
+                Value::Number(stmt.sum_disk_bytes.into()),
+            );
+            row.insert(
+                "max_disk_bytes".to_string(),
+                Value::Number(stmt.max_disk_bytes.into()),
+            );
+            row.insert(
+                "sum_tidb_cpu".to_string(),
+                Value::Number(stmt.sum_tidb_cpu_us.into()),
+            );
+            row.insert(
+                "sum_tikv_cpu".to_string(),
+                Value::Number(stmt.sum_tikv_cpu_us.into()),
+            );
 
             // ====================================================================
             // TIKV COPROCESSOR METRICS
             // ====================================================================
-            row.insert("sum_num_cop_tasks".to_string(), Value::Number(stmt.sum_num_cop_tasks.into()));
-            row.insert("sum_process_time".to_string(), Value::Number(stmt.sum_process_time_us.into()));
-            row.insert("max_process_time".to_string(), Value::Number(stmt.max_process_time_us.into()));
-            row.insert("sum_wait_time".to_string(), Value::Number(stmt.sum_wait_time_us.into()));
-            row.insert("max_wait_time".to_string(), Value::Number(stmt.max_wait_time_us.into()));
+            row.insert(
+                "sum_num_cop_tasks".to_string(),
+                Value::Number(stmt.sum_num_cop_tasks.into()),
+            );
+            row.insert(
+                "sum_process_time".to_string(),
+                Value::Number(stmt.sum_process_time_us.into()),
+            );
+            row.insert(
+                "max_process_time".to_string(),
+                Value::Number(stmt.max_process_time_us.into()),
+            );
+            row.insert(
+                "sum_wait_time".to_string(),
+                Value::Number(stmt.sum_wait_time_us.into()),
+            );
+            row.insert(
+                "max_wait_time".to_string(),
+                Value::Number(stmt.max_wait_time_us.into()),
+            );
 
             // ====================================================================
             // KEY SCAN METRICS
             // ====================================================================
-            row.insert("sum_total_keys".to_string(), Value::Number(stmt.sum_total_keys.into()));
-            row.insert("max_total_keys".to_string(), Value::Number(stmt.max_total_keys.into()));
-            row.insert("sum_processed_keys".to_string(), Value::Number(stmt.sum_processed_keys.into()));
-            row.insert("max_processed_keys".to_string(), Value::Number(stmt.max_processed_keys.into()));
+            row.insert(
+                "sum_total_keys".to_string(),
+                Value::Number(stmt.sum_total_keys.into()),
+            );
+            row.insert(
+                "max_total_keys".to_string(),
+                Value::Number(stmt.max_total_keys.into()),
+            );
+            row.insert(
+                "sum_processed_keys".to_string(),
+                Value::Number(stmt.sum_processed_keys.into()),
+            );
+            row.insert(
+                "max_processed_keys".to_string(),
+                Value::Number(stmt.max_processed_keys.into()),
+            );
 
             // ====================================================================
             // TRANSACTION METRICS
             // ====================================================================
-            row.insert("commit_count".to_string(), Value::Number(stmt.commit_count.into()));
-            row.insert("sum_prewrite_time".to_string(), Value::Number(stmt.sum_prewrite_time_us.into()));
-            row.insert("max_prewrite_time".to_string(), Value::Number(stmt.max_prewrite_time_us.into()));
-            row.insert("sum_commit_time".to_string(), Value::Number(stmt.sum_commit_time_us.into()));
-            row.insert("max_commit_time".to_string(), Value::Number(stmt.max_commit_time_us.into()));
-            row.insert("sum_write_keys".to_string(), Value::Number(stmt.sum_write_keys.into()));
-            row.insert("max_write_keys".to_string(), Value::Number(stmt.max_write_keys.into()));
-            row.insert("sum_write_size_bytes".to_string(), Value::Number(stmt.sum_write_size_bytes.into()));
-            row.insert("max_write_size_bytes".to_string(), Value::Number(stmt.max_write_size_bytes.into()));
+            row.insert(
+                "commit_count".to_string(),
+                Value::Number(stmt.commit_count.into()),
+            );
+            row.insert(
+                "sum_prewrite_time".to_string(),
+                Value::Number(stmt.sum_prewrite_time_us.into()),
+            );
+            row.insert(
+                "max_prewrite_time".to_string(),
+                Value::Number(stmt.max_prewrite_time_us.into()),
+            );
+            row.insert(
+                "sum_commit_time".to_string(),
+                Value::Number(stmt.sum_commit_time_us.into()),
+            );
+            row.insert(
+                "max_commit_time".to_string(),
+                Value::Number(stmt.max_commit_time_us.into()),
+            );
+            row.insert(
+                "sum_write_keys".to_string(),
+                Value::Number(stmt.sum_write_keys.into()),
+            );
+            row.insert(
+                "max_write_keys".to_string(),
+                Value::Number(stmt.max_write_keys.into()),
+            );
+            row.insert(
+                "sum_write_size_bytes".to_string(),
+                Value::Number(stmt.sum_write_size_bytes.into()),
+            );
+            row.insert(
+                "max_write_size_bytes".to_string(),
+                Value::Number(stmt.max_write_size_bytes.into()),
+            );
 
             // ====================================================================
             // ROW STATISTICS
             // ====================================================================
-            row.insert("sum_affected_rows".to_string(), Value::Number(stmt.sum_affected_rows.into()));
-            row.insert("sum_result_rows".to_string(), Value::Number(stmt.sum_result_rows.into()));
-            row.insert("max_result_rows".to_string(), Value::Number(stmt.max_result_rows.into()));
-            row.insert("min_result_rows".to_string(), Value::Number(stmt.min_result_rows.into()));
+            row.insert(
+                "sum_affected_rows".to_string(),
+                Value::Number(stmt.sum_affected_rows.into()),
+            );
+            row.insert(
+                "sum_result_rows".to_string(),
+                Value::Number(stmt.sum_result_rows.into()),
+            );
+            row.insert(
+                "max_result_rows".to_string(),
+                Value::Number(stmt.max_result_rows.into()),
+            );
+            row.insert(
+                "min_result_rows".to_string(),
+                Value::Number(stmt.min_result_rows.into()),
+            );
 
             // ====================================================================
             // PLAN CACHE
             // ====================================================================
             row.insert("plan_in_cache".to_string(), Value::Bool(stmt.plan_in_cache));
-            row.insert("plan_cache_hits".to_string(), Value::Number(stmt.plan_cache_hits.into()));
+            row.insert(
+                "plan_cache_hits".to_string(),
+                Value::Number(stmt.plan_cache_hits.into()),
+            );
 
             // ====================================================================
             // TIMESTAMPS
             // ====================================================================
-            row.insert("first_seen_ms".to_string(), Value::Number(stmt.first_seen_ms.into()));
-            row.insert("last_seen_ms".to_string(), Value::Number(stmt.last_seen_ms.into()));
+            row.insert(
+                "first_seen_ms".to_string(),
+                Value::Number(stmt.first_seen_ms.into()),
+            );
+            row.insert(
+                "last_seen_ms".to_string(),
+                Value::Number(stmt.last_seen_ms.into()),
+            );
 
             // ====================================================================
             // FLAGS
@@ -611,25 +823,52 @@ impl SystemTablePushService for GrpcPushService {
             // ====================================================================
             // MULTI-TENANCY
             // ====================================================================
-            row.insert("keyspace_name".to_string(), Value::String(stmt.keyspace_name.clone()));
-            row.insert("keyspace_id".to_string(), Value::Number(stmt.keyspace_id.into()));
-            row.insert("resource_group_name".to_string(), Value::String(stmt.resource_group_name.clone()));
+            row.insert(
+                "keyspace_name".to_string(),
+                Value::String(stmt.keyspace_name.clone()),
+            );
+            row.insert(
+                "keyspace_id".to_string(),
+                Value::Number(stmt.keyspace_id.into()),
+            );
+            row.insert(
+                "resource_group_name".to_string(),
+                Value::String(stmt.resource_group_name.clone()),
+            );
 
             // ====================================================================
             // CLUSTER METADATA
             // ====================================================================
             row.insert("cluster_id".to_string(), Value::String(cluster_id.clone()));
-            row.insert("instance_id".to_string(), Value::String(instance_id.clone()));
+            row.insert(
+                "instance_id".to_string(),
+                Value::String(instance_id.clone()),
+            );
 
             // ====================================================================
             // BATCH METADATA
             // ====================================================================
             if let Some(ref m) = batch.metadata {
-                row.insert("window_start_ms".to_string(), Value::Number(m.window_start_ms.into()));
-                row.insert("window_end_ms".to_string(), Value::Number(m.window_end_ms.into()));
-                row.insert("batch_sequence".to_string(), Value::Number(m.batch_sequence.into()));
-                row.insert("batch_timestamp_ms".to_string(), Value::Number(m.batch_timestamp_ms.into()));
-                row.insert("schema_version".to_string(), Value::String(m.schema_version.clone()));
+                row.insert(
+                    "window_start_ms".to_string(),
+                    Value::Number(m.window_start_ms.into()),
+                );
+                row.insert(
+                    "window_end_ms".to_string(),
+                    Value::Number(m.window_end_ms.into()),
+                );
+                row.insert(
+                    "batch_sequence".to_string(),
+                    Value::Number(m.batch_sequence.into()),
+                );
+                row.insert(
+                    "batch_timestamp_ms".to_string(),
+                    Value::Number(m.batch_timestamp_ms.into()),
+                );
+                row.insert(
+                    "schema_version".to_string(),
+                    Value::String(m.schema_version.clone()),
+                );
                 row.insert("schema_id".to_string(), Value::Number(m.schema_id.into()));
             }
 
@@ -639,12 +878,14 @@ impl SystemTablePushService for GrpcPushService {
             for (key, value) in &stmt.extended_metrics {
                 let json_value = match &value.value {
                     Some(proto::metric_value::Value::Int64Val(v)) => Value::Number((*v).into()),
-                    Some(proto::metric_value::Value::DoubleVal(v)) => {
-                        Value::Number(serde_json::Number::from_f64(*v).unwrap_or(serde_json::Number::from(0)))
-                    }
+                    Some(proto::metric_value::Value::DoubleVal(v)) => Value::Number(
+                        serde_json::Number::from_f64(*v).unwrap_or(serde_json::Number::from(0)),
+                    ),
                     Some(proto::metric_value::Value::StringVal(v)) => Value::String(v.clone()),
                     Some(proto::metric_value::Value::BoolVal(v)) => Value::Bool(*v),
-                    Some(proto::metric_value::Value::BytesVal(v)) => Value::String(base64::prelude::BASE64_STANDARD.encode(v)),
+                    Some(proto::metric_value::Value::BytesVal(v)) => {
+                        Value::String(base64::prelude::BASE64_STANDARD.encode(v))
+                    }
                     None => Value::Null,
                 };
                 row.insert(key.clone(), json_value);

@@ -18,8 +18,8 @@ use tracing::{debug, error, info, warn};
 use vector::SourceSender;
 
 use crate::sources::system_tables::data_collector::{
-    CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
-    CollectorConfigType, CollectionPolicyConfig, DataCollector,
+    CollectionError, CollectionMetadata, CollectionMethod, CollectionPolicyConfig,
+    CollectionResult, CollectorConfig, CollectorConfigType, DataCollector,
 };
 use crate::sources::system_tables::TableConfig;
 
@@ -94,7 +94,8 @@ impl RateLimiter {
         let tokens_to_add = (elapsed.as_secs() as u64) * self.refill_rate;
         let current = self.tokens.load(std::sync::atomic::Ordering::Relaxed);
         let new_count = (current + tokens_to_add).min(self.max_tokens);
-        self.tokens.store(new_count, std::sync::atomic::Ordering::Relaxed);
+        self.tokens
+            .store(new_count, std::sync::atomic::Ordering::Relaxed);
         *last = std::time::Instant::now();
     }
 
@@ -125,7 +126,8 @@ impl BackpressureState {
 
     /// Updates the current load and returns action to take
     pub fn update_load(&self, load: f64) -> BackpressureAction {
-        self.current_load.store((load * 100.0) as u64, std::sync::atomic::Ordering::Relaxed);
+        self.current_load
+            .store((load * 100.0) as u64, std::sync::atomic::Ordering::Relaxed);
 
         if load > self.reject_threshold {
             BackpressureAction::Reject
@@ -203,7 +205,10 @@ pub struct BaseGrpcPushCollector {
 }
 
 impl BaseGrpcPushCollector {
-    pub fn new(config: CollectorConfig, table_config: TableConfig) -> Result<Self, CollectionError> {
+    pub fn new(
+        config: CollectorConfig,
+        table_config: TableConfig,
+    ) -> Result<Self, CollectionError> {
         match config.config_type {
             CollectorConfigType::GrpcPush {
                 host,
@@ -231,10 +236,8 @@ impl BaseGrpcPushCollector {
                 };
 
                 // Initialize backpressure state
-                let backpressure = BackpressureState::new(
-                    backpressure_threshold,
-                    backpressure_reject_threshold,
-                );
+                let backpressure =
+                    BackpressureState::new(backpressure_threshold, backpressure_reject_threshold);
 
                 Ok(Self {
                     instance: config.instance,
@@ -376,8 +379,48 @@ impl BaseGrpcPushCollector {
 
         let mut client = StatementPushControlClient::new(channel);
 
+        // Decide advertise address for TiDB callback.
+        // - Bind address can be 0.0.0.0
+        // - Advertise address must be reachable by TiDB in the cluster
         let reachable_address = if self.vector_grpc_address == "0.0.0.0" {
-            self.host.clone()
+            if let Ok(addr) = std::env::var("VECTOR_GRPC_ADVERTISE_ADDRESS") {
+                if !addr.trim().is_empty() {
+                    info!(
+                        "Using VECTOR_GRPC_ADVERTISE_ADDRESS for push target: {}",
+                        addr
+                    );
+                    addr
+                } else {
+                    self.host.clone()
+                }
+            } else if let Ok(svc_host) = std::env::var("VECTOR_GRPC_SERVICE_HOST") {
+                if !svc_host.trim().is_empty() {
+                    info!(
+                        "Using VECTOR_GRPC_SERVICE_HOST for push target: {}",
+                        svc_host
+                    );
+                    svc_host
+                } else {
+                    self.host.clone()
+                }
+            } else if let Ok(pod_ip) = std::env::var("POD_IP") {
+                if !pod_ip.trim().is_empty() {
+                    info!("Using POD_IP for push target: {}", pod_ip);
+                    pod_ip
+                } else {
+                    warn!(
+                        "No advertise address env found; fallback to TiDB host {} (may be unreachable)",
+                        self.host
+                    );
+                    self.host.clone()
+                }
+            } else {
+                warn!(
+                    "No advertise address env found; fallback to TiDB host {} (may be unreachable)",
+                    self.host
+                );
+                self.host.clone()
+            }
         } else {
             self.vector_grpc_address.clone()
         };
@@ -396,7 +439,10 @@ impl BaseGrpcPushCollector {
 
         let resp = response.into_inner();
         if resp.success {
-            info!("Successfully registered push target with TiDB at {}", endpoint);
+            info!(
+                "Successfully registered push target with TiDB at {}",
+                endpoint
+            );
             Ok(())
         } else {
             Err(CollectionError::NetworkError(format!(
