@@ -134,6 +134,425 @@ use proto::{
     StatementBatch, TableRowBatch,
 };
 
+const TIDB_STATEMENT_SUMMARY_COLUMNS: &[&str] = &[
+    "INSTANCE",
+    "SUMMARY_BEGIN_TIME",
+    "SUMMARY_END_TIME",
+    "STMT_TYPE",
+    "SCHEMA_NAME",
+    "DIGEST",
+    "DIGEST_TEXT",
+    "TABLE_NAMES",
+    "INDEX_NAMES",
+    "SAMPLE_USER",
+    "EXEC_COUNT",
+    "SUM_ERRORS",
+    "SUM_WARNINGS",
+    "SUM_LATENCY",
+    "MAX_LATENCY",
+    "MIN_LATENCY",
+    "AVG_LATENCY",
+    "AVG_PARSE_LATENCY",
+    "MAX_PARSE_LATENCY",
+    "AVG_COMPILE_LATENCY",
+    "MAX_COMPILE_LATENCY",
+    "SUM_COP_TASK_NUM",
+    "MAX_COP_PROCESS_TIME",
+    "MAX_COP_PROCESS_ADDRESS",
+    "MAX_COP_WAIT_TIME",
+    "MAX_COP_WAIT_ADDRESS",
+    "AVG_PROCESS_TIME",
+    "MAX_PROCESS_TIME",
+    "AVG_WAIT_TIME",
+    "MAX_WAIT_TIME",
+    "AVG_BACKOFF_TIME",
+    "MAX_BACKOFF_TIME",
+    "AVG_TOTAL_KEYS",
+    "MAX_TOTAL_KEYS",
+    "AVG_PROCESSED_KEYS",
+    "MAX_PROCESSED_KEYS",
+    "AVG_ROCKSDB_DELETE_SKIPPED_COUNT",
+    "MAX_ROCKSDB_DELETE_SKIPPED_COUNT",
+    "AVG_ROCKSDB_KEY_SKIPPED_COUNT",
+    "MAX_ROCKSDB_KEY_SKIPPED_COUNT",
+    "AVG_ROCKSDB_BLOCK_CACHE_HIT_COUNT",
+    "MAX_ROCKSDB_BLOCK_CACHE_HIT_COUNT",
+    "AVG_ROCKSDB_BLOCK_READ_COUNT",
+    "MAX_ROCKSDB_BLOCK_READ_COUNT",
+    "AVG_ROCKSDB_BLOCK_READ_BYTE",
+    "MAX_ROCKSDB_BLOCK_READ_BYTE",
+    "AVG_PREWRITE_TIME",
+    "MAX_PREWRITE_TIME",
+    "AVG_COMMIT_TIME",
+    "MAX_COMMIT_TIME",
+    "AVG_GET_COMMIT_TS_TIME",
+    "MAX_GET_COMMIT_TS_TIME",
+    "AVG_COMMIT_BACKOFF_TIME",
+    "MAX_COMMIT_BACKOFF_TIME",
+    "AVG_RESOLVE_LOCK_TIME",
+    "MAX_RESOLVE_LOCK_TIME",
+    "AVG_LOCAL_LATCH_WAIT_TIME",
+    "MAX_LOCAL_LATCH_WAIT_TIME",
+    "AVG_WRITE_KEYS",
+    "MAX_WRITE_KEYS",
+    "AVG_WRITE_SIZE",
+    "MAX_WRITE_SIZE",
+    "AVG_PREWRITE_REGIONS",
+    "MAX_PREWRITE_REGIONS",
+    "AVG_TXN_RETRY",
+    "MAX_TXN_RETRY",
+    "SUM_EXEC_RETRY",
+    "SUM_EXEC_RETRY_TIME",
+    "SUM_BACKOFF_TIMES",
+    "BACKOFF_TYPES",
+    "AVG_MEM",
+    "MAX_MEM",
+    "AVG_MEM_ARBITRATION",
+    "MAX_MEM_ARBITRATION",
+    "AVG_DISK",
+    "MAX_DISK",
+    "AVG_KV_TIME",
+    "AVG_PD_TIME",
+    "AVG_BACKOFF_TOTAL_TIME",
+    "AVG_WRITE_SQL_RESP_TIME",
+    "AVG_TIDB_CPU_TIME",
+    "AVG_TIKV_CPU_TIME",
+    "MAX_RESULT_ROWS",
+    "MIN_RESULT_ROWS",
+    "AVG_RESULT_ROWS",
+    "PREPARED",
+    "AVG_AFFECTED_ROWS",
+    "FIRST_SEEN",
+    "LAST_SEEN",
+    "PLAN_IN_CACHE",
+    "PLAN_CACHE_HITS",
+    "PLAN_IN_BINDING",
+    "QUERY_SAMPLE_TEXT",
+    "PREV_SAMPLE_TEXT",
+    "PLAN_DIGEST",
+    "PLAN",
+    "BINARY_PLAN",
+    "BINDING_DIGEST",
+    "BINDING_DIGEST_TEXT",
+    "CHARSET",
+    "COLLATION",
+    "PLAN_HINT",
+    "MAX_REQUEST_UNIT_READ",
+    "AVG_REQUEST_UNIT_READ",
+    "MAX_REQUEST_UNIT_WRITE",
+    "AVG_REQUEST_UNIT_WRITE",
+    "MAX_QUEUED_RC_TIME",
+    "AVG_QUEUED_RC_TIME",
+    "RESOURCE_GROUP",
+    "PLAN_CACHE_UNQUALIFIED",
+    "PLAN_CACHE_UNQUALIFIED_LAST_REASON",
+    "SUM_UNPACKED_BYTES_SENT_TIKV_TOTAL",
+    "SUM_UNPACKED_BYTES_RECEIVED_TIKV_TOTAL",
+    "SUM_UNPACKED_BYTES_SENT_TIKV_CROSS_ZONE",
+    "SUM_UNPACKED_BYTES_RECEIVED_TIKV_CROSS_ZONE",
+    "SUM_UNPACKED_BYTES_SENT_TIFLASH_TOTAL",
+    "SUM_UNPACKED_BYTES_RECEIVED_TIFLASH_TOTAL",
+    "SUM_UNPACKED_BYTES_SENT_TIFLASH_CROSS_ZONE",
+    "SUM_UNPACKED_BYTES_RECEIVED_TIFLASH_CROSS_ZONE",
+    "STORAGE_KV",
+    "STORAGE_MPP",
+];
+
+fn value_to_f64(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n
+            .as_f64()
+            .or_else(|| n.as_i64().map(|x| x as f64))
+            .or_else(|| n.as_u64().map(|x| x as f64)),
+        Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn get_value(row: &HashMap<String, Value>, keys: &[&str]) -> Option<Value> {
+    for k in keys {
+        if let Some(v) = row.get(*k) {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn set_alias(row: &mut HashMap<String, Value>, target: &str, sources: &[&str]) {
+    if row.get(target).is_some() {
+        return;
+    }
+    if let Some(v) = get_value(row, sources) {
+        row.insert(target.to_string(), v);
+    }
+}
+
+fn ms_to_utc_string(ms: i64) -> Option<String> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+pub fn align_statement_summary_row_schema(row: &mut HashMap<String, Value>) {
+    set_alias(
+        row,
+        "DIGEST_TEXT",
+        &["DIGEST_TEXT", "digest_text", "normalized_sql"],
+    );
+    set_alias(
+        row,
+        "INSTANCE",
+        &["INSTANCE", "instance", "instance_id", "INSTANCE_ID"],
+    );
+    set_alias(
+        row,
+        "QUERY_SAMPLE_TEXT",
+        &[
+            "QUERY_SAMPLE_TEXT",
+            "query_sample_text",
+            "sample_sql",
+            "SAMPLE_SQL",
+        ],
+    );
+    set_alias(
+        row,
+        "PREV_SAMPLE_TEXT",
+        &[
+            "PREV_SAMPLE_TEXT",
+            "prev_sample_text",
+            "prev_sql",
+            "PREV_SQL",
+        ],
+    );
+    set_alias(row, "PLAN", &["PLAN", "plan", "sample_plan", "SAMPLE_PLAN"]);
+    set_alias(
+        row,
+        "BINARY_PLAN",
+        &[
+            "BINARY_PLAN",
+            "binary_plan",
+            "sample_binary_plan",
+            "SAMPLE_BINARY_PLAN",
+        ],
+    );
+    set_alias(
+        row,
+        "BINDING_DIGEST_TEXT",
+        &[
+            "BINDING_DIGEST_TEXT",
+            "binding_digest_text",
+            "binding_sql",
+            "BINDING_SQL",
+        ],
+    );
+    set_alias(
+        row,
+        "RESOURCE_GROUP",
+        &[
+            "RESOURCE_GROUP",
+            "resource_group",
+            "resource_group_name",
+            "RESOURCE_GROUP_NAME",
+        ],
+    );
+    set_alias(
+        row,
+        "SUM_COP_TASK_NUM",
+        &["SUM_COP_TASK_NUM", "sum_cop_task_num", "sum_num_cop_tasks"],
+    );
+    set_alias(
+        row,
+        "SUM_EXEC_RETRY",
+        &[
+            "SUM_EXEC_RETRY",
+            "sum_exec_retry",
+            "exec_retry_count",
+            "EXEC_RETRY_COUNT",
+        ],
+    );
+    set_alias(
+        row,
+        "SUM_EXEC_RETRY_TIME",
+        &[
+            "SUM_EXEC_RETRY_TIME",
+            "sum_exec_retry_time",
+            "exec_retry_time_us",
+            "EXEC_RETRY_TIME_US",
+        ],
+    );
+    set_alias(
+        row,
+        "MAX_BACKOFF_TIME",
+        &[
+            "MAX_BACKOFF_TIME",
+            "max_backoff_time",
+            "max_backoff_time_us",
+        ],
+    );
+    set_alias(
+        row,
+        "MAX_COP_PROCESS_TIME",
+        &[
+            "MAX_COP_PROCESS_TIME",
+            "max_cop_process_time",
+            "max_cop_process_time_us",
+        ],
+    );
+    set_alias(
+        row,
+        "MAX_COP_WAIT_TIME",
+        &[
+            "MAX_COP_WAIT_TIME",
+            "max_cop_wait_time",
+            "max_cop_wait_time_us",
+        ],
+    );
+    set_alias(
+        row,
+        "MAX_GET_COMMIT_TS_TIME",
+        &[
+            "MAX_GET_COMMIT_TS_TIME",
+            "max_get_commit_ts_time",
+            "max_get_commit_ts_time_us",
+        ],
+    );
+    set_alias(
+        row,
+        "MAX_LOCAL_LATCH_WAIT_TIME",
+        &[
+            "MAX_LOCAL_LATCH_WAIT_TIME",
+            "max_local_latch_wait_time",
+            "max_local_latch_time_us",
+        ],
+    );
+    set_alias(row, "MAX_DISK", &["MAX_DISK", "max_disk", "max_disk_bytes"]);
+    set_alias(row, "MAX_MEM", &["MAX_MEM", "max_mem", "max_mem_bytes"]);
+    set_alias(
+        row,
+        "MAX_PREWRITE_REGIONS",
+        &[
+            "MAX_PREWRITE_REGIONS",
+            "max_prewrite_regions",
+            "max_prewrite_region_num",
+        ],
+    );
+    set_alias(
+        row,
+        "MAX_QUEUED_RC_TIME",
+        &[
+            "MAX_QUEUED_RC_TIME",
+            "max_queued_rc_time",
+            "max_ru_wait_duration_us",
+        ],
+    );
+    set_alias(
+        row,
+        "MAX_WRITE_SIZE",
+        &["MAX_WRITE_SIZE", "max_write_size", "max_write_size_bytes"],
+    );
+    set_alias(
+        row,
+        "PLAN_CACHE_UNQUALIFIED",
+        &[
+            "PLAN_CACHE_UNQUALIFIED",
+            "plan_cache_unqualified",
+            "plan_cache_unqualified_count",
+        ],
+    );
+    set_alias(
+        row,
+        "MAX_REQUEST_UNIT_READ",
+        &["MAX_REQUEST_UNIT_READ", "max_request_unit_read", "max_rru"],
+    );
+    set_alias(
+        row,
+        "MAX_REQUEST_UNIT_WRITE",
+        &[
+            "MAX_REQUEST_UNIT_WRITE",
+            "max_request_unit_write",
+            "max_wru",
+        ],
+    );
+
+    if row.get("SUMMARY_BEGIN_TIME").is_none() {
+        if let Some(v) = get_value(row, &["window_start_ms", "WINDOW_START_MS"]) {
+            if let Some(ms) = value_to_f64(&v).map(|x| x as i64) {
+                if let Some(ts) = ms_to_utc_string(ms) {
+                    row.insert("SUMMARY_BEGIN_TIME".to_string(), Value::String(ts));
+                }
+            }
+        }
+    }
+    if row.get("SUMMARY_END_TIME").is_none() {
+        if let Some(v) = get_value(row, &["window_end_ms", "WINDOW_END_MS"]) {
+            if let Some(ms) = value_to_f64(&v).map(|x| x as i64) {
+                if let Some(ts) = ms_to_utc_string(ms) {
+                    row.insert("SUMMARY_END_TIME".to_string(), Value::String(ts));
+                }
+            }
+        }
+    }
+    if row.get("FIRST_SEEN").is_none() {
+        if let Some(v) = get_value(row, &["first_seen", "first_seen_ms", "FIRST_SEEN_MS"]) {
+            if let Some(ms) = value_to_f64(&v).map(|x| x as i64) {
+                if let Some(ts) = ms_to_utc_string(ms) {
+                    row.insert("FIRST_SEEN".to_string(), Value::String(ts));
+                }
+            }
+        }
+    }
+    if row.get("LAST_SEEN").is_none() {
+        if let Some(v) = get_value(row, &["last_seen", "last_seen_ms", "LAST_SEEN_MS"]) {
+            if let Some(ms) = value_to_f64(&v).map(|x| x as i64) {
+                if let Some(ts) = ms_to_utc_string(ms) {
+                    row.insert("LAST_SEEN".to_string(), Value::String(ts));
+                }
+            }
+        }
+    }
+
+    let exec_count = get_value(row, &["EXEC_COUNT", "exec_count"]).and_then(|v| value_to_f64(&v));
+    if let Some(exec) = exec_count.filter(|x| *x > 0.0) {
+        if row.get("AVG_GET_COMMIT_TS_TIME").is_none() {
+            if let Some(sum_v) = get_value(
+                row,
+                &["sum_get_commit_ts_time_us", "SUM_GET_COMMIT_TS_TIME_US"],
+            ) {
+                if let Some(sum) = value_to_f64(&sum_v) {
+                    if let Some(n) = serde_json::Number::from_f64(sum / exec) {
+                        row.insert("AVG_GET_COMMIT_TS_TIME".to_string(), Value::Number(n));
+                    }
+                }
+            }
+        }
+        if row.get("AVG_TIDB_CPU_TIME").is_none() {
+            if let Some(sum_v) = get_value(row, &["sum_tidb_cpu", "SUM_TIDB_CPU"]) {
+                if let Some(sum) = value_to_f64(&sum_v) {
+                    if let Some(n) = serde_json::Number::from_f64(sum / exec) {
+                        row.insert("AVG_TIDB_CPU_TIME".to_string(), Value::Number(n));
+                    }
+                }
+            }
+        }
+        if row.get("AVG_TIKV_CPU_TIME").is_none() {
+            if let Some(sum_v) = get_value(row, &["sum_tikv_cpu", "SUM_TIKV_CPU"]) {
+                if let Some(sum) = value_to_f64(&sum_v) {
+                    if let Some(n) = serde_json::Number::from_f64(sum / exec) {
+                        row.insert("AVG_TIKV_CPU_TIME".to_string(), Value::Number(n));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut aligned = HashMap::with_capacity(TIDB_STATEMENT_SUMMARY_COLUMNS.len());
+    for col in TIDB_STATEMENT_SUMMARY_COLUMNS {
+        let lc = col.to_ascii_lowercase();
+        let value = get_value(row, &[*col, &lc]).unwrap_or(Value::Null);
+        aligned.insert((*col).to_string(), value);
+    }
+    *row = aligned;
+}
+
 /// Buffer for received statement batches
 type StatementBuffer = Arc<Mutex<Vec<ReceivedBatch>>>;
 
@@ -571,6 +990,11 @@ impl SystemTablePushService for GrpcPushService {
                 "normalized_sql".to_string(),
                 Value::String(stmt.normalized_sql.clone()),
             );
+            // Backward compatibility alias expected by existing diagnosis queries
+            row.insert(
+                "digest_text".to_string(),
+                Value::String(stmt.normalized_sql.clone()),
+            );
             row.insert(
                 "table_names".to_string(),
                 Value::String(stmt.table_names.clone()),
@@ -849,6 +1273,15 @@ impl SystemTablePushService for GrpcPushService {
             // BATCH METADATA
             // ====================================================================
             if let Some(ref m) = batch.metadata {
+                let summary_begin_time =
+                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(m.window_start_ms)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_default();
+                let summary_end_time =
+                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(m.window_end_ms)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_default();
+
                 row.insert(
                     "window_start_ms".to_string(),
                     Value::Number(m.window_start_ms.into()),
@@ -856,6 +1289,23 @@ impl SystemTablePushService for GrpcPushService {
                 row.insert(
                     "window_end_ms".to_string(),
                     Value::Number(m.window_end_ms.into()),
+                );
+                // Backward compatibility aliases expected by old SQL predicates
+                row.insert(
+                    "SUMMARY_BEGIN_TIME".to_string(),
+                    Value::String(summary_begin_time.clone()),
+                );
+                row.insert(
+                    "SUMMARY_END_TIME".to_string(),
+                    Value::String(summary_end_time.clone()),
+                );
+                row.insert(
+                    "summary_begin_time".to_string(),
+                    Value::String(summary_begin_time),
+                );
+                row.insert(
+                    "summary_end_time".to_string(),
+                    Value::String(summary_end_time),
                 );
                 row.insert(
                     "batch_sequence".to_string(),
@@ -891,6 +1341,8 @@ impl SystemTablePushService for GrpcPushService {
                 row.insert(key.clone(), json_value);
             }
 
+            align_statement_summary_row_schema(&mut row);
+
             rows.push(row);
         }
 
@@ -915,15 +1367,123 @@ impl SystemTablePushService for GrpcPushService {
 
     async fn push_table_rows(
         &self,
-        _request: tonic::Request<TableRowBatch>,
+        request: tonic::Request<TableRowBatch>,
     ) -> Result<tonic::Response<PushResponse>, tonic::Status> {
-        // Not used for gRPC push — only PushStatements is used
+        let batch = request.into_inner();
+        let metadata = batch.metadata.as_ref();
+        let cluster_id = metadata.map(|m| m.cluster_id.clone()).unwrap_or_default();
+        let instance_id = metadata.map(|m| m.instance_id.clone()).unwrap_or_default();
+        let row_count = batch.rows.len();
+
+        if let Some(ref limiter) = self.rate_limiter {
+            if !limiter.try_acquire().await {
+                warn!("Rate limit exceeded, rejecting {} rows", row_count);
+                return Ok(tonic::Response::new(PushResponse {
+                    success: false,
+                    message: "Rate limit exceeded".to_string(),
+                    received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    accepted_count: 0,
+                    rejected_count: row_count as i32,
+                    errors: vec!["Rate limit exceeded".to_string()],
+                }));
+            }
+        }
+
+        let buffer_size = self.buffer.lock().await.len();
+        let buffer_load = buffer_size as f64 / self.buffer_capacity as f64;
+        let bp_action = self.backpressure.update_load(buffer_load);
+        match bp_action {
+            BackpressureAction::Reject => {
+                warn!(
+                    "Backpressure REJECT: buffer {:.0}% full",
+                    buffer_load * 100.0
+                );
+                return Ok(tonic::Response::new(PushResponse {
+                    success: false,
+                    message: format!("Backpressure: buffer {:.0}% full", buffer_load * 100.0),
+                    received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    accepted_count: 0,
+                    rejected_count: row_count as i32,
+                    errors: vec![],
+                }));
+            }
+            BackpressureAction::Throttle => {
+                warn!(
+                    "Backpressure THROTTLE: buffer {:.0}% full",
+                    buffer_load * 100.0
+                );
+            }
+            BackpressureAction::Accept => {}
+        }
+
+        let schema = match batch.schema.as_ref() {
+            Some(s) => s,
+            None => {
+                return Ok(tonic::Response::new(PushResponse {
+                    success: false,
+                    message: "missing schema in TableRowBatch".to_string(),
+                    received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    accepted_count: 0,
+                    rejected_count: row_count as i32,
+                    errors: vec!["missing schema in TableRowBatch".to_string()],
+                }));
+            }
+        };
+
+        info!("Received push: {} table rows", row_count);
+
+        let mut rows = Vec::with_capacity(row_count);
+        let mut rejected = 0i32;
+        for row in &batch.rows {
+            if schema.columns.len() != row.values.len() {
+                rejected += 1;
+                continue;
+            }
+
+            let mut out = HashMap::with_capacity(schema.columns.len());
+            for (col, value) in schema.columns.iter().zip(row.values.iter()) {
+                let val = match &value.kind {
+                    Some(proto::value::Kind::StringVal(s)) => Value::String(s.clone()),
+                    Some(proto::value::Kind::Int64Val(i)) => Value::Number((*i).into()),
+                    Some(proto::value::Kind::Uint64Val(u)) => Value::Number((*u).into()),
+                    Some(proto::value::Kind::Float64Val(f)) => Value::Number(
+                        serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)),
+                    ),
+                    Some(proto::value::Kind::BoolVal(b)) => Value::Bool(*b),
+                    Some(proto::value::Kind::BytesVal(v)) => {
+                        Value::String(base64::prelude::BASE64_STANDARD.encode(v))
+                    }
+                    Some(proto::value::Kind::TimestampMs(ts)) => Value::Number((*ts).into()),
+                    Some(proto::value::Kind::DurationUs(d)) => Value::Number((*d).into()),
+                    Some(proto::value::Kind::JsonVal(v)) => {
+                        serde_json::from_slice(v).unwrap_or(Value::Null)
+                    }
+                    Some(proto::value::Kind::NullVal(_)) => Value::Null,
+                    None => Value::Null,
+                };
+                out.insert(col.name.clone(), val);
+            }
+            rows.push(out);
+        }
+
+        let accepted = rows.len() as i32;
+        let rejected_count = rejected + (row_count as i32 - accepted - rejected);
+
+        let received_batch = ReceivedBatch {
+            cluster_id,
+            instance_id,
+            statements: rows,
+            received_at: chrono::Utc::now(),
+        };
+
+        self.buffer.lock().await.push(received_batch);
+
         Ok(tonic::Response::new(PushResponse {
-            success: false,
-            message: "push_table_rows not supported, use push_statements".to_string(),
+            success: rejected_count == 0,
+            message: format!("Accepted {} rows", accepted),
             received_timestamp_ms: chrono::Utc::now().timestamp_millis(),
-            accepted_count: 0,
-            rejected_count: 0,
+            accepted_count: accepted,
+            rejected_count,
             errors: vec![],
         }))
     }
