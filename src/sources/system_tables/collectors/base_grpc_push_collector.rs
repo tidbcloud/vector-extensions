@@ -35,6 +35,8 @@ use shared_proto::{
     StatementBatch, TableRowBatch,
 };
 
+const GRPC_MAX_MESSAGE_SIZE: usize = 128 * 1024 * 1024;
+
 /// Buffer for received statement batches
 pub type StatementBuffer = Arc<Mutex<Vec<ReceivedBatch>>>;
 
@@ -465,7 +467,11 @@ impl BaseGrpcPushCollector {
             info!("Starting gRPC push receiver on {}", addr);
 
             if let Err(e) = tonic::transport::Server::builder()
-                .add_service(SystemTablePushServiceServer::new(service))
+                .add_service(
+                    SystemTablePushServiceServer::new(service)
+                        .max_decoding_message_size(GRPC_MAX_MESSAGE_SIZE)
+                        .max_encoding_message_size(GRPC_MAX_MESSAGE_SIZE),
+                )
                 .serve(addr)
                 .await
             {

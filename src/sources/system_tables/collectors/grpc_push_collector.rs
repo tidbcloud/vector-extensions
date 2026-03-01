@@ -258,6 +258,10 @@ const TIDB_STATEMENT_SUMMARY_COLUMNS: &[&str] = &[
     "STORAGE_MPP",
 ];
 
+// Default tonic limit is 4 MiB, which is too small for high-QPS statement
+// summary windows. Raise both receive/send limits for push RPC payloads.
+const GRPC_MAX_MESSAGE_SIZE: usize = 128 * 1024 * 1024;
+
 fn proto_data_type_to_mysql_type(data_type: i32) -> &'static str {
     match data_type {
         // STRING
@@ -961,7 +965,11 @@ impl GrpcPushCollector {
             };
 
             if let Err(e) = tonic::transport::Server::builder()
-                .add_service(SystemTablePushServiceServer::new(service))
+                .add_service(
+                    SystemTablePushServiceServer::new(service)
+                        .max_decoding_message_size(GRPC_MAX_MESSAGE_SIZE)
+                        .max_encoding_message_size(GRPC_MAX_MESSAGE_SIZE),
+                )
                 .serve(addr)
                 .await
             {

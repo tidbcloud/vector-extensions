@@ -42,6 +42,8 @@ use shared_proto::{PingRequest, PingResponse, PushResponse, StatementBatch, Tabl
 
 use base64::Engine;
 
+const GRPC_MAX_MESSAGE_SIZE: usize = 128 * 1024 * 1024;
+
 /// Extract statement fields from proto to HashMap (80+ fields)
 pub fn extract_statement_fields(
     stmt: &shared_proto::Statement,
@@ -431,7 +433,11 @@ impl StatementGrpcPushService {
             info!("Starting gRPC push receiver on {}", addr);
 
             if let Err(e) = tonic::transport::Server::builder()
-                .add_service(SystemTablePushServiceServer::new(self))
+                .add_service(
+                    SystemTablePushServiceServer::new(self)
+                        .max_decoding_message_size(GRPC_MAX_MESSAGE_SIZE)
+                        .max_encoding_message_size(GRPC_MAX_MESSAGE_SIZE),
+                )
                 .serve(addr)
                 .await
             {
