@@ -282,17 +282,50 @@ fn proto_data_type_to_mysql_type(data_type: i32) -> &'static str {
     }
 }
 
+fn proto_value_to_mysql_type(value: &proto::Value) -> Option<&'static str> {
+    match &value.kind {
+        Some(proto::value::Kind::StringVal(_)) => Some("varchar"),
+        Some(proto::value::Kind::Int64Val(_)) => Some("bigint"),
+        Some(proto::value::Kind::Uint64Val(_)) => Some("bigint unsigned"),
+        Some(proto::value::Kind::Float64Val(_)) => Some("double"),
+        Some(proto::value::Kind::BoolVal(_)) => Some("tinyint(1)"),
+        Some(proto::value::Kind::BytesVal(_)) => Some("blob"),
+        Some(proto::value::Kind::TimestampMs(_)) => Some("timestamp"),
+        Some(proto::value::Kind::DurationUs(_)) => Some("bigint"),
+        Some(proto::value::Kind::JsonVal(_)) => Some("json"),
+        Some(proto::value::Kind::NullVal(_)) | None => None,
+    }
+}
+
 pub(crate) fn build_schema_metadata_from_proto_schema(
     schema: &proto::TableSchema,
+    rows: &[proto::TableRow],
 ) -> serde_json::Map<String, Value> {
     let mut schema_metadata = serde_json::Map::new();
-    for col in &schema.columns {
+    let mut fallback_cols = Vec::new();
+    for (idx, col) in schema.columns.iter().enumerate() {
+        let mysql_type = if col.r#type != 0 {
+            proto_data_type_to_mysql_type(col.r#type)
+        } else {
+            fallback_cols.push(col.name.clone());
+            rows.iter()
+                .filter_map(|r| r.values.get(idx))
+                .find_map(proto_value_to_mysql_type)
+                .unwrap_or("varchar")
+        };
+
         let mut field_info = serde_json::Map::new();
         field_info.insert(
             "mysql_type".to_string(),
-            Value::String(proto_data_type_to_mysql_type(col.r#type).to_string()),
+            Value::String(mysql_type.to_string()),
         );
         schema_metadata.insert(col.name.clone(), Value::Object(field_info));
+    }
+    if !fallback_cols.is_empty() {
+        warn!(
+            "proto schema contains UNKNOWN column types; fell back to row-value type inference for {:?}",
+            fallback_cols
+        );
     }
     schema_metadata
 }
@@ -1492,7 +1525,7 @@ impl SystemTablePushService for GrpcPushService {
 
         info!("Received push: {} table rows", row_count);
 
-        let schema_metadata = build_schema_metadata_from_proto_schema(schema);
+        let schema_metadata = build_schema_metadata_from_proto_schema(schema, &batch.rows);
         let mut rows = Vec::with_capacity(row_count);
         let mut rejected = 0i32;
         for row in &batch.rows {
