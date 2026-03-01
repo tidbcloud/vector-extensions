@@ -169,17 +169,24 @@ impl DuckDBQueryExecutor {
                         
                         info!("✓ AWS S3 credentials configured via CREATE SECRET successfully");
                     }
-                    (Err(e1), Err(e2)) => {
-                        warn!("AWS_ACCESS_KEY_ID not found: {:?}, AWS_SECRET_ACCESS_KEY not found: {:?}", e1, e2);
+                    _ => {
+                        // No AK/SK: use default credential chain (IAM roles, IRSA, etc.)
                         warn!("Using AWS S3 with default credential chain (IAM roles, etc.)");
-                    }
-                    (Err(e), _) => {
-                        warn!("AWS_ACCESS_KEY_ID not found: {:?}", e);
-                        warn!("Using AWS S3 with default credential chain (IAM roles, etc.)");
-                    }
-                    (_, Err(e)) => {
-                        warn!("AWS_SECRET_ACCESS_KEY not found: {:?}", e);
-                        warn!("Using AWS S3 with default credential chain (IAM roles, etc.)");
+                        // When using credential_chain, DuckDB still needs a secret with REGION and ENDPOINT,
+                        // otherwise the S3 client defaults to us-east-1 and requests go to s3.us-east-1.amazonaws.com.
+                        if let Some(ref region) = region {
+                            let _ = conn.execute("DROP SECRET IF EXISTS s3_credentials;", []);
+                            let region_escaped = region.replace("'", "''");
+                            let endpoint = format!("s3.{}.amazonaws.com", region);
+                            let endpoint_escaped = endpoint.replace("'", "''");
+                            let secret_sql = format!(
+                                "CREATE SECRET s3_credentials (TYPE s3, PROVIDER credential_chain, ENDPOINT '{}', REFRESH auto, REGION '{}')",
+                                endpoint_escaped, region_escaped
+                            );
+                            conn.execute(&secret_sql, [])
+                                .map_err(|e| format!("Failed to create AWS S3 credential_chain secret: {}", e))?;
+                            info!("✓ Created s3_credentials secret with credential_chain, REGION '{}', ENDPOINT '{}'", region, endpoint);
+                        }
                     }
                 }
             }

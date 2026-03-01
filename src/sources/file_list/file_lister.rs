@@ -1,13 +1,18 @@
 use std::collections::HashSet;
-use std::io::Read;
+use std::io::{self, Read};
 use std::sync::Arc;
 
-use bytes::Bytes;
+use async_compression::tokio::bufread::GzipDecoder;
+use bytes::{Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
 use futures::StreamExt;
 use object_store::{path::Path as ObjectStorePath, ObjectStore};
 use regex::Regex;
+use tokio::io::{AsyncReadExt, BufReader};
+use tokio::sync::mpsc;
+use tokio_util::io::StreamReader;
+use vector_lib::event::Event as VectorEvent;
 use tracing::{error, info};
 use url::Url;
 
@@ -289,9 +294,353 @@ impl FileLister {
     /// Gzip magic bytes: 1f 8b (RFC 1952).
     const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
+    /// Map object_store error to io::Error for StreamReader.
+    fn map_store_err(e: object_store::Error) -> io::Error {
+        io::Error::new(io::ErrorKind::Other, e.to_string())
+    }
+
+    /// Chunk size for streaming read: 16 MiB per read to balance throughput and memory.
+    const STREAM_READ_CHUNK_BYTES: usize = 16 * 1024 * 1024;
+
+    /// Stream file content in chunks (16 MiB per read), split by newlines, and process each line.
+    /// Uses object_store's into_stream() and (when decompress_gzip) async GzipDecoder.
+    /// For each line calls `on_line` to build an event; pushes to `batch`. When
+    /// `batch_bytes` reaches `max_buffer_bytes`, sends the batch via `out` to avoid OOM.
+    pub async fn stream_file_lines<F, O>(
+        &self,
+        path: &str,
+        decompress_gzip: bool,
+        batch: &mut Vec<O>,
+        batch_bytes: &mut usize,
+        max_buffer_bytes: usize,
+        out: &mut vector::SourceSender,
+        mut on_line: F,
+    ) -> vector::Result<u64>
+    where
+        F: FnMut(String) -> O,
+        O: Into<vector_lib::event::Event>,
+    {
+        let loc = ObjectStorePath::from(path.to_string());
+        let get_result = self.object_store.get(&loc).await?;
+        let mut stream = get_result.into_stream();
+
+        let first = match stream.next().await {
+            Some(Ok(b)) if !b.is_empty() => b,
+            Some(Ok(_)) => {
+                info!(path = %path, "streaming file (empty)");
+                return Ok(0);
+            }
+            Some(Err(e)) => return Err(Self::map_store_err(e).into()),
+            None => {
+                info!(path = %path, "streaming file (empty)");
+                return Ok(0);
+            }
+        };
+
+        info!(path = %path, "streaming file started");
+        let path_looks_gzip = path.ends_with(".gz") || path.ends_with(".log.gz");
+        let content_looks_gzip = first.as_ref().starts_with(&Self::GZIP_MAGIC);
+        let use_gzip = decompress_gzip && (path_looks_gzip || content_looks_gzip);
+
+        let rest = stream.map(|r| r.map_err(Self::map_store_err));
+        let full_stream = futures::stream::iter(std::iter::once(Ok(first))).chain(rest);
+        let reader = StreamReader::new(full_stream);
+        let buf_reader = BufReader::new(reader);
+
+        let mut count = 0u64;
+        let mut remainder = BytesMut::new();
+
+        if use_gzip {
+            let decoder = GzipDecoder::new(buf_reader);
+            let mut decoded = BufReader::new(decoder);
+            loop {
+                let mut chunk = BytesMut::with_capacity(Self::STREAM_READ_CHUNK_BYTES);
+                let n = decoded
+                    .read_buf(&mut chunk)
+                    .await
+                    .map_err(|e| format!("stream read: {}", e))?;
+                if n == 0 {
+                    break;
+                }
+                let mut full = BytesMut::new();
+                full.extend_from_slice(&remainder);
+                full.extend_from_slice(&chunk);
+                remainder.clear();
+                let slice = full.as_ref();
+                let last_nl = slice.iter().rposition(|&b| b == b'\n');
+                let (complete, rest_slice) = if let Some(i) = last_nl {
+                    (&slice[..=i], &slice[i + 1..])
+                } else {
+                    remainder.extend_from_slice(slice);
+                    continue;
+                };
+                remainder.extend_from_slice(rest_slice);
+                let text = String::from_utf8_lossy(complete);
+                for line in text.lines() {
+                    let line_str = line.trim_end_matches('\r');
+                    let event = on_line(line_str.to_string());
+                    *batch_bytes += line_str.len();
+                    batch.push(event);
+                    count += 1;
+                    if max_buffer_bytes > 0 && *batch_bytes >= max_buffer_bytes {
+                        let sent_bytes = *batch_bytes;
+                        let to_send: Vec<vector_lib::event::Event> = batch.drain(..).map(Into::into).collect();
+                        *batch_bytes = 0;
+                        info!(path = %path, events = to_send.len(), content_bytes = sent_bytes, "file_list: flush batch reason=buffer_full, buffer cleared");
+                        let _ = out.send_batch(to_send).await;
+                    }
+                }
+                if max_buffer_bytes == 0 && !batch.is_empty() {
+                    let sent_bytes = *batch_bytes;
+                    let to_send: Vec<vector_lib::event::Event> = batch.drain(..).map(Into::into).collect();
+                    *batch_bytes = 0;
+                    info!(path = %path, events = to_send.len(), content_bytes = sent_bytes, "file_list: flush batch reason=after_chunk, buffer cleared");
+                    let _ = out.send_batch(to_send).await;
+                }
+            }
+            if !remainder.is_empty() {
+                let text = String::from_utf8_lossy(&remainder);
+                let line_str = text.trim_end_matches('\n').trim_end_matches('\r');
+                if !line_str.is_empty() {
+                    let event = on_line(line_str.to_string());
+                    *batch_bytes += line_str.len();
+                    batch.push(event);
+                    count += 1;
+                    if max_buffer_bytes > 0 && *batch_bytes >= max_buffer_bytes {
+                        let sent_bytes = *batch_bytes;
+                        let to_send: Vec<vector_lib::event::Event> = batch.drain(..).map(Into::into).collect();
+                        *batch_bytes = 0;
+                        info!(path = %path, events = to_send.len(), content_bytes = sent_bytes, "file_list: flush batch reason=buffer_full, buffer cleared");
+                        let _ = out.send_batch(to_send).await;
+                    }
+                }
+                if max_buffer_bytes == 0 && !batch.is_empty() {
+                    let sent_bytes = *batch_bytes;
+                    let to_send: Vec<vector_lib::event::Event> = batch.drain(..).map(Into::into).collect();
+                    *batch_bytes = 0;
+                    info!(path = %path, events = to_send.len(), content_bytes = sent_bytes, "file_list: flush batch reason=after_chunk, buffer cleared");
+                    let _ = out.send_batch(to_send).await;
+                }
+            }
+        } else {
+            let mut decoded = buf_reader;
+            loop {
+                let mut chunk = BytesMut::with_capacity(Self::STREAM_READ_CHUNK_BYTES);
+                let n = decoded
+                    .read_buf(&mut chunk)
+                    .await
+                    .map_err(|e| format!("stream read: {}", e))?;
+                if n == 0 {
+                    break;
+                }
+                let mut full = BytesMut::new();
+                full.extend_from_slice(&remainder);
+                full.extend_from_slice(&chunk);
+                remainder.clear();
+                let slice = full.as_ref();
+                let last_nl = slice.iter().rposition(|&b| b == b'\n');
+                let (complete, rest_slice) = if let Some(i) = last_nl {
+                    (&slice[..=i], &slice[i + 1..])
+                } else {
+                    remainder.extend_from_slice(slice);
+                    continue;
+                };
+                remainder.extend_from_slice(rest_slice);
+                let text = String::from_utf8_lossy(complete);
+                for line in text.lines() {
+                    let line_str = line.trim_end_matches('\r');
+                    let event = on_line(line_str.to_string());
+                    *batch_bytes += line_str.len();
+                    batch.push(event);
+                    count += 1;
+                    if max_buffer_bytes > 0 && *batch_bytes >= max_buffer_bytes {
+                        let sent_bytes = *batch_bytes;
+                        let to_send: Vec<vector_lib::event::Event> = batch.drain(..).map(Into::into).collect();
+                        *batch_bytes = 0;
+                        info!(path = %path, events = to_send.len(), content_bytes = sent_bytes, "file_list: flush batch reason=buffer_full, buffer cleared");
+                        let _ = out.send_batch(to_send).await;
+                    }
+                }
+                if max_buffer_bytes == 0 && !batch.is_empty() {
+                    let sent_bytes = *batch_bytes;
+                    let to_send: Vec<vector_lib::event::Event> = batch.drain(..).map(Into::into).collect();
+                    *batch_bytes = 0;
+                    info!(path = %path, events = to_send.len(), content_bytes = sent_bytes, "file_list: flush batch reason=after_chunk, buffer cleared");
+                    let _ = out.send_batch(to_send).await;
+                }
+            }
+            if !remainder.is_empty() {
+                let text = String::from_utf8_lossy(&remainder);
+                let line_str = text.trim_end_matches('\n').trim_end_matches('\r');
+                if !line_str.is_empty() {
+                    let event = on_line(line_str.to_string());
+                    *batch_bytes += line_str.len();
+                    batch.push(event);
+                    count += 1;
+                    if max_buffer_bytes > 0 && *batch_bytes >= max_buffer_bytes {
+                        let sent_bytes = *batch_bytes;
+                        let to_send: Vec<vector_lib::event::Event> = batch.drain(..).map(Into::into).collect();
+                        *batch_bytes = 0;
+                        info!(path = %path, events = to_send.len(), content_bytes = sent_bytes, "file_list: flush batch reason=buffer_full, buffer cleared");
+                        let _ = out.send_batch(to_send).await;
+                    }
+                }
+                if max_buffer_bytes == 0 && !batch.is_empty() {
+                    let sent_bytes = *batch_bytes;
+                    let to_send: Vec<vector_lib::event::Event> = batch.drain(..).map(Into::into).collect();
+                    *batch_bytes = 0;
+                    info!(path = %path, events = to_send.len(), content_bytes = sent_bytes, "file_list: flush batch reason=after_chunk, buffer cleared");
+                    let _ = out.send_batch(to_send).await;
+                }
+            }
+        }
+        info!(path = %path, lines = count, "streaming file finished");
+        Ok(count)
+    }
+
+    /// Like `stream_file_lines` but sends each event as `(Some(Event), byte_size)` to `tx`.
+    /// Sends `(None, 1)` after each 16 MiB chunk when max_buffer_bytes == 0 (flush per chunk).
+    /// Sends `(None, 0)` at end of file. Used for parallel processing.
+    pub async fn stream_file_lines_send<F, O>(
+        &self,
+        path: &str,
+        decompress_gzip: bool,
+        max_buffer_bytes: usize,
+        tx: &mpsc::Sender<(Option<VectorEvent>, usize)>,
+        mut on_line: F,
+    ) -> vector::Result<u64>
+    where
+        F: FnMut(String) -> O,
+        O: Into<VectorEvent>,
+    {
+        let loc = ObjectStorePath::from(path.to_string());
+        let get_result = self.object_store.get(&loc).await?;
+        let mut stream = get_result.into_stream();
+        let first = match stream.next().await {
+            Some(Ok(b)) if !b.is_empty() => b,
+            Some(Ok(_)) => {
+                info!(path = %path, "streaming file (empty)");
+                let _ = tx.send((None, 0)).await;
+                return Ok(0);
+            }
+            Some(Err(e)) => return Err(Self::map_store_err(e).into()),
+            None => {
+                info!(path = %path, "streaming file (empty)");
+                let _ = tx.send((None, 0)).await;
+                return Ok(0);
+            }
+        };
+        info!(path = %path, "streaming file started");
+        let path_looks_gzip = path.ends_with(".gz") || path.ends_with(".log.gz");
+        let content_looks_gzip = first.as_ref().starts_with(&Self::GZIP_MAGIC);
+        let use_gzip = decompress_gzip && (path_looks_gzip || content_looks_gzip);
+        let rest = stream.map(|r| r.map_err(Self::map_store_err));
+        let full_stream = futures::stream::iter(std::iter::once(Ok(first))).chain(rest);
+        let reader = StreamReader::new(full_stream);
+        let buf_reader = BufReader::new(reader);
+        let mut count = 0u64;
+        let mut remainder = BytesMut::new();
+        if use_gzip {
+            let decoder = GzipDecoder::new(buf_reader);
+            let mut decoded = BufReader::new(decoder);
+            loop {
+                let mut chunk = BytesMut::with_capacity(Self::STREAM_READ_CHUNK_BYTES);
+                let n = decoded.read_buf(&mut chunk).await.map_err(|e| format!("stream read: {}", e))?;
+                if n == 0 {
+                    break;
+                }
+                let mut full = BytesMut::new();
+                full.extend_from_slice(&remainder);
+                full.extend_from_slice(&chunk);
+                remainder.clear();
+                let slice = full.as_ref();
+                let last_nl = slice.iter().rposition(|&b| b == b'\n');
+                let (complete, rest_slice) = if let Some(i) = last_nl {
+                    (&slice[..=i], &slice[i + 1..])
+                } else {
+                    remainder.extend_from_slice(slice);
+                    continue;
+                };
+                remainder.extend_from_slice(rest_slice);
+                let text = String::from_utf8_lossy(complete);
+                for line in text.lines() {
+                    let line_str = line.trim_end_matches('\r');
+                    let event = on_line(line_str.to_string()).into();
+                    tx.send((Some(event), line_str.len()))
+                        .await
+                        .map_err(|e| format!("channel closed: {}", e))?;
+                    count += 1;
+                }
+                if max_buffer_bytes == 0 {
+                    tx.send((None, 1)).await.map_err(|e| format!("channel closed: {}", e))?;
+                }
+            }
+            if !remainder.is_empty() {
+                let text = String::from_utf8_lossy(&remainder);
+                let line_str = text.trim_end_matches('\n').trim_end_matches('\r');
+                if !line_str.is_empty() {
+                    let event = on_line(line_str.to_string()).into();
+                    tx.send((Some(event), line_str.len()))
+                        .await
+                        .map_err(|e| format!("channel closed: {}", e))?;
+                    count += 1;
+                }
+            }
+        } else {
+            let mut decoded = buf_reader;
+            loop {
+                let mut chunk = BytesMut::with_capacity(Self::STREAM_READ_CHUNK_BYTES);
+                let n = decoded.read_buf(&mut chunk).await.map_err(|e| format!("stream read: {}", e))?;
+                if n == 0 {
+                    break;
+                }
+                let mut full = BytesMut::new();
+                full.extend_from_slice(&remainder);
+                full.extend_from_slice(&chunk);
+                remainder.clear();
+                let slice = full.as_ref();
+                let last_nl = slice.iter().rposition(|&b| b == b'\n');
+                let (complete, rest_slice) = if let Some(i) = last_nl {
+                    (&slice[..=i], &slice[i + 1..])
+                } else {
+                    remainder.extend_from_slice(slice);
+                    continue;
+                };
+                remainder.extend_from_slice(rest_slice);
+                let text = String::from_utf8_lossy(complete);
+                for line in text.lines() {
+                    let line_str = line.trim_end_matches('\r');
+                    let event = on_line(line_str.to_string()).into();
+                    tx.send((Some(event), line_str.len()))
+                        .await
+                        .map_err(|e| format!("channel closed: {}", e))?;
+                    count += 1;
+                }
+                if max_buffer_bytes == 0 {
+                    tx.send((None, 1)).await.map_err(|e| format!("channel closed: {}", e))?;
+                }
+            }
+            if !remainder.is_empty() {
+                let text = String::from_utf8_lossy(&remainder);
+                let line_str = text.trim_end_matches('\n').trim_end_matches('\r');
+                if !line_str.is_empty() {
+                    let event = on_line(line_str.to_string()).into();
+                    tx.send((Some(event), line_str.len()))
+                        .await
+                        .map_err(|e| format!("channel closed: {}", e))?;
+                    count += 1;
+                }
+            }
+        }
+        info!(path = %path, lines = count, "streaming file finished");
+        tx.send((None, 0)).await.map_err(|e| format!("channel closed: {}", e))?;
+        Ok(count)
+    }
+
     /// Download file bytes from object store. When `decompress_gzip` is true, decompress if either
     /// the path ends with .gz/.log.gz or the content starts with gzip magic (1f 8b), so that
     /// misnamed or extension-less gzip content is still decompressed.
+    /// Prefer stream_file_lines for large files to avoid OOM.
     pub async fn get_file_bytes(
         &self,
         path: &str,

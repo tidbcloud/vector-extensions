@@ -90,6 +90,18 @@ pub struct FileListConfig {
     /// When emit_content is true, decompress gzip (.gz) before emitting. Ignored when emit_content is false.
     #[serde(default = "default_decompress_gzip")]
     pub decompress_gzip: bool,
+
+    /// When using streaming (emit_content + emit_per_line), flush when buffered content reaches this many bytes. When unset or 0: flush after each 16 MiB read chunk (minimal memory). When set (e.g. 524288000 = 500 MiB): flush when batch reaches that size.
+    #[serde(default)]
+    pub max_content_buffer_bytes: Option<usize>,
+
+    /// When using streaming (emit_content + emit_per_line), max number of files to process in parallel. Default 1 (sequential). Set to 2–8 to speed up when many small/medium files.
+    #[serde(default = "default_stream_concurrency")]
+    pub stream_concurrency: usize,
+
+    /// When true (default), flush event batch after each file so sink gets one batch per file (e.g. ~15MB per object). When false, only flush when batch reaches max_content_buffer_bytes so sink can accumulate up to its batch.max_bytes (e.g. 50MB) and write larger objects.
+    #[serde(default = "default_flush_after_each_file")]
+    pub flush_after_each_file: bool,
 }
 
 fn default_cloud_provider() -> String {
@@ -109,6 +121,14 @@ fn default_emit_metadata() -> bool {
 }
 
 fn default_decompress_gzip() -> bool {
+    true
+}
+
+fn default_stream_concurrency() -> usize {
+    1
+}
+
+fn default_flush_after_each_file() -> bool {
     true
 }
 
@@ -158,9 +178,17 @@ impl GenerateConfig for FileListConfig {
             emit_per_line: false,
             line_parse_regexes: None,
             decompress_gzip: default_decompress_gzip(),
+            max_content_buffer_bytes: None,
+            stream_concurrency: default_stream_concurrency(),
+            flush_after_each_file: default_flush_after_each_file(),
         })
         .unwrap()
     }
+}
+
+/// Effective buffer cap: 0 = flush after each 16 MiB chunk (minimal memory); else flush when batch reaches this many bytes.
+fn effective_max_content_buffer_bytes(config: &FileListConfig) -> usize {
+    config.max_content_buffer_bytes.unwrap_or(0)
 }
 
 #[async_trait::async_trait]
@@ -253,6 +281,9 @@ impl SourceConfig for FileListConfig {
                 self.emit_per_line,
                 custom_line_regexes,
                 self.decompress_gzip,
+                effective_max_content_buffer_bytes(self),
+                self.stream_concurrency,
+                self.flush_after_each_file,
                 cx.out,
                 cx.shutdown,
             )?;
@@ -285,6 +316,9 @@ impl SourceConfig for FileListConfig {
             self.emit_per_line,
             custom_line_regexes,
             self.decompress_gzip,
+            effective_max_content_buffer_bytes(self),
+            self.stream_concurrency,
+            self.flush_after_each_file,
             cx.out,
             cx.shutdown,
         )?;
@@ -337,6 +371,9 @@ mod tests {
             emit_per_line: false,
             line_parse_regexes: None,
             decompress_gzip: default_decompress_gzip(),
+            max_content_buffer_bytes: None,
+            stream_concurrency: default_stream_concurrency(),
+            flush_after_each_file: default_flush_after_each_file(),
         };
         assert_eq!(config.cloud_provider, "aws");
         assert_eq!(config.effective_prefix().unwrap(), "path/");
@@ -364,6 +401,9 @@ mod tests {
             emit_per_line: false,
             line_parse_regexes: None,
             decompress_gzip: default_decompress_gzip(),
+            max_content_buffer_bytes: None,
+            stream_concurrency: default_stream_concurrency(),
+            flush_after_each_file: default_flush_after_each_file(),
         };
         assert!(config.effective_prefix().is_err());
     }

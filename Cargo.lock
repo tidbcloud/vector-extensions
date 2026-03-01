@@ -14012,6 +14012,7 @@ name = "vector-extensions"
 version = "0.49.0"
 dependencies = [
  "arrow 56.2.0",
+ "async-compression",
  "async-recursion",
  "async-trait",
  "aws-config",

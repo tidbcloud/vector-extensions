@@ -15,6 +15,7 @@ name = "vector"
 path = "src/main.rs"
 
 [dependencies]
+async-compression = { git = "https://github.com/nolouch/async-compression", rev = "ba69fdc", features = ["tokio", "gzip"] }
 async-recursion = "1.1.1"
 async-trait = { version = "0.1.88", default-features = false }
 arrow = { version = "56.2.0" }
@@ -200,4 +201,5 @@ sinks-metrics = [
 ]
 
 [patch.crates-io]
+# Patch 仅替换源码，不在此处写 features（无效会告警）；features 在 [dependencies] 里对 async-compression 的依赖上指定即可。
 async-compression = { git = "https://github.com/nolouch/async-compression", rev = "ba69fdc" }

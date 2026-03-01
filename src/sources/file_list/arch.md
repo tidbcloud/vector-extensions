@@ -221,7 +221,30 @@ emit_metadata = true
 
 - **`decompress_gzip`** (optional, default: true): When `emit_content` is true, decompress before emitting if either (1) path ends with `.gz` or `.log.gz`, or (2) content starts with gzip magic bytes (`1f 8b`), so misnamed or extension-less gzip data is still decompressed.
 
+- **`max_content_buffer_bytes`** (optional): When using streaming (`emit_content` + `emit_per_line`), when to flush. **When unset or 0**: flush after each 16 MiB read chunk (minimal memory; output object size is entirely controlled by the sink’s `batch.max_bytes` / `timeout_secs`). When set (e.g. 524288000 = 500 MiB): flush when buffered content reaches that size. Content is streamed (object_store `into_stream` + async GzipDecoder).
+
+- **`stream_concurrency`** (optional, default: 1): When using streaming (`emit_content` + `emit_per_line`), max number of files to process **in parallel**. 1 = sequential. Set to 2–8 to speed up when many small/medium files; a single batching task consumes events from a channel and flushes by `max_content_buffer_bytes` (if > 0) or after each chunk / at end of file.
+
+- **`flush_after_each_file`** (optional, default: true): When true, the source also flushes after **each file**. When false, flushing is only by `max_content_buffer_bytes` (if set) or after each 16 MiB chunk (if unset/0), so the sink can accumulate up to its `batch.max_bytes` and produce larger objects.
+
 - **`raw_log_components`** (optional, for raw_logs only): Component subdirs under `merged-logs/{YYYYMMDDHH}/` (e.g. `tidb`, `loki`, `operator`). **When not set = discover at runtime**: for each hour prefix we list with delimiter to get immediate subdir names (all components that actually exist in the bucket). Set explicitly to sync only a subset.
+
+### Memory and process RSS (why RSS can exceed max_content_buffer_bytes)
+
+When `max_content_buffer_bytes` is **unset or 0**, the source flushes after each 16 MiB read chunk, so source-side memory stays minimal (~16 MiB + decoder buffer per stream). When it is **set** (e.g. 500 MiB), it only caps the **source’s in-memory batch** before it is sent downstream. It does **not** cap total process memory. The process RSS can be several times larger because:
+
+1. **Source → Sink pipeline**: After a flush, the batch is handed to Vector’s topology (channel + sink). Until the sink consumes it, that batch still lives in memory. So you can have: source batch (up to `max_content_buffer_bytes`) + one or more batches in the topology channel + the batch the sink is currently processing.
+2. **Parallel stream readers**: With `stream_concurrency = 4`, each of the 4 streams uses a 16 MiB read chunk plus decoder buffers. That adds on the order of tens to ~100 MiB.
+3. **Event overhead**: `content_bytes` in logs is the sum of line lengths (message). Each event also has metadata (e.g. `file_path`, `component`, `hour_partition`, `file_size`). Actual memory per event is often 1.1–1.3× the message size.
+4. **Sink behavior**: The official `aws_s3` sink may hold a full batch in memory before writing to its buffer (disk or memory). So another ~`max_content_buffer_bytes` can be held in the sink when the source sends a 500 MiB batch.
+
+**Example**: With `max_content_buffer_bytes = 524288000` (500 MiB), `stream_concurrency = 4`, and `flush_after_each_file = false`, you can easily see: 500 (source) + 500 (in topology / sink) + 500 (sink processing) + ~100 (stream readers) + overhead → **~1.5–3.5 GB** RSS. This is **not a leak**; it is multiple stages each holding a batch.
+
+**To reduce memory**:
+
+- Omit `max_content_buffer_bytes` (or set to 0): flush after each 16 MiB read chunk so source holds at most ~16 MiB + decoder buffer.
+- Set `flush_after_each_file = true` for per-file batches (smaller, released sooner).
+- Reduce `stream_concurrency` (e.g. 2) to cut reader buffers and parallel in-flight data.
 
 ### Line parsing rules (emit_per_line)
 
@@ -467,6 +490,10 @@ The source exposes the following Prometheus metrics:
    - Polling mode (`poll_interval_secs > 0`): Continuously polls for new files
 
 5. **File content**: With `emit_content = true`, the source downloads each listed file (FileList only), optionally decompresses .gz, and sets event `message` to the content. Use with the **official aws_s3 sink** (`encoding.codec = "text"` or `"json"`, `batch.max_bytes`) to aggregate and write to S3. Delta table and TopSQL list requests still emit only paths.
+
+6. **Streaming for large files**: When `emit_content` and `emit_per_line` are both true, the source uses **streaming** (object_store `into_stream()` + async GzipDecoder) so the full file is never loaded into memory. Events are sent (1) when buffered content reaches `max_content_buffer_bytes` (default 500 MiB) within a file, and (2) **after each file** so the batch is never carried across many files. That avoids both waiting for 500MB before the first write (e.g. 12×40MB files) and high memory (e.g. 900MB from batch + overhead). Single-file memory is bounded by roughly one file's size + 16 MiB read chunk + decoder buffers.
+
+7. **Parallel file streaming**: When `stream_concurrency` > 1, multiple files are streamed in parallel (up to `stream_concurrency` at a time). Each file sends events to a shared channel; one batching task consumes and flushes by `max_content_buffer_bytes` or at end of file. This speeds up directories with many files without changing memory semantics.
 
 ## Future Enhancements
 
