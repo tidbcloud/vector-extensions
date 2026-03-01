@@ -502,6 +502,10 @@ pub mod utils {
         };
 
         let mut policy = CollectionPolicyConfig::default();
+        // Raise TiDB-side statement summary limits to reduce overflow aggregation
+        // into the OTHER bucket under high-QPS workloads.
+        policy.max_digests_per_window = 200_000;
+        policy.max_memory_bytes = 512 * 1024 * 1024;
         policy.aggregation_window_secs = interval_i32;
         policy.push_interval_secs = interval_i32;
         policy
@@ -564,10 +568,14 @@ mod tests {
         let policy = utils::build_grpc_push_collection_policy("long", &config);
         assert_eq!(policy.aggregation_window_secs, 60);
         assert_eq!(policy.push_interval_secs, 60);
+        assert_eq!(policy.max_digests_per_window, 200_000);
+        assert_eq!(policy.max_memory_bytes, 512 * 1024 * 1024);
 
         let custom_policy = utils::build_grpc_push_collection_policy("custom=120", &config);
         assert_eq!(custom_policy.aggregation_window_secs, 120);
         assert_eq!(custom_policy.push_interval_secs, 120);
+        assert_eq!(custom_policy.max_digests_per_window, 200_000);
+        assert_eq!(custom_policy.max_memory_bytes, 512 * 1024 * 1024);
     }
 
     #[test]
