@@ -513,6 +513,7 @@ impl Controller {
                                 log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
                             }
                             if self.emit_content {
+                                info!(path = %file.path, file_size = file.size, "file_list: downloading file (whole-file)");
                                 match self.file_lister.get_file_bytes(&file.path, self.decompress_gzip).await {
                                     Ok(content) => {
                                         let msg = String::from_utf8_lossy(&content).into_owned();
@@ -760,6 +761,7 @@ impl Controller {
                                         log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
                                     }
                                     if self.emit_content {
+                                        info!(path = %file.path, file_size = file.size, "file_list: downloading file (whole-file)");
                                         match self.file_lister.get_file_bytes(&file.path, self.decompress_gzip).await {
                                             Ok(content) => {
                                                 let msg = String::from_utf8_lossy(&content).into_owned();
@@ -835,6 +837,7 @@ impl Controller {
                 log_event.insert("bucket", LogValue::Bytes(file.bucket.clone().into()));
                 log_event.insert("full_path", LogValue::Bytes(file.full_path.clone().into()));
             }
+            info!(path = %file.path, file_size = file.size, "file_list: downloading file (whole-file)");
             match self.file_lister.get_file_bytes(&file.path, self.decompress_gzip).await {
                 Ok(content) => {
                     let msg = String::from_utf8_lossy(&content).into_owned();
