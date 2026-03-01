@@ -299,7 +299,8 @@ impl FileLister {
         io::Error::new(io::ErrorKind::Other, e.to_string())
     }
 
-    /// Chunk size for streaming read: 16 MiB per read to balance throughput and memory.
+    /// Chunk size for streaming read: 16 MiB. BufReader capacities use this so each read_buf gets ~16 MiB
+    /// (default BufReader is only 8 KB, which made each read tiny and slowed S3 streaming).
     const STREAM_READ_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 
     /// Stream file content in chunks (16 MiB per read), split by newlines, and process each line.
@@ -345,14 +346,16 @@ impl FileLister {
         let rest = stream.map(|r| r.map_err(Self::map_store_err));
         let full_stream = futures::stream::iter(std::iter::once(Ok(first))).chain(rest);
         let reader = StreamReader::new(full_stream);
-        let buf_reader = BufReader::new(reader);
+        // Large buffer so we pull multi-MB from S3 per read (default BufReader is 8 KB).
+        let buf_reader = BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, reader);
 
         let mut count = 0u64;
         let mut remainder = BytesMut::new();
 
         if use_gzip {
             let decoder = GzipDecoder::new(buf_reader);
-            let mut decoded = BufReader::new(decoder);
+            // Large buffer so each read_buf gets multi-MB decoded data (default is 8 KB).
+            let mut decoded = BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, decoder);
             loop {
                 let mut chunk = BytesMut::with_capacity(Self::STREAM_READ_CHUNK_BYTES);
                 let n = decoded
@@ -537,12 +540,12 @@ impl FileLister {
         let rest = stream.map(|r| r.map_err(Self::map_store_err));
         let full_stream = futures::stream::iter(std::iter::once(Ok(first))).chain(rest);
         let reader = StreamReader::new(full_stream);
-        let buf_reader = BufReader::new(reader);
+        let buf_reader = BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, reader);
         let mut count = 0u64;
         let mut remainder = BytesMut::new();
         if use_gzip {
             let decoder = GzipDecoder::new(buf_reader);
-            let mut decoded = BufReader::new(decoder);
+            let mut decoded = BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, decoder);
             loop {
                 let mut chunk = BytesMut::with_capacity(Self::STREAM_READ_CHUNK_BYTES);
                 let n = decoded.read_buf(&mut chunk).await.map_err(|e| format!("stream read: {}", e))?;

@@ -36,6 +36,7 @@ Example URLs (for reference):
 ```
 file_list/
 ├── mod.rs                    # Config, SourceConfig, and build
+├── checkpoint.rs             # Checkpoint load/save (completed prefix keys for OOM/restart recovery)
 ├── path_resolver.rs          # DataTypeKind enum and path resolution (cluster_id + types + time → list requests)
 ├── controller.rs             # Runs list (legacy or by-request) and emits events
 ├── file_lister.rs            # list_files_at, list_delta_table_paths, list_topsql_instance_paths
@@ -205,6 +206,8 @@ emit_metadata = true
 
 - **`time_range_end`** / **`end_time`**: End time (ISO 8601). Required for raw_logs when using `types`.
 
+- **`data_dir`** (optional, default: `/tmp/vector-tasks/file_list_checkpoint`): Directory for checkpoint file. When using **data types mode** (e.g. `types = ["raw_logs"]`), completed units (prefixes) are recorded here so that after OOM or restart the job resumes from the next unit instead of from the beginning. Checkpoint file name: `file_list_{endpoint_safe}.json`. Legacy (prefix/pattern) mode does not use checkpoint.
+
 - **`max_keys`** (optional, default: 1000): Maximum number of files to return
 
 - **`poll_interval_secs`** (optional, default: 0): Polling interval in seconds
@@ -215,7 +218,9 @@ emit_metadata = true
 
 - **`emit_content`** (optional, default: false): When true, for each listed **file** (not Delta table paths), download from object store, optionally decompress .gz, and set event `message` to the content. Enables full sync/aggregation in Vector (e.g. file_list → content_to_s3).
 
-- **`emit_per_line`** (optional, default: false): When true with `emit_content`, split file content by newline and emit **one event per log line** with parsed fields. See [Line parsing rules](#line-parsing-rules-emit_per_line) below. Unmatched lines get `line_type=raw`. Enables per-line filtering in CSV/JSON sinks.
+- **`emit_per_line`** (optional, default: false): With `emit_content`, controls how file content is read. **`true`**: always stream by line (one event per line, parsed fields; bounded memory, slower). **`false`**: whole file in one event (fast, higher memory for large files). **`"auto"`**: stream only when file size > `stream_file_above_bytes`, otherwise whole file (small files fast, large files bounded memory). See [Line parsing rules](#line-parsing-rules-emit_per_line) below.
+
+- **`stream_file_above_bytes`** (optional, default: 52428800 = 50 MiB): When `emit_per_line = "auto"`, files larger than this (bytes) use streaming; smaller files use whole-file read. Ignored when `emit_per_line` is `true` or `false`.
 
 - **`line_parse_regexes`** (optional): List of regex strings for **custom** per-line parsing. When non-empty, **only** these regexes are used (built-in Python/HTTP rules are skipped). Each regex must contain at least one **named capture group** `(?P<name>...)`; capture names become event field names. Tried in order; first match wins; `line_type` is set to `custom`, and `message` is always the raw line. Unmatched lines get `line_type=raw`, `message` only. Example: `["^(?P<ts>\\d{4}-\\d{2}-\\d{2}) (?P<level>\\w+): (?P<msg>.*)$"]`.
 
@@ -228,6 +233,10 @@ emit_metadata = true
 - **`flush_after_each_file`** (optional, default: true): When true, the source also flushes after **each file**. When false, flushing is only by `max_content_buffer_bytes` (if set) or after each 16 MiB chunk (if unset/0), so the sink can accumulate up to its `batch.max_bytes` and produce larger objects.
 
 - **`raw_log_components`** (optional, for raw_logs only): Component subdirs under `merged-logs/{YYYYMMDDHH}/` (e.g. `tidb`, `loki`, `operator`). **When not set = discover at runtime**: for each hour prefix we list with delimiter to get immediate subdir names (all components that actually exist in the bucket). Set explicitly to sync only a subset.
+
+### Checkpoint (OOM / restart recovery)
+
+When `data_dir` is set and the source runs in **data types mode** (e.g. `types = ["raw_logs"]`), progress is persisted to a JSON checkpoint file under `data_dir`. Each completed "unit" (one prefix for FileList/RawLogs, or one delta/topsql list request) is recorded. After an OOM kill or restart, the source loads the checkpoint and **skips** any unit whose key is already in `completed_keys`, then continues with the next. So the job does not start from the beginning. Checkpoint is saved after each unit is fully processed. On error, the checkpoint is marked `status: "error"` but completed keys are kept, so the next run still skips completed work. Legacy mode (single `prefix` + `pattern`) does not use checkpoint.
 
 ### Memory and process RSS (why RSS can exceed max_content_buffer_bytes)
 
@@ -248,7 +257,7 @@ When `max_content_buffer_bytes` is **unset or 0**, the source flushes after each
 
 ### Line parsing rules (emit_per_line)
 
-当 `emit_per_line = true` 时：
+当 `emit_per_line = true` 或 `"auto"` 且当前文件走流式时：
 
 - **若配置了 `line_parse_regexes`（非空）**：仅用这些正则按顺序匹配；每条正则须含**命名捕获** `(?P<name>...)`，捕获名作为字段名。命中则 `line_type=custom`，未命中则 `line_type=raw`、仅 `message`。**内置 Python/HTTP 规则不再使用**。
 - **若未配置 `line_parse_regexes`**：使用以下两种内置规则。

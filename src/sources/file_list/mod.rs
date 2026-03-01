@@ -1,6 +1,8 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use vector::config::{GenerateConfig, SourceConfig, SourceContext};
 use vector_lib::{
     config::{DataType, LogNamespace, SourceOutput},
@@ -8,9 +10,67 @@ use vector_lib::{
     source::Source,
 };
 
+use crate::sources::file_list::checkpoint::Checkpoint as FileListCheckpoint;
 use crate::sources::file_list::controller::Controller;
 use crate::sources::file_list::path_resolver::resolve_requests;
 
+/// When to use per-line streaming vs whole-file read. `Auto` = stream only when file size > `stream_file_above_bytes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmitPerLineMode {
+    /// Whole file in one event (fast, higher memory for large files).
+    #[default]
+    Off,
+    /// Always stream by line (bounded memory, slower).
+    On,
+    /// Stream only if file size > stream_file_above_bytes; otherwise whole file.
+    Auto,
+}
+
+impl Serialize for EmitPerLineMode {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            EmitPerLineMode::Off => s.serialize_bool(false),
+            EmitPerLineMode::On => s.serialize_bool(true),
+            EmitPerLineMode::Auto => s.serialize_str("auto"),
+        }
+    }
+}
+
+fn default_emit_per_line_str() -> String {
+    "false".to_string()
+}
+
+fn deserialize_emit_per_line_str<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        B(bool),
+        S(String),
+    }
+    let raw = Raw::deserialize(d)?;
+    Ok(match raw {
+        Raw::B(true) => "true".to_string(),
+        Raw::B(false) => "false".to_string(),
+        Raw::S(s) if s.eq_ignore_ascii_case("auto") => "auto".to_string(),
+        Raw::S(s) => {
+            return Err(serde::de::Error::custom(format!(
+                "emit_per_line must be true, false, or \"auto\", got \"{}\"",
+                s
+            )));
+        }
+    })
+}
+
+/// Parse config string to mode. Used when building Controller.
+pub fn parse_emit_per_line(s: &str) -> EmitPerLineMode {
+    match s.trim().to_lowercase().as_str() {
+        "true" => EmitPerLineMode::On,
+        "auto" => EmitPerLineMode::Auto,
+        _ => EmitPerLineMode::Off,
+    }
+}
+
+mod checkpoint;
 mod controller;
 mod file_lister;
 mod line_parser;
@@ -30,6 +90,10 @@ fn _ensure_registered() {
 pub struct FileListConfig {
     /// Cloud storage endpoint (e.g., s3://bucket, gs://bucket, az://account/container, oss://bucket)
     pub endpoint: String,
+
+    /// Directory for checkpoint file (resume after OOM/restart). When set, completed prefixes are recorded so restart skips them. Default: /tmp/vector-tasks/file_list_checkpoint
+    #[serde(default = "default_file_list_data_dir")]
+    pub data_dir: PathBuf,
 
     /// Cloud provider: aws, gcp, azure, aliyun.
     #[serde(default = "default_cloud_provider")]
@@ -77,10 +141,13 @@ pub struct FileListConfig {
     #[serde(default)]
     pub emit_content: bool,
 
-    /// When true with emit_content, split file content by newline and emit one event per line with parsed fields.
-    /// Use built-in rules (Python logging + HTTP access) or, when `line_parse_regexes` is set, only those regexes (named capture groups → fields).
-    #[serde(default)]
-    pub emit_per_line: bool,
+    /// With emit_content: true = always stream by line; false = whole file per event; "auto" = stream only when file size > stream_file_above_bytes (small files whole-file for speed).
+    #[serde(default = "default_emit_per_line_str", deserialize_with = "deserialize_emit_per_line_str")]
+    pub emit_per_line: String,
+
+    /// When emit_per_line = "auto", files larger than this (bytes) use streaming; smaller use whole-file. Default 50 MiB.
+    #[serde(default = "default_stream_file_above_bytes")]
+    pub stream_file_above_bytes: usize,
 
     /// Optional list of regexes for per-line parsing. Each regex must use named capture groups `(?P<name>...)`; group names become event field names.
     /// Tried in order; first match wins; unmatched lines get line_type=raw. When non-empty, built-in (python/http) rules are not used.
@@ -108,6 +175,10 @@ fn default_cloud_provider() -> String {
     "aws".to_string()
 }
 
+fn default_file_list_data_dir() -> PathBuf {
+    PathBuf::from("/tmp/vector-tasks/file_list_checkpoint")
+}
+
 fn default_max_keys() -> usize {
     1000
 }
@@ -130,6 +201,10 @@ fn default_stream_concurrency() -> usize {
 
 fn default_flush_after_each_file() -> bool {
     true
+}
+
+fn default_stream_file_above_bytes() -> usize {
+    50 * 1024 * 1024 // 50 MiB
 }
 
 fn parse_data_type_kind(s: &str) -> Option<path_resolver::DataTypeKind> {
@@ -160,6 +235,7 @@ impl GenerateConfig for FileListConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
             endpoint: "s3://my-bucket".to_string(),
+            data_dir: default_file_list_data_dir(),
             cloud_provider: default_cloud_provider(),
             region: Some("us-west-2".to_string()),
             cluster_id: Some("10324983984131567830".to_string()),
@@ -175,7 +251,8 @@ impl GenerateConfig for FileListConfig {
             poll_interval_secs: default_poll_interval_secs(),
             emit_metadata: default_emit_metadata(),
             emit_content: false,
-            emit_per_line: false,
+            emit_per_line: "false".to_string(),
+            stream_file_above_bytes: default_stream_file_above_bytes(),
             line_parse_regexes: None,
             decompress_gzip: default_decompress_gzip(),
             max_content_buffer_bytes: None,
@@ -257,7 +334,7 @@ impl SourceConfig for FileListConfig {
             Some(requests)
         } else {
             let prefix = self.effective_prefix()?;
-            let custom_line_regexes = if self.emit_per_line {
+            let custom_line_regexes = if matches!(parse_emit_per_line(&self.emit_per_line), EmitPerLineMode::On | EmitPerLineMode::Auto) {
                 self.line_parse_regexes
                     .as_ref()
                     .filter(|v| !v.is_empty())
@@ -278,7 +355,8 @@ impl SourceConfig for FileListConfig {
                 poll_interval,
                 self.emit_metadata,
                 self.emit_content,
-                self.emit_per_line,
+                parse_emit_per_line(&self.emit_per_line),
+                self.stream_file_above_bytes,
                 custom_line_regexes,
                 self.decompress_gzip,
                 effective_max_content_buffer_bytes(self),
@@ -292,7 +370,7 @@ impl SourceConfig for FileListConfig {
             }));
         };
 
-        let custom_line_regexes = if self.emit_per_line {
+        let custom_line_regexes = if matches!(parse_emit_per_line(&self.emit_per_line), EmitPerLineMode::On | EmitPerLineMode::Auto) {
             self.line_parse_regexes
                 .as_ref()
                 .filter(|v| !v.is_empty())
@@ -301,6 +379,11 @@ impl SourceConfig for FileListConfig {
         } else {
             None
         };
+
+        let checkpoint_path = FileListCheckpoint::get_path(&self.data_dir, &self.endpoint);
+        let checkpoint = std::sync::Arc::new(tokio::sync::Mutex::new(FileListCheckpoint::load(
+            &checkpoint_path,
+        )?));
 
         let controller = Controller::new_with_requests(
             self.endpoint.clone(),
@@ -313,12 +396,15 @@ impl SourceConfig for FileListConfig {
             poll_interval,
             self.emit_metadata,
             self.emit_content,
-            self.emit_per_line,
+            parse_emit_per_line(&self.emit_per_line),
+            self.stream_file_above_bytes,
             custom_line_regexes,
             self.decompress_gzip,
             effective_max_content_buffer_bytes(self),
             self.stream_concurrency,
             self.flush_after_each_file,
+            checkpoint_path,
+            checkpoint,
             cx.out,
             cx.shutdown,
         )?;
@@ -353,6 +439,7 @@ mod tests {
     fn test_effective_prefix_with_prefix() {
         let config = FileListConfig {
             endpoint: "s3://bucket/path".to_string(),
+            data_dir: default_file_list_data_dir(),
             cloud_provider: default_cloud_provider(),
             region: None,
             cluster_id: None,
@@ -368,7 +455,8 @@ mod tests {
             poll_interval_secs: default_poll_interval_secs(),
             emit_metadata: default_emit_metadata(),
             emit_content: false,
-            emit_per_line: false,
+            emit_per_line: "false".to_string(),
+            stream_file_above_bytes: default_stream_file_above_bytes(),
             line_parse_regexes: None,
             decompress_gzip: default_decompress_gzip(),
             max_content_buffer_bytes: None,
@@ -383,6 +471,7 @@ mod tests {
     fn test_effective_prefix_requires_prefix_when_no_types() {
         let config = FileListConfig {
             endpoint: "s3://bucket".to_string(),
+            data_dir: default_file_list_data_dir(),
             cloud_provider: "aws".to_string(),
             region: None,
             cluster_id: None,
@@ -398,7 +487,8 @@ mod tests {
             poll_interval_secs: default_poll_interval_secs(),
             emit_metadata: default_emit_metadata(),
             emit_content: false,
-            emit_per_line: false,
+            emit_per_line: "false".to_string(),
+            stream_file_above_bytes: default_stream_file_above_bytes(),
             line_parse_regexes: None,
             decompress_gzip: default_decompress_gzip(),
             max_content_buffer_bytes: None,

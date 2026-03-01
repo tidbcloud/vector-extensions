@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-s3-sync-config
+  namespace: default
+data:
+  vector.toml: |
+    [sources.file_list]
+    type = "file_list"
+    endpoint = "s3://o11y-dev-shared-us-west-2"
+    cloud_provider = "aws"
+    max_keys = 10000
+    poll_interval_secs = 0
+    emit_metadata = true
+    emit_content = true
+    emit_per_line = true
+    flush_after_each_file = true
+    decompress_gzip = true
+    region = "us-west-2"
+    cluster_id = "1143514"
+    types = [ "raw_logs" ]
+    start_time = "2026-02-02T11:00:00Z"
+    end_time = "2026-02-04T13:59:59Z"
+    raw_log_components = [ "tidb", "ticdc", "pd", "tiflash", "tikv" ]
+
+    [sinks.to_s3]
+    type = "aws_s3"
+    inputs = [ "file_list" ]
+    bucket = "o11y-dev-shared-us-west-2"
+    # 注意：确保这些字段在 metadata 中存在，否则会报错
+    key_prefix = "leotest3/{{ component }}/{{ hour_partition }}/"
+    compression = "gzip"
+    region = "us-west-2"
+
+    [sinks.to_s3.encoding]
+    codec = "text"
+
+    [sinks.to_s3.batch]
+    max_bytes = 1035544320
+    max_events = 10000000
+    timeout_secs = 30
+
+    [sinks.to_s3.buffer]
+    type = "disk"
+    max_size = 5368709120
+    when_full = "block"   # 满了就停止读取，保护内存

@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vector-s3-migration
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: vector
+        image: 552185537300.dkr.ecr.us-west-2.amazonaws.com/dev/vector:nightly-52d4d16-modified-3
+        imagePullPolicy: Always
+        args: ["--config", "/etc/vector/vector.toml"]
+        env:
+        - name: AWS_REGION
+          value: "us-west-2"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/vector
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: vector-s3-sync-config
+      restartPolicy: OnFailure
+  backoffLimit: 1

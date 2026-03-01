@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,9 +14,12 @@ use vector::SourceSender;
 use bytes::Bytes;
 use vector_lib::event::{Event, LogEvent, Value as LogValue};
 
+use crate::sources::file_list::checkpoint::Checkpoint;
 use crate::sources::file_list::file_lister::{FileLister, FileMetadata};
 use crate::sources::file_list::line_parser;
 use crate::sources::file_list::path_resolver::ListRequest;
+use crate::sources::file_list::EmitPerLineMode;
+use tokio::sync::Mutex;
 
 /// Build one LogEvent from a line (for emit_per_line streaming).
 fn build_line_event(
@@ -79,15 +83,16 @@ pub struct Controller {
     poll_interval: Option<Duration>,
     emit_metadata: bool,
     emit_content: bool,
-    emit_per_line: bool,
+    emit_per_line: EmitPerLineMode,
+    stream_file_above_bytes: usize,
     custom_line_regexes: Option<Vec<Regex>>,
     decompress_gzip: bool,
-    /// When streaming (emit_per_line), flush batch when buffered content reaches this many bytes.
     max_content_buffer_bytes: usize,
-    /// Max files to stream in parallel (1 = sequential).
     stream_concurrency: usize,
-    /// When true, flush after each file; when false, only flush when batch >= max_content_buffer_bytes (lets sink accumulate to its max_bytes).
     flush_after_each_file: bool,
+    /// Checkpoint: completed prefix/unit keys so restart skips them (OOM recovery).
+    checkpoint_path: Option<PathBuf>,
+    checkpoint: Option<Arc<Mutex<Checkpoint>>>,
     out: SourceSender,
     shutdown: ShutdownSignal,
     #[allow(dead_code)]
@@ -96,6 +101,39 @@ pub struct Controller {
     time_range_end: Option<DateTime<Utc>>,
     #[allow(dead_code)]
     max_keys: usize,
+}
+
+impl Controller {
+    /// True if this file should be read by streaming (per-line); false = whole file in one event.
+    fn use_stream_for_file(&self, file: &FileMetadata) -> bool {
+        match self.emit_per_line {
+            EmitPerLineMode::Off => false,
+            EmitPerLineMode::On => true,
+            EmitPerLineMode::Auto => file.size > self.stream_file_above_bytes as u64,
+        }
+    }
+
+    /// If checkpoint is enabled and this key is already completed, return true (caller should skip).
+    async fn should_skip_checkpoint(&self, key: &str) -> bool {
+        if let Some(ref cp) = self.checkpoint {
+            if cp.lock().await.is_completed(key) {
+                info!(key = %key, "file_list: skipping completed unit (checkpoint)");
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Record key as completed and persist checkpoint (for OOM/restart recovery).
+    async fn save_checkpoint_completed(&self, key: String) {
+        if let (Some(ref path), Some(ref cp)) = (&self.checkpoint_path, &self.checkpoint) {
+            let mut c = cp.lock().await;
+            c.add_completed(key);
+            if let Err(e) = c.save(path) {
+                error!("file_list: failed to save checkpoint: {}", e);
+            }
+        }
+    }
 }
 
 impl Controller {
@@ -112,7 +150,8 @@ impl Controller {
         poll_interval: Option<Duration>,
         emit_metadata: bool,
         emit_content: bool,
-        emit_per_line: bool,
+        emit_per_line: EmitPerLineMode,
+        stream_file_above_bytes: usize,
         custom_line_regexes: Option<Vec<Regex>>,
         decompress_gzip: bool,
         max_content_buffer_bytes: usize,
@@ -138,11 +177,14 @@ impl Controller {
             emit_metadata,
             emit_content,
             emit_per_line,
+            stream_file_above_bytes,
             custom_line_regexes,
             decompress_gzip,
             max_content_buffer_bytes,
             stream_concurrency,
             flush_after_each_file,
+            checkpoint_path: None,
+            checkpoint: None,
             out,
             shutdown,
             time_range_start: None,
@@ -152,6 +194,7 @@ impl Controller {
     }
 
     /// New: resolve by data types (cluster_id + types + time); list_requests from path_resolver.
+    /// When checkpoint_path and checkpoint are Some, completed units are recorded for OOM/restart recovery.
     pub fn new_with_requests(
         endpoint: String,
         cloud_provider: String,
@@ -163,12 +206,15 @@ impl Controller {
         poll_interval: Option<Duration>,
         emit_metadata: bool,
         emit_content: bool,
-        emit_per_line: bool,
+        emit_per_line: EmitPerLineMode,
+        stream_file_above_bytes: usize,
         custom_line_regexes: Option<Vec<Regex>>,
         decompress_gzip: bool,
         max_content_buffer_bytes: usize,
         stream_concurrency: usize,
         flush_after_each_file: bool,
+        checkpoint_path: PathBuf,
+        checkpoint: Arc<Mutex<Checkpoint>>,
         out: SourceSender,
         shutdown: ShutdownSignal,
     ) -> vector::Result<Self> {
@@ -189,11 +235,14 @@ impl Controller {
             emit_metadata,
             emit_content,
             emit_per_line,
+            stream_file_above_bytes,
             custom_line_regexes,
             decompress_gzip,
             max_content_buffer_bytes,
             stream_concurrency,
             flush_after_each_file,
+            checkpoint_path: Some(checkpoint_path),
+            checkpoint: Some(checkpoint),
             out,
             shutdown,
             time_range_start,
@@ -208,6 +257,11 @@ impl Controller {
         loop {
             if let Err(e) = self.collect_events_by_requests().await {
                 error!("Error listing: {}", e);
+                if let (Some(ref path), Some(ref cp)) = (&self.checkpoint_path, &self.checkpoint) {
+                    let mut c = cp.lock().await;
+                    c.mark_error();
+                    let _ = c.save(path);
+                }
                 if self.poll_interval.is_none() {
                     break;
                 }
@@ -215,7 +269,8 @@ impl Controller {
                 continue;
             }
             if self.poll_interval.is_none() {
-                break;
+                info!("Oneshot mode (poll_interval_secs=0): file_list sync completed, exiting process");
+                std::process::exit(0);
             }
             let interval = self.poll_interval.unwrap();
             tokio::select! {
@@ -250,6 +305,10 @@ impl Controller {
                 }
             }
             if !should_continue {
+                if self.poll_interval.is_none() {
+                    info!("Oneshot mode (poll_interval_secs=0): file_list sync completed, exiting process");
+                    std::process::exit(0);
+                }
                 break;
             }
             if let Some(interval) = self.poll_interval {
@@ -296,15 +355,19 @@ impl Controller {
             let mut batch_bytes = 0usize;
             match req {
                 ListRequest::FileList(f) => {
+                    let key = f.prefix.clone();
+                    if self.should_skip_checkpoint(&key).await {
+                        continue;
+                    }
                     let files = self
                         .file_lister
                         .list_files_at(&f.prefix, f.pattern.as_deref(), f.skip_time_filter)
                         .await?;
                     let partition = parse_raw_logs_prefix(&f.prefix);
-                    if self.emit_content && self.emit_per_line {
+                    if self.emit_content && self.emit_per_line == EmitPerLineMode::On {
                         info!(prefix = %f.prefix, file_count = files.len(), "processing files (streaming)");
                     }
-                    if self.emit_content && self.emit_per_line && self.stream_concurrency > 1 {
+                    if self.emit_content && self.emit_per_line == EmitPerLineMode::On && self.stream_concurrency > 1 {
                         // Parallel: one channel + batching task, N file tasks limited by semaphore.
                         let (tx, mut rx) = mpsc::channel::<(Option<Event>, usize)>(2048);
                         let mut out = self.out.clone();
@@ -389,7 +452,7 @@ impl Controller {
                         batch_task.await.map_err(|e| format!("batch task: {}", e))?;
                     } else {
                         for file in &files {
-                            if self.emit_content && self.emit_per_line {
+                            if self.emit_content && self.use_stream_for_file(file) {
                                 let file = file.clone();
                                 let partition_clone = partition.clone();
                                 let custom_regexes = self.custom_line_regexes.as_deref();
@@ -476,8 +539,13 @@ impl Controller {
                             self.out.send_batch(to_send).await?;
                         }
                     }
+                    self.save_checkpoint_completed(key).await;
                 }
                 ListRequest::DeltaTable(d) => {
+                    let key = format!("delta:{}:{}", d.list_prefix, d.table_subdir);
+                    if self.should_skip_checkpoint(&key).await {
+                        continue;
+                    }
                     let paths = self
                         .file_lister
                         .list_delta_table_paths(&d.list_prefix, &d.table_subdir)
@@ -498,8 +566,13 @@ impl Controller {
                         batch.push(Event::Log(log_event));
                     }
                     counter!("file_list_files_found_total").increment(n as u64);
+                    self.save_checkpoint_completed(key).await;
                 }
                 ListRequest::TopSql(t) => {
+                    let key = format!("topsql:{}", t.list_prefix);
+                    if self.should_skip_checkpoint(&key).await {
+                        continue;
+                    }
                     let paths = self
                         .file_lister
                         .list_topsql_instance_paths(&t.list_prefix)
@@ -520,6 +593,7 @@ impl Controller {
                         batch.push(Event::Log(log_event));
                     }
                     counter!("file_list_files_found_total").increment(n as u64);
+                    self.save_checkpoint_completed(key).await;
                 }
                 ListRequest::RawLogsDiscover(d) => {
                     for hour_prefix in &d.hour_prefixes {
@@ -532,15 +606,18 @@ impl Controller {
                         let components = self.file_lister.list_subdir_names(hour_prefix).await?;
                         for comp in &components {
                             let prefix = format!("{}{}/", hour_prefix, comp);
+                            if self.should_skip_checkpoint(&prefix).await {
+                                continue;
+                            }
                             let files = self
                                 .file_lister
                                 .list_files_at(&prefix, Some("*.log"), true)
                                 .await?;
                             let partition_raw = (hour_partition.clone(), comp.clone());
-                            if self.emit_content && self.emit_per_line {
+                            if self.emit_content && self.emit_per_line == EmitPerLineMode::On {
                                 info!(prefix = %prefix, file_count = files.len(), "processing files (streaming)");
                             }
-                            if self.emit_content && self.emit_per_line && self.stream_concurrency > 1 {
+                            if self.emit_content && self.emit_per_line == EmitPerLineMode::On && self.stream_concurrency > 1 {
                                 let (tx, mut rx) = mpsc::channel::<(Option<Event>, usize)>(2048);
                                 let mut out = self.out.clone();
                                 let max_buf = self.max_content_buffer_bytes;
@@ -624,7 +701,7 @@ impl Controller {
                                 batch_task.await.map_err(|e| format!("batch task: {}", e))?;
                             } else {
                                 for file in &files {
-                                    if self.emit_content && self.emit_per_line {
+                                    if self.emit_content && self.use_stream_for_file(file) {
                                         let file = file.clone();
                                         let partition_raw = (hour_partition.clone(), comp.clone());
                                         let custom_regexes = self.custom_line_regexes.as_deref();
@@ -706,6 +783,7 @@ impl Controller {
                                 self.out.send_batch(std::mem::take(&mut batch)).await?;
                                 batch_bytes = 0;
                             }
+                            self.save_checkpoint_completed(prefix.clone()).await;
                         }
                     }
                 }
