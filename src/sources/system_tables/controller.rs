@@ -13,6 +13,7 @@ use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetch
 use crate::sources::system_tables::{CollectionConfig, DatabaseConfig, TableConfig};
 
 use crate::sources::system_tables::collector_factory::CollectorFactory;
+use crate::sources::system_tables::data_collector::utils::build_grpc_push_collection_policy;
 use crate::sources::system_tables::data_collector::{
     CollectionMethod, CollectorConfig, DataCollector,
 };
@@ -329,6 +330,9 @@ impl Controller {
 
         // Create collector config based on collection method
         let instance = format!("{}:{}", component.host, component.primary_port);
+        let grpc_push_policy = tables.first().map(|table| {
+            build_grpc_push_collection_policy(&table.collection_interval, &self.collection_config)
+        });
         let collector_config = match collection_method {
             CollectionMethod::Coprocessor => {
                 // For coprocessor method, use coprocessor-specific config
@@ -385,7 +389,7 @@ impl Controller {
                     None, // rate_limit - None means unlimited
                     None, // backpressure_threshold - use default
                     None, // backpressure_reject_threshold - use default
-                    None, // collection_policy - use default
+                    grpc_push_policy,
                 )
             }
             CollectionMethod::GrpcPull => {
@@ -404,7 +408,11 @@ impl Controller {
         // Create collector using simplified factory
         // For GrpcPush, we need to pass the first table's config
         let table_config_for_v3 = tables.first().cloned();
-        match CollectorFactory::create_collector(collection_method.clone(), collector_config, table_config_for_v3) {
+        match CollectorFactory::create_collector(
+            collection_method.clone(),
+            collector_config,
+            table_config_for_v3,
+        ) {
             Ok(mut collector) => {
                 // For GrpcPush, set output sender so it can send events directly
                 // instead of relying on the fixed-interval loop
@@ -433,9 +441,7 @@ impl Controller {
                 // For GrpcPush, the collector handles sending internally via set_output_sender
                 // No need to start the run_collector_task loop
                 if collection_method == CollectionMethod::GrpcPush {
-                    info!(
-                        "GrpcPush collector running in push mode - handles sending internally"
-                    );
+                    info!("GrpcPush collector running in push mode - handles sending internally");
                     // Keep the task alive indefinitely (collector runs until shutdown)
                     let task = CollectorTask {
                         handle: tokio::spawn(async move {

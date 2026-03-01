@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::sources::system_tables::{CollectionConfig as VectorCollectionConfig, DatabaseConfig, TableConfig};
+use crate::sources::system_tables::{
+    CollectionConfig as VectorCollectionConfig, DatabaseConfig, TableConfig,
+};
 
 /// Re-export proto CollectionConfig for use in CollectionPolicyConfig
 pub use crate::sources::system_tables::collectors::grpc_push_collector::proto::CollectionConfig as ProtoCollectionConfig;
@@ -334,8 +336,10 @@ impl CollectorConfig {
                 grpc_timeout_secs: grpc_timeout_secs.unwrap_or(30),
                 max_retries: max_retries.unwrap_or(3),
                 rate_limit: rate_limit.unwrap_or(0),
-                backpressure_threshold: backpressure_threshold.unwrap_or(policy.backpressure_throttle_threshold),
-                backpressure_reject_threshold: backpressure_reject_threshold.unwrap_or(policy.backpressure_reject_threshold),
+                backpressure_threshold: backpressure_threshold
+                    .unwrap_or(policy.backpressure_throttle_threshold),
+                backpressure_reject_threshold: backpressure_reject_threshold
+                    .unwrap_or(policy.backpressure_reject_threshold),
                 collection_policy: policy,
             },
         }
@@ -481,6 +485,27 @@ pub mod utils {
             _ => collection_config.short_interval,
         }
     }
+
+    /// Build gRPC push collection policy from table interval settings.
+    ///
+    /// Both aggregation window and push interval are aligned to the table interval
+    /// so TiDB flush cadence matches vector table config (e.g. long=60s).
+    pub fn build_grpc_push_collection_policy(
+        interval_str: &str,
+        collection_config: &VectorCollectionConfig,
+    ) -> CollectionPolicyConfig {
+        let interval_secs = parse_collection_interval(interval_str, collection_config);
+        let interval_i32 = if interval_secs > i32::MAX as u64 {
+            i32::MAX
+        } else {
+            interval_secs as i32
+        };
+
+        let mut policy = CollectionPolicyConfig::default();
+        policy.aggregation_window_secs = interval_i32;
+        policy.push_interval_secs = interval_i32;
+        policy
+    }
 }
 
 #[cfg(test)]
@@ -526,6 +551,23 @@ mod tests {
             5
         );
         assert_eq!(utils::parse_collection_interval("unknown", &config), 5);
+    }
+
+    #[test]
+    fn test_build_grpc_push_collection_policy_uses_table_interval() {
+        let config = VectorCollectionConfig {
+            short_interval: 10,
+            long_interval: 60,
+            retention_days: 7,
+        };
+
+        let policy = utils::build_grpc_push_collection_policy("long", &config);
+        assert_eq!(policy.aggregation_window_secs, 60);
+        assert_eq!(policy.push_interval_secs, 60);
+
+        let custom_policy = utils::build_grpc_push_collection_policy("custom=120", &config);
+        assert_eq!(custom_policy.aggregation_window_secs, 120);
+        assert_eq!(custom_policy.push_interval_secs, 120);
     }
 
     #[test]
