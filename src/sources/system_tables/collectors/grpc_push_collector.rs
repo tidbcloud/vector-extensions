@@ -258,6 +258,66 @@ const TIDB_STATEMENT_SUMMARY_COLUMNS: &[&str] = &[
     "STORAGE_MPP",
 ];
 
+fn proto_data_type_to_mysql_type(data_type: i32) -> &'static str {
+    match data_type {
+        // STRING
+        1 => "varchar",
+        // INT64
+        2 => "bigint",
+        // UINT64
+        3 => "bigint unsigned",
+        // FLOAT64
+        4 => "double",
+        // BOOL
+        5 => "tinyint(1)",
+        // BYTES
+        6 => "blob",
+        // TIMESTAMP
+        7 => "timestamp",
+        // DURATION
+        8 => "bigint",
+        // JSON
+        9 => "json",
+        _ => "varchar",
+    }
+}
+
+pub(crate) fn build_schema_metadata_from_proto_schema(
+    schema: &proto::TableSchema,
+) -> serde_json::Map<String, Value> {
+    let mut schema_metadata = serde_json::Map::new();
+    for col in &schema.columns {
+        let mut field_info = serde_json::Map::new();
+        field_info.insert(
+            "mysql_type".to_string(),
+            Value::String(proto_data_type_to_mysql_type(col.r#type).to_string()),
+        );
+        schema_metadata.insert(col.name.clone(), Value::Object(field_info));
+    }
+    schema_metadata
+}
+
+pub(crate) fn proto_value_to_json(value: &proto::Value) -> Value {
+    match &value.kind {
+        Some(proto::value::Kind::StringVal(s)) => Value::String(s.clone()),
+        Some(proto::value::Kind::Int64Val(i)) => Value::Number((*i).into()),
+        Some(proto::value::Kind::Uint64Val(u)) => Value::Number((*u).into()),
+        Some(proto::value::Kind::Float64Val(f)) => {
+            Value::Number(serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)))
+        }
+        Some(proto::value::Kind::BoolVal(b)) => Value::Bool(*b),
+        Some(proto::value::Kind::BytesVal(v)) => {
+            Value::String(base64::prelude::BASE64_STANDARD.encode(v))
+        }
+        // Use microseconds so Delta TIMESTAMP columns are written correctly.
+        Some(proto::value::Kind::TimestampMs(ts)) => Value::Number(ts.saturating_mul(1000).into()),
+        Some(proto::value::Kind::DurationUs(d)) => Value::Number((*d).into()),
+        Some(proto::value::Kind::JsonVal(v)) => serde_json::from_slice(v).unwrap_or(Value::Null),
+        Some(proto::value::Kind::NullVal(_)) => Value::Null,
+        None => Value::Null,
+    }
+}
+
 fn value_to_f64(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n
@@ -1432,6 +1492,7 @@ impl SystemTablePushService for GrpcPushService {
 
         info!("Received push: {} table rows", row_count);
 
+        let schema_metadata = build_schema_metadata_from_proto_schema(schema);
         let mut rows = Vec::with_capacity(row_count);
         let mut rejected = 0i32;
         for row in &batch.rows {
@@ -1440,29 +1501,15 @@ impl SystemTablePushService for GrpcPushService {
                 continue;
             }
 
-            let mut out = HashMap::with_capacity(schema.columns.len());
+            let mut out = HashMap::with_capacity(schema.columns.len() + 1);
             for (col, value) in schema.columns.iter().zip(row.values.iter()) {
-                let val = match &value.kind {
-                    Some(proto::value::Kind::StringVal(s)) => Value::String(s.clone()),
-                    Some(proto::value::Kind::Int64Val(i)) => Value::Number((*i).into()),
-                    Some(proto::value::Kind::Uint64Val(u)) => Value::Number((*u).into()),
-                    Some(proto::value::Kind::Float64Val(f)) => Value::Number(
-                        serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)),
-                    ),
-                    Some(proto::value::Kind::BoolVal(b)) => Value::Bool(*b),
-                    Some(proto::value::Kind::BytesVal(v)) => {
-                        Value::String(base64::prelude::BASE64_STANDARD.encode(v))
-                    }
-                    Some(proto::value::Kind::TimestampMs(ts)) => Value::Number((*ts).into()),
-                    Some(proto::value::Kind::DurationUs(d)) => Value::Number((*d).into()),
-                    Some(proto::value::Kind::JsonVal(v)) => {
-                        serde_json::from_slice(v).unwrap_or(Value::Null)
-                    }
-                    Some(proto::value::Kind::NullVal(_)) => Value::Null,
-                    None => Value::Null,
-                };
+                let val = proto_value_to_json(value);
                 out.insert(col.name.clone(), val);
             }
+            out.insert(
+                "_schema_metadata".to_string(),
+                Value::Object(schema_metadata.clone()),
+            );
             rows.push(out);
         }
 

@@ -26,7 +26,10 @@ use tracing::{debug, info, warn};
 use crate::sources::system_tables::collectors::base_grpc_push_collector::{
     BackpressureAction, BackpressureState, RateLimiter, ReceivedBatch, StatementBuffer,
 };
-use crate::sources::system_tables::collectors::grpc_push_collector::align_statement_summary_row_schema;
+use crate::sources::system_tables::collectors::grpc_push_collector::{
+    align_statement_summary_row_schema, build_schema_metadata_from_proto_schema,
+    proto_value_to_json,
+};
 use crate::sources::system_tables::data_collector::CollectionPolicyConfig;
 
 // Re-use the proto from grpc_push_collector to avoid duplicate types
@@ -588,6 +591,7 @@ impl SystemTablePushService for StatementGrpcPushService {
             }
         };
 
+        let schema_metadata = build_schema_metadata_from_proto_schema(schema);
         let mut rows = Vec::with_capacity(row_count);
         let mut rejected = 0i32;
         for row in &batch.rows {
@@ -596,29 +600,15 @@ impl SystemTablePushService for StatementGrpcPushService {
                 continue;
             }
 
-            let mut out = HashMap::with_capacity(schema.columns.len());
+            let mut out = HashMap::with_capacity(schema.columns.len() + 1);
             for (col, value) in schema.columns.iter().zip(row.values.iter()) {
-                let val = match &value.kind {
-                    Some(shared_proto::value::Kind::StringVal(s)) => Value::String(s.clone()),
-                    Some(shared_proto::value::Kind::Int64Val(i)) => Value::Number((*i).into()),
-                    Some(shared_proto::value::Kind::Uint64Val(u)) => Value::Number((*u).into()),
-                    Some(shared_proto::value::Kind::Float64Val(f)) => Value::Number(
-                        serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)),
-                    ),
-                    Some(shared_proto::value::Kind::BoolVal(b)) => Value::Bool(*b),
-                    Some(shared_proto::value::Kind::BytesVal(v)) => {
-                        Value::String(base64::prelude::BASE64_STANDARD.encode(v))
-                    }
-                    Some(shared_proto::value::Kind::TimestampMs(ts)) => Value::Number((*ts).into()),
-                    Some(shared_proto::value::Kind::DurationUs(d)) => Value::Number((*d).into()),
-                    Some(shared_proto::value::Kind::JsonVal(v)) => {
-                        serde_json::from_slice(v).unwrap_or(Value::Null)
-                    }
-                    Some(shared_proto::value::Kind::NullVal(_)) => Value::Null,
-                    None => Value::Null,
-                };
+                let val = proto_value_to_json(value);
                 out.insert(col.name.clone(), val);
             }
+            out.insert(
+                "_schema_metadata".to_string(),
+                Value::Object(schema_metadata.clone()),
+            );
             rows.push(out);
         }
 
