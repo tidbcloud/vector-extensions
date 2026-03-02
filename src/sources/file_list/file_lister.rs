@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::io::{self, Read};
+use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use async_compression::tokio::bufread::GzipDecoder;
 use bytes::{Bytes, BytesMut};
@@ -12,14 +14,45 @@ use futures_util::stream::Stream;
 use futures_util::{ready, StreamExt};
 use object_store::{path::Path as ObjectStorePath, ObjectStore};
 use regex::Regex;
-use tokio::io::{AsyncReadExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
-use tokio_util::io::StreamReader;
 use vector_lib::event::Event as VectorEvent;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use url::Url;
 
 use super::object_store_builder::build_object_store;
+
+/// AsyncRead that first yields bytes from a prefix buffer, then reads from the inner reader.
+/// Used to "replay" the first few bytes (e.g. gzip magic) after peeking.
+struct PrefixedReader<R> {
+    prefix: Bytes,
+    pos: usize,
+    inner: R,
+}
+
+impl<R: AsyncRead + Unpin> PrefixedReader<R> {
+    fn new(prefix: Bytes, inner: R) -> Self {
+        PrefixedReader { prefix, pos: 0, inner }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.as_mut().get_mut();
+        if this.pos < this.prefix.len() {
+            let from = &this.prefix[this.pos..];
+            let n = std::cmp::min(from.len(), buf.remaining());
+            buf.put_slice(&from[..n]);
+            this.pos += n;
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
 
 /// Coalesces small chunks from a stream into larger buffers (>= target bytes) so that
 /// downstream readers (e.g. GzipDecoder) get fewer, larger reads and do fewer decompress cycles.
@@ -334,22 +367,99 @@ impl FileLister {
     const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
     /// Map object_store error to io::Error for StreamReader.
+    #[allow(dead_code)]
     fn map_store_err(e: object_store::Error) -> io::Error {
         io::Error::new(io::ErrorKind::Other, e.to_string())
     }
 
-    /// Chunk size for streaming read: 16 MiB. BufReader capacities use this so each read_buf gets ~16 MiB
-    /// (default BufReader is only 8 KB, which made each read tiny and slowed S3 streaming).
-    const STREAM_READ_CHUNK_BYTES: usize = 16 * 1024 * 1024;
+    /// Chunk size for streaming read: 2 MiB per range request. Smaller chunks reduce "error decoding response body"
+    /// on flaky networks; BufReader/decoder buffers use this for read sizes.
+    const STREAM_READ_CHUNK_BYTES: usize = 2 * 1024 * 1024;
+
+    /// Max backoff for range fetch retry (when get_range fails).
+    const STREAM_RANGE_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(60);
+    /// Initial backoff for range fetch retry.
+    const STREAM_RANGE_RETRY_INITIAL: Duration = Duration::from_secs(1);
+
+    /// Spawns a task that fetches the file by range and writes to `writer`. On each get_range
+    /// failure, retries with exponential backoff until success (so the file is read to the end).
+    /// Drops `writer` when done so the reader side sees EOF.
+    fn spawn_range_fetch_task(
+        store: Arc<dyn ObjectStore>,
+        loc: ObjectStorePath,
+        path_for_log: String,
+        file_size: u64,
+        mut writer: tokio::io::DuplexStream,
+    ) {
+        tokio::spawn(async move {
+            let chunk = Self::STREAM_READ_CHUNK_BYTES as u64;
+            let mut offset: u64 = 0;
+            let mut backoff = Self::STREAM_RANGE_RETRY_INITIAL;
+            while offset < file_size {
+                let end = (offset + chunk).min(file_size);
+                let range = Range {
+                    start: offset as usize,
+                    end: end as usize,
+                };
+                let range_start = range.start;
+                let range_end = range.end;
+                info!(
+                    path = %path_for_log,
+                    range_start = range_start,
+                    range_end = range_end,
+                    file_size = file_size,
+                    "file_list range fetch: requesting range"
+                );
+                loop {
+                    match store.get_range(&loc, range.clone()).await {
+                        Ok(bytes) => {
+                            let n = bytes.len();
+                            if n != range_end - range_start {
+                                warn!(
+                                    path = %path_for_log,
+                                    requested = range_end - range_start,
+                                    received = n,
+                                    "file_list range fetch: response length mismatch"
+                                );
+                            }
+                            if let Err(e) = writer.write_all(&bytes).await {
+                                error!(path = %path_for_log, "file_list range fetch: write failed: {}", e);
+                                return;
+                            }
+                            offset += n as u64;
+                            backoff = Self::STREAM_RANGE_RETRY_INITIAL;
+                            break;
+                        }
+                        Err(e) => {
+                            warn!(
+                                path = %path_for_log,
+                                range_start = range_start,
+                                range_end = range_end,
+                                file_size = file_size,
+                                error = %e,
+                                backoff_secs = backoff.as_secs(),
+                                "file_list range fetch failed, retrying"
+                            );
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(Self::STREAM_RANGE_RETRY_MAX_BACKOFF);
+                        }
+                    }
+                }
+            }
+            drop(writer);
+        });
+    }
 
     /// Coalesce target: accumulate network chunks until at least this many bytes (2 MiB) before
     /// feeding to StreamReader. object_store/HTTP often yield small chunks (e.g. 64 KB); without
     /// coalescing we do "read small -> decompress small" every time and network stays idle during
     /// decompress. With coalescing we pass ~2 MiB compressed per read, so fewer decompress cycles.
+    #[allow(dead_code)]
     const STREAM_COALESCE_TARGET_BYTES: usize = 2 * 1024 * 1024;
 
     /// Build a stream that coalesces small Bytes into larger chunks (>= STREAM_COALESCE_TARGET_BYTES)
     /// so that each read from StreamReader gets more compressed data and we do fewer decompress cycles.
+    #[allow(dead_code)]
     fn coalesce_stream<S, E>(
         stream: S,
         target: usize,
@@ -365,12 +475,14 @@ impl FileLister {
     }
 
     /// Stream file content in chunks (16 MiB per read), split by newlines, and process each line.
-    /// Uses object_store's into_stream() and (when decompress_gzip) async GzipDecoder.
+    /// Uses range get with retry: on get_range failure, retries from the same offset until success,
+    /// then continues streaming; gzip is stream-decoded from the concatenated bytes (no resume inside gz).
     /// For each line calls `on_line` to build an event; pushes to `batch`. When
     /// `batch_bytes` reaches `max_buffer_bytes`, sends the batch via `out` to avoid OOM.
     pub async fn stream_file_lines<F, O>(
         &self,
         path: &str,
+        file_size: u64,
         decompress_gzip: bool,
         batch: &mut Vec<O>,
         batch_bytes: &mut usize,
@@ -382,34 +494,36 @@ impl FileLister {
         F: FnMut(String) -> O,
         O: Into<vector_lib::event::Event>,
     {
+        if file_size == 0 {
+            info!(path = %path, "streaming file (empty)");
+            return Ok(0);
+        }
+
         let loc = ObjectStorePath::from(path.to_string());
-        let get_result = self.object_store.get(&loc).await?;
-        let mut stream = get_result.into_stream();
+        let (writer_half, mut reader_half) =
+            tokio::io::duplex(2 * Self::STREAM_READ_CHUNK_BYTES);
+        Self::spawn_range_fetch_task(
+            self.object_store.clone(),
+            loc.clone(),
+            path.to_string(),
+            file_size,
+            writer_half,
+        );
 
-        let first = match stream.next().await {
-            Some(Ok(b)) if !b.is_empty() => b,
-            Some(Ok(_)) => {
-                info!(path = %path, "streaming file (empty)");
-                return Ok(0);
-            }
-            Some(Err(e)) => return Err(Self::map_store_err(e).into()),
-            None => {
-                info!(path = %path, "streaming file (empty)");
-                return Ok(0);
-            }
-        };
+        let mut first_two = [0u8; 2];
+        reader_half
+            .read_exact(&mut first_two)
+            .await
+            .map_err(|e| format!("stream read (first 2 bytes): {}", e))?;
+        let prefix = Bytes::copy_from_slice(&first_two);
+        let prefixed = PrefixedReader::new(prefix, reader_half);
+        let buf_reader =
+            BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, prefixed);
 
-        info!(path = %path, "streaming file started");
+        info!(path = %path, "streaming file started (range mode)");
         let path_looks_gzip = path.ends_with(".gz") || path.ends_with(".log.gz");
-        let content_looks_gzip = first.as_ref().starts_with(&Self::GZIP_MAGIC);
+        let content_looks_gzip = first_two == Self::GZIP_MAGIC;
         let use_gzip = decompress_gzip && (path_looks_gzip || content_looks_gzip);
-
-        let rest = stream.map(|r| r.map_err(Self::map_store_err));
-        let full_stream = futures::stream::iter(std::iter::once(Ok(first))).chain(rest);
-        let coalesced = Self::coalesce_stream(full_stream, Self::STREAM_COALESCE_TARGET_BYTES);
-        let reader = StreamReader::new(coalesced);
-        // Large buffer so we pull multi-MB from S3 per read (default BufReader is 8 KB).
-        let buf_reader = BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, reader);
 
         let mut count = 0u64;
         let mut remainder = BytesMut::new();
@@ -566,9 +680,11 @@ impl FileLister {
     /// Like `stream_file_lines` but sends each event as `(Some(Event), byte_size)` to `tx`.
     /// Sends `(None, 1)` after each 16 MiB chunk when max_buffer_bytes == 0 (flush per chunk).
     /// Sends `(None, 0)` at end of file. Used for parallel processing.
+    /// Uses range get with retry (same as stream_file_lines).
     pub async fn stream_file_lines_send<F, O>(
         &self,
         path: &str,
+        file_size: u64,
         decompress_gzip: bool,
         max_buffer_bytes: usize,
         tx: &mpsc::Sender<(Option<VectorEvent>, usize)>,
@@ -578,32 +694,37 @@ impl FileLister {
         F: FnMut(String) -> O,
         O: Into<VectorEvent>,
     {
+        if file_size == 0 {
+            info!(path = %path, "streaming file (empty)");
+            let _ = tx.send((None, 0)).await;
+            return Ok(0);
+        }
+
         let loc = ObjectStorePath::from(path.to_string());
-        let get_result = self.object_store.get(&loc).await?;
-        let mut stream = get_result.into_stream();
-        let first = match stream.next().await {
-            Some(Ok(b)) if !b.is_empty() => b,
-            Some(Ok(_)) => {
-                info!(path = %path, "streaming file (empty)");
-                let _ = tx.send((None, 0)).await;
-                return Ok(0);
-            }
-            Some(Err(e)) => return Err(Self::map_store_err(e).into()),
-            None => {
-                info!(path = %path, "streaming file (empty)");
-                let _ = tx.send((None, 0)).await;
-                return Ok(0);
-            }
-        };
-        info!(path = %path, "streaming file started");
+        let (writer_half, mut reader_half) =
+            tokio::io::duplex(2 * Self::STREAM_READ_CHUNK_BYTES);
+        Self::spawn_range_fetch_task(
+            self.object_store.clone(),
+            loc.clone(),
+            path.to_string(),
+            file_size,
+            writer_half,
+        );
+
+        let mut first_two = [0u8; 2];
+        reader_half
+            .read_exact(&mut first_two)
+            .await
+            .map_err(|e| format!("stream read (first 2 bytes): {}", e))?;
+        let prefix = Bytes::copy_from_slice(&first_two);
+        let prefixed = PrefixedReader::new(prefix, reader_half);
+        let buf_reader =
+            BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, prefixed);
+
+        info!(path = %path, "streaming file started (range mode)");
         let path_looks_gzip = path.ends_with(".gz") || path.ends_with(".log.gz");
-        let content_looks_gzip = first.as_ref().starts_with(&Self::GZIP_MAGIC);
+        let content_looks_gzip = first_two == Self::GZIP_MAGIC;
         let use_gzip = decompress_gzip && (path_looks_gzip || content_looks_gzip);
-        let rest = stream.map(|r| r.map_err(Self::map_store_err));
-        let full_stream = futures::stream::iter(std::iter::once(Ok(first))).chain(rest);
-        let coalesced = Self::coalesce_stream(full_stream, Self::STREAM_COALESCE_TARGET_BYTES);
-        let reader = StreamReader::new(coalesced);
-        let buf_reader = BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, reader);
         let mut count = 0u64;
         let mut remainder = BytesMut::new();
         if use_gzip {

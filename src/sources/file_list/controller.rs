@@ -422,23 +422,24 @@ impl Controller {
                             let custom_regexes_c = custom_regexes_par.clone();
                             handles.push(tokio::spawn(async move {
                                 let _permit = permit;
-                                lister
-                                    .stream_file_lines_send(
-                                        &file.path,
-                                        decompress_gzip,
-                                        max_buf,
-                                        &tx,
-                                        |line| {
-                                            build_line_event(
-                                                &line,
-                                                &file,
-                                                partition_c.as_ref(),
-                                                custom_regexes_c.as_deref(),
-                                                emit_metadata_par,
+                                        lister
+                                            .stream_file_lines_send(
+                                                &file.path,
+                                                file.size,
+                                                decompress_gzip,
+                                                max_buf,
+                                                &tx,
+                                                |line| {
+                                                    build_line_event(
+                                                        &line,
+                                                        &file,
+                                                        partition_c.as_ref(),
+                                                        custom_regexes_c.as_deref(),
+                                                        emit_metadata_par,
+                                                    )
+                                                },
                                             )
-                                        },
-                                    )
-                                    .await
+                                            .await
                             }));
                         }
                         drop(tx);
@@ -461,6 +462,7 @@ impl Controller {
                                     .file_lister
                                     .stream_file_lines(
                                         &file.path,
+                                        file.size,
                                         self.decompress_gzip,
                                         &mut batch,
                                         &mut batch_bytes,
@@ -675,6 +677,7 @@ impl Controller {
                                         lister
                                             .stream_file_lines_send(
                                                 &file.path,
+                                                file.size,
                                                 decompress_gzip,
                                                 max_buf_raw,
                                                 &tx,
@@ -711,6 +714,7 @@ impl Controller {
                                             .file_lister
                                             .stream_file_lines(
                                                 &file.path,
+                                                file.size,
                                                 self.decompress_gzip,
                                                 &mut batch,
                                                 &mut batch_bytes,

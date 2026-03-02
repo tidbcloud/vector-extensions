@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  labels:
+    release: self-monitoring
+  name: vector-s3-migration-monitor
+  namespace: default
+spec:
+  namespaceSelector:
+    matchNames:
+      - default
+  selector:
+    matchLabels:
+      job-name: vector-s3-migration
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

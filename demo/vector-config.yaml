@@ -48,7 +48,7 @@ data:
     inputs = [ "file_list" ]
     bucket = "o11y-dev-shared-us-west-2"
     # Ensure these fields exist in event metadata or key_prefix will error
-    key_prefix = "leotest4/{{ component }}/{{ hour_partition }}/"
+    key_prefix = "leotest5/{{ component }}/{{ hour_partition }}/"
     # gzip to S3 uses CPU; set compression = "none" to save CPU if downstream does not require it (more bandwidth/storage)
     compression = "gzip"
     region = "us-west-2"
@@ -61,10 +61,6 @@ data:
     max_events = 10000000
     timeout_secs = 30
 
-    [sinks.to_s3.buffer]
-    type = "disk"
-    max_size = 536870912
-    when_full = "block"   # Block when full to protect memory
 
     # Prometheus-format metrics for scraping
     [sinks.prometheus_exporter]
