@@ -1,12 +1,15 @@
 use std::collections::HashSet;
 use std::io::{self, Read};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use async_compression::tokio::bufread::GzipDecoder;
 use bytes::{Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
-use futures::StreamExt;
+use futures_util::stream::Stream;
+use futures_util::{ready, StreamExt};
 use object_store::{path::Path as ObjectStorePath, ObjectStore};
 use regex::Regex;
 use tokio::io::{AsyncReadExt, BufReader};
@@ -17,6 +20,42 @@ use tracing::{error, info};
 use url::Url;
 
 use super::object_store_builder::build_object_store;
+
+/// Coalesces small chunks from a stream into larger buffers (>= target bytes) so that
+/// downstream readers (e.g. GzipDecoder) get fewer, larger reads and do fewer decompress cycles.
+struct CoalesceStream<S> {
+    inner: Pin<Box<S>>,
+    target: usize,
+    buf: BytesMut,
+}
+
+impl<S, E> Stream for CoalesceStream<S>
+where
+    S: Stream<Item = Result<Bytes, E>> + Unpin,
+{
+    type Item = Result<Bytes, E>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, E>>> {
+        let this = self.as_mut().get_mut();
+        loop {
+            if this.buf.len() >= this.target {
+                let out = this.buf.split_to(this.target);
+                return Poll::Ready(Some(Ok(Bytes::from(out))));
+            }
+            match ready!(Pin::new(&mut this.inner).poll_next(cx)) {
+                Some(Ok(b)) => this.buf.extend_from_slice(&b),
+                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+                None => {
+                    if this.buf.is_empty() {
+                        return Poll::Ready(None);
+                    }
+                    let out = this.buf.split();
+                    return Poll::Ready(Some(Ok(Bytes::from(out))));
+                }
+            }
+        }
+    }
+}
 
 /// File metadata information
 #[derive(Debug, Clone)]
@@ -303,6 +342,28 @@ impl FileLister {
     /// (default BufReader is only 8 KB, which made each read tiny and slowed S3 streaming).
     const STREAM_READ_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 
+    /// Coalesce target: accumulate network chunks until at least this many bytes (2 MiB) before
+    /// feeding to StreamReader. object_store/HTTP often yield small chunks (e.g. 64 KB); without
+    /// coalescing we do "read small -> decompress small" every time and network stays idle during
+    /// decompress. With coalescing we pass ~2 MiB compressed per read, so fewer decompress cycles.
+    const STREAM_COALESCE_TARGET_BYTES: usize = 2 * 1024 * 1024;
+
+    /// Build a stream that coalesces small Bytes into larger chunks (>= STREAM_COALESCE_TARGET_BYTES)
+    /// so that each read from StreamReader gets more compressed data and we do fewer decompress cycles.
+    fn coalesce_stream<S, E>(
+        stream: S,
+        target: usize,
+    ) -> CoalesceStream<S>
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin,
+    {
+        CoalesceStream {
+            inner: Box::pin(stream),
+            target,
+            buf: BytesMut::new(),
+        }
+    }
+
     /// Stream file content in chunks (16 MiB per read), split by newlines, and process each line.
     /// Uses object_store's into_stream() and (when decompress_gzip) async GzipDecoder.
     /// For each line calls `on_line` to build an event; pushes to `batch`. When
@@ -345,7 +406,8 @@ impl FileLister {
 
         let rest = stream.map(|r| r.map_err(Self::map_store_err));
         let full_stream = futures::stream::iter(std::iter::once(Ok(first))).chain(rest);
-        let reader = StreamReader::new(full_stream);
+        let coalesced = Self::coalesce_stream(full_stream, Self::STREAM_COALESCE_TARGET_BYTES);
+        let reader = StreamReader::new(coalesced);
         // Large buffer so we pull multi-MB from S3 per read (default BufReader is 8 KB).
         let buf_reader = BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, reader);
 
@@ -539,7 +601,8 @@ impl FileLister {
         let use_gzip = decompress_gzip && (path_looks_gzip || content_looks_gzip);
         let rest = stream.map(|r| r.map_err(Self::map_store_err));
         let full_stream = futures::stream::iter(std::iter::once(Ok(first))).chain(rest);
-        let reader = StreamReader::new(full_stream);
+        let coalesced = Self::coalesce_stream(full_stream, Self::STREAM_COALESCE_TARGET_BYTES);
+        let reader = StreamReader::new(coalesced);
         let buf_reader = BufReader::with_capacity(Self::STREAM_READ_CHUNK_BYTES, reader);
         let mut count = 0u64;
         let mut remainder = BytesMut::new();

@@ -11,6 +11,13 @@ spec:
         image: 552185537300.dkr.ecr.us-west-2.amazonaws.com/dev/vector:nightly-52d4d16-modified-4
         imagePullPolicy: Always
         args: ["--config", "/etc/vector/vector.toml"]
+        ports:
+        - containerPort: 8686
+          name: api
+          protocol: TCP
+        - containerPort: 9598
+          name: metrics
+          protocol: TCP
         env:
         - name: AWS_REGION
           value: "us-west-2"

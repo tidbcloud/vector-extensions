@@ -8,6 +8,17 @@ data:
     # 顶层 data_dir：sink 的 disk buffer 等会写到此目录
     data_dir = "/var/lib/vector"
 
+    # 启用 API：健康检查 /health、管理接口
+    [api]
+    enabled = true
+    address = "0.0.0.0:8686"
+    playground = false
+
+    # 内部指标源：Vector 自身运行指标（吞吐、缓冲、错误等）
+    [sources.internal_metrics]
+    type = "internal_metrics"
+    scrape_interval_secs = 15
+
     [sources.file_list]
     type = "file_list"
     endpoint = "s3://o11y-dev-shared-us-west-2"
@@ -20,8 +31,10 @@ data:
     emit_content = true
     emit_per_line = "auto"
     # 超过此大小的文件用流式（按行），避免整文件进一条 event 触发 sink disk buffer 的 BufferTooSmall
-    stream_file_above_bytes = 65536
-    flush_after_each_file = true
+    stream_file_above_bytes = 6553600
+    # 加速：2 核并行处理 2 个文件（解压+读 S3），更好吃满 CPU
+    stream_concurrency = 2
+    # flush_after_each_file 保持默认 true，按文件边界 flush 有利于输出率；不设 max_content_buffer_bytes，source 解压后直接往 sink 写，由 sink 的 buffer 负责批写即可
     decompress_gzip = true
     region = "us-west-2"
     cluster_id = "1143514"
@@ -36,6 +49,7 @@ data:
     bucket = "o11y-dev-shared-us-west-2"
     # 注意：确保这些字段在 metadata 中存在，否则会报错
     key_prefix = "leotest4/{{ component }}/{{ hour_partition }}/"
+    # gzip 写 S3 会占不少 CPU；若下游不要求压缩可改为 "none" 进一步降 CPU（代价是流量/存储变大）
     compression = "gzip"
     region = "us-west-2"
 
@@ -49,5 +63,12 @@ data:
 
     [sinks.to_s3.buffer]
     type = "disk"
-    max_size = 5368709120
+    max_size = 536870912
     when_full = "block"   # 满了就停止读取，保护内存
+
+    # Prometheus 格式的 metrics 暴露，供 Prometheus/监控抓取
+    [sinks.prometheus_exporter]
+    type = "prometheus_exporter"
+    inputs = [ "internal_metrics" ]
+    address = "0.0.0.0:9598"
+    default_namespace = "vector"
