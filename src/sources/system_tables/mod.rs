@@ -94,6 +94,14 @@ pub struct SystemTablesConfig {
     /// Data retention days
     pub retention_days: u32,
 
+    /// Statement summary max unique digests per aggregation window.
+    #[serde(default = "default_stmt_summary_max_digests_per_window")]
+    pub stmt_summary_max_digests_per_window: i32,
+
+    /// Statement summary max memory bytes per aggregation window.
+    #[serde(default = "default_stmt_summary_max_memory_bytes")]
+    pub stmt_summary_max_memory_bytes: i64,
+
     /// Tables to collect data from (array of table configurations)
     pub tables: Vec<TableConfig>,
 
@@ -134,6 +142,12 @@ pub struct CollectionConfig {
     pub long_interval: u64,
     /// Data retention days
     pub retention_days: u32,
+
+    /// Statement summary max unique digests per aggregation window.
+    pub stmt_summary_max_digests_per_window: i32,
+
+    /// Statement summary max memory bytes per aggregation window.
+    pub stmt_summary_max_memory_bytes: i64,
 }
 
 /// Table configuration for data collection
@@ -182,6 +196,14 @@ pub fn default_collection_method() -> String {
     "coprocessor".to_string()
 }
 
+pub const fn default_stmt_summary_max_digests_per_window() -> i32 {
+    200_000
+}
+
+pub const fn default_stmt_summary_max_memory_bytes() -> i64 {
+    512 * 1024 * 1024
+}
+
 /// Helper functions for reading environment variables
 impl SystemTablesConfig {
     /// Validate configuration based on collection method
@@ -205,7 +227,8 @@ impl SystemTablesConfig {
                     return Err("missing field `database_name` in `sources.tidb_system_tables` (required for SQL collection method)".into());
                 }
             }
-            "coprocessor" | "http_api" | "custom_grpc" | "grpc_push" | "grpc_pull" | "statement_v3" | "v3" | "v3_push" => {
+            "coprocessor" | "http_api" | "custom_grpc" | "grpc_push" | "grpc_pull"
+            | "statement_v3" | "v3" | "v3_push" => {
                 // For coprocessor and other methods, database fields are optional
                 // These methods use gRPC/HTTP to communicate directly with TiKV/PD
                 info!(
@@ -353,6 +376,8 @@ impl GenerateConfig for SystemTablesConfig {
             short_interval: 5,
             long_interval: 1800,
             retention_days: 7,
+            stmt_summary_max_digests_per_window: default_stmt_summary_max_digests_per_window(),
+            stmt_summary_max_memory_bytes: default_stmt_summary_max_memory_bytes(),
             tables: vec![TableConfig {
                 source_schema: "information_schema".to_owned(),
                 source_table: "PROCESSLIST".to_owned(),
@@ -447,6 +472,8 @@ impl SourceConfig for SystemTablesConfig {
             short_interval: config.short_interval,
             long_interval: config.long_interval,
             retention_days: config.retention_days,
+            stmt_summary_max_digests_per_window: config.stmt_summary_max_digests_per_window,
+            stmt_summary_max_memory_bytes: config.stmt_summary_max_memory_bytes,
         };
 
         // Use tables from merged configuration

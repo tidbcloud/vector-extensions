@@ -502,10 +502,8 @@ pub mod utils {
         };
 
         let mut policy = CollectionPolicyConfig::default();
-        // Raise TiDB-side statement summary limits to reduce overflow aggregation
-        // into the OTHER bucket under high-QPS workloads.
-        policy.max_digests_per_window = 200_000;
-        policy.max_memory_bytes = 512 * 1024 * 1024;
+        policy.max_digests_per_window = collection_config.stmt_summary_max_digests_per_window;
+        policy.max_memory_bytes = collection_config.stmt_summary_max_memory_bytes;
         policy.aggregation_window_secs = interval_i32;
         policy.push_interval_secs = interval_i32;
         policy
@@ -545,6 +543,8 @@ mod tests {
             short_interval: 5,
             long_interval: 1800,
             retention_days: 7,
+            stmt_summary_max_digests_per_window: 200_000,
+            stmt_summary_max_memory_bytes: 512 * 1024 * 1024,
         };
 
         assert_eq!(utils::parse_collection_interval("short", &config), 5);
@@ -563,19 +563,21 @@ mod tests {
             short_interval: 10,
             long_interval: 60,
             retention_days: 7,
+            stmt_summary_max_digests_per_window: 321_000,
+            stmt_summary_max_memory_bytes: 768 * 1024 * 1024,
         };
 
         let policy = utils::build_grpc_push_collection_policy("long", &config);
         assert_eq!(policy.aggregation_window_secs, 60);
         assert_eq!(policy.push_interval_secs, 60);
-        assert_eq!(policy.max_digests_per_window, 200_000);
-        assert_eq!(policy.max_memory_bytes, 512 * 1024 * 1024);
+        assert_eq!(policy.max_digests_per_window, 321_000);
+        assert_eq!(policy.max_memory_bytes, 768 * 1024 * 1024);
 
         let custom_policy = utils::build_grpc_push_collection_policy("custom=120", &config);
         assert_eq!(custom_policy.aggregation_window_secs, 120);
         assert_eq!(custom_policy.push_interval_secs, 120);
-        assert_eq!(custom_policy.max_digests_per_window, 200_000);
-        assert_eq!(custom_policy.max_memory_bytes, 512 * 1024 * 1024);
+        assert_eq!(custom_policy.max_digests_per_window, 321_000);
+        assert_eq!(custom_policy.max_memory_bytes, 768 * 1024 * 1024);
     }
 
     #[test]

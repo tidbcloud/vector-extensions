@@ -17,8 +17,8 @@ pub mod proto {
 }
 
 use proto::{
-    system_table_pull_service_client::SystemTablePullServiceClient, DescribeTableRequest, ListTablesRequest,
-    TableQuery, TableQueryResponse, TableRow,
+    system_table_pull_service_client::SystemTablePullServiceClient, DescribeTableRequest,
+    ListTablesRequest, TableQuery, TableQueryResponse, TableRow,
 };
 
 /// Pull table type for gRPC pull collectors
@@ -73,7 +73,10 @@ pub struct GrpcPullCollector {
 }
 
 impl GrpcPullCollector {
-    pub fn new(config: CollectorConfig, table_config: TableConfig) -> Result<Self, CollectionError> {
+    pub fn new(
+        config: CollectorConfig,
+        table_config: TableConfig,
+    ) -> Result<Self, CollectionError> {
         match config.config_type {
             CollectorConfigType::GrpcPull {
                 host,
@@ -146,7 +149,10 @@ impl GrpcPullCollector {
             columns: vec![],
         };
 
-        info!("Querying table {} with filter: {:?}", table_name, request.r#where);
+        info!(
+            "Querying table {} with filter: {:?}",
+            table_name, request.r#where
+        );
 
         // Make the gRPC call
         let response = client
@@ -210,9 +216,9 @@ impl GrpcPullCollector {
                 Some(proto::value::Kind::StringVal(s)) => Value::String(s.clone()),
                 Some(proto::value::Kind::Int64Val(i)) => Value::Number((*i).into()),
                 Some(proto::value::Kind::Uint64Val(u)) => Value::Number((*u).into()),
-                Some(proto::value::Kind::Float64Val(f)) => {
-                    Value::Number(serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)))
-                }
+                Some(proto::value::Kind::Float64Val(f)) => Value::Number(
+                    serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)),
+                ),
                 Some(proto::value::Kind::BoolVal(b)) => Value::Bool(*b),
                 Some(proto::value::Kind::TimestampMs(ts)) => Value::Number((*ts).into()),
                 Some(proto::value::Kind::DurationUs(d)) => Value::Number((*d).into()),
@@ -276,10 +282,7 @@ impl DataCollector for GrpcPullCollector {
 
         // Query the table
         let rows = self
-            .query_table(
-                table.source_table.as_str(),
-                table.where_clause.as_deref(),
-            )
+            .query_table(table.source_table.as_str(), table.where_clause.as_deref())
             .await?;
 
         let row_count = rows.len();
@@ -287,9 +290,7 @@ impl DataCollector for GrpcPullCollector {
 
         info!(
             "gRPC pull collected {} rows from {} in {}ms",
-            row_count,
-            table.source_table,
-            duration_ms
+            row_count, table.source_table, duration_ms
         );
 
         Ok(CollectionResult {

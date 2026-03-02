@@ -1,8 +1,10 @@
+use crate::sources::system_tables::collectors::{
+    CoprocessorCollector, GrpcPullCollector, GrpcPushCollector, SqlCollector,
+};
 use crate::sources::system_tables::data_collector::{
     CollectionError, CollectionMethod, CollectorConfig, DataCollector,
 };
 use crate::sources::system_tables::TableConfig;
-use crate::sources::system_tables::collectors::{CoprocessorCollector, SqlCollector, GrpcPushCollector, GrpcPullCollector};
 
 /// Simplified collector factory - direct creation without complex abstractions
 pub struct CollectorFactory;
@@ -88,7 +90,8 @@ mod tests {
             None,
         );
 
-        let result = CollectorFactory::create_collector(CollectionMethod::Coprocessor, config, None);
+        let result =
+            CollectorFactory::create_collector(CollectionMethod::Coprocessor, config, None);
 
         assert!(result.is_ok());
         assert_eq!(
@@ -108,7 +111,8 @@ mod tests {
         );
 
         assert!(
-            CollectorFactory::create_collector(CollectionMethod::HttpApi, http_config, None).is_err()
+            CollectorFactory::create_collector(CollectionMethod::HttpApi, http_config, None)
+                .is_err()
         );
 
         let grpc_config = CollectorConfig::for_http_api(
@@ -119,8 +123,11 @@ mod tests {
             Some(3),
         );
 
-        assert!(
-            CollectorFactory::create_collector(CollectionMethod::CustomGrpc, grpc_config, None).is_err()
-        );
+        assert!(CollectorFactory::create_collector(
+            CollectionMethod::CustomGrpc,
+            grpc_config,
+            None
+        )
+        .is_err());
     }
 }
