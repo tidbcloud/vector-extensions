@@ -262,6 +262,32 @@ const TIDB_STATEMENT_SUMMARY_COLUMNS: &[&str] = &[
 // summary windows. Raise both receive/send limits for push RPC payloads.
 const GRPC_MAX_MESSAGE_SIZE: usize = 128 * 1024 * 1024;
 
+fn grpc_flush_batch_size(policy: &CollectionPolicyConfig) -> usize {
+    if policy.push_batch_size <= 0 {
+        1
+    } else {
+        policy.push_batch_size as usize
+    }
+}
+
+fn plan_event_batch_sizes(total_events: usize, batch_size: usize) -> Vec<usize> {
+    if total_events == 0 {
+        return vec![];
+    }
+
+    let mut plan = Vec::new();
+    let mut remaining = total_events;
+    let effective = batch_size.max(1);
+
+    while remaining > 0 {
+        let n = remaining.min(effective);
+        plan.push(n);
+        remaining -= n;
+    }
+
+    plan
+}
+
 fn proto_data_type_to_mysql_type(data_type: i32) -> &'static str {
     match data_type {
         // STRING
@@ -786,6 +812,7 @@ impl GrpcPushCollector {
         let sender = self.output_sender.clone().expect("output_sender not set");
         let table_config = self.table_config.clone().expect("table_config not set");
         let instance = self.instance.clone();
+        let collection_policy = self.collection_policy.clone();
 
         tokio::spawn(async move {
             // Clone sender once, then reuse the reference
@@ -817,6 +844,9 @@ impl GrpcPushCollector {
                     batches.len()
                 );
 
+                let flush_batch_size = grpc_flush_batch_size(&collection_policy);
+                let send_plan = plan_event_batch_sizes(row_count, flush_batch_size);
+
                 // Create metadata
                 let metadata = CollectionMetadata {
                     instance: instance.clone(),
@@ -828,7 +858,8 @@ impl GrpcPushCollector {
                     extra: HashMap::new(),
                 };
 
-                // Send each row as an event
+                // Build events first, then send in bounded batches.
+                let mut events = Vec::with_capacity(row_count);
                 for row_data in &all_rows {
                     use crate::sources::system_tables::data_collector::utils::create_event_from_result;
 
@@ -837,12 +868,13 @@ impl GrpcPushCollector {
                         metadata: metadata.clone(),
                     };
                     let event = create_event_from_result(&result, row_data.clone());
+                    events.push(event);
+                }
 
-                    match sender.send_event(event).await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            error!("Failed to send gRPC push event: {}", e);
-                        }
+                for chunk_len in send_plan {
+                    let chunk: Vec<_> = events.drain(..chunk_len).collect();
+                    if let Err(e) = sender.send_batch(chunk).await {
+                        error!("Failed to send gRPC push event batch: {}", e);
                     }
                 }
             }
@@ -1683,5 +1715,27 @@ impl DataCollector for GrpcPushCollector {
                 "Not registered with TiDB".to_string(),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_grpc_flush_batch_size_from_policy() {
+        let mut p = CollectionPolicyConfig::default();
+        p.push_batch_size = 250;
+        assert_eq!(grpc_flush_batch_size(&p), 250);
+
+        p.push_batch_size = 0;
+        assert_eq!(grpc_flush_batch_size(&p), 1);
+    }
+
+    #[test]
+    fn test_plan_event_batch_sizes() {
+        assert_eq!(plan_event_batch_sizes(5, 10), vec![5]);
+        assert_eq!(plan_event_batch_sizes(20, 10), vec![10, 10]);
+        assert_eq!(plan_event_batch_sizes(23, 10), vec![10, 10, 3]);
     }
 }
