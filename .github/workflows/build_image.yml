@@ -83,7 +83,7 @@ jobs:
           password: ${{ secrets.DOCKERHUBTOKEN }}
 
       - name: Build x86_64 binary (standard)
-        timeout-minutes: 60
+        timeout-minutes: 90
         env:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           CARGO_PROFILE_RELEASE_LTO: "thin"
@@ -98,7 +98,7 @@ jobs:
           find target/x86_64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
       - name: Build aarch64 binary (standard)
-        timeout-minutes: 60
+        timeout-minutes: 90
         env:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           CARGO_PROFILE_RELEASE_LTO: "thin"
@@ -113,7 +113,7 @@ jobs:
           find target/aarch64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
       - name: Build armv7 binary (standard)
-        timeout-minutes: 60
+        timeout-minutes: 90
         env:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           CARGO_PROFILE_RELEASE_LTO: "thin"
@@ -148,7 +148,7 @@ jobs:
           df -h . | tail -1
 
       - name: Build x86_64 binary (nextgen)
-        timeout-minutes: 60
+        timeout-minutes: 90
         env:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           CARGO_PROFILE_RELEASE_LTO: "thin"
@@ -163,7 +163,7 @@ jobs:
           find target/x86_64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
       - name: Build aarch64 binary (nextgen)
-        timeout-minutes: 60
+        timeout-minutes: 90
         env:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           CARGO_PROFILE_RELEASE_LTO: "thin"
@@ -178,7 +178,7 @@ jobs:
           find target/aarch64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
       - name: Build armv7 binary (nextgen)
-        timeout-minutes: 60
+        timeout-minutes: 90
         env:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
           CARGO_PROFILE_RELEASE_LTO: "thin"

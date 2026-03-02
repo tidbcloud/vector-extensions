@@ -5,15 +5,22 @@ metadata:
   namespace: default
 data:
   vector.toml: |
+    # 顶层 data_dir：sink 的 disk buffer 等会写到此目录
+    data_dir = "/var/lib/vector"
+
     [sources.file_list]
     type = "file_list"
     endpoint = "s3://o11y-dev-shared-us-west-2"
+    # file_list checkpoint 目录，OOM/重启后从已完成的 prefix 继续
+    data_dir = "/var/lib/vector/file_list_checkpoint"
     cloud_provider = "aws"
     max_keys = 10000
     poll_interval_secs = 0
     emit_metadata = true
     emit_content = true
-    emit_per_line = true
+    emit_per_line = "auto"
+    # 超过此大小的文件用流式（按行），避免整文件进一条 event 触发 sink disk buffer 的 BufferTooSmall
+    stream_file_above_bytes = 65536
     flush_after_each_file = true
     decompress_gzip = true
     region = "us-west-2"
@@ -28,7 +35,7 @@ data:
     inputs = [ "file_list" ]
     bucket = "o11y-dev-shared-us-west-2"
     # 注意：确保这些字段在 metadata 中存在，否则会报错
-    key_prefix = "leotest3/{{ component }}/{{ hour_partition }}/"
+    key_prefix = "leotest4/{{ component }}/{{ hour_partition }}/"
     compression = "gzip"
     region = "us-west-2"
 

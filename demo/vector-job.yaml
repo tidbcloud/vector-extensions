@@ -8,7 +8,7 @@ spec:
     spec:
       containers:
       - name: vector
-        image: 552185537300.dkr.ecr.us-west-2.amazonaws.com/dev/vector:nightly-52d4d16-modified-3
+        image: 552185537300.dkr.ecr.us-west-2.amazonaws.com/dev/vector:nightly-52d4d16-modified-4
         imagePullPolicy: Always
         args: ["--config", "/etc/vector/vector.toml"]
         env:
@@ -18,9 +18,15 @@ spec:
         - name: config
           mountPath: /etc/vector
           readOnly: true
+        # data_dir：sink disk buffer 与 file_list checkpoint（需先 apply vector-pvc.yaml）
+        - name: data
+          mountPath: /var/lib/vector
       volumes:
       - name: config
         configMap:
           name: vector-s3-sync-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: vector-data
       restartPolicy: OnFailure
   backoffLimit: 1
