@@ -59,7 +59,7 @@ FileMetadata Events (file_path, size, last_modified, ...)
 SourceSender → Downstream
 ```
 
-**Content mode** (`emit_content = true`): 用于同步/聚合场景，拷贝全流程在 Vector 内完成。
+**Content mode** (`emit_content = true`): For sync/aggregation; full copy pipeline runs inside Vector.
 
 ```
 Cloud Storage (S3/GCS/Azure/OSS)
@@ -70,7 +70,7 @@ FileLister (filter) → per file: get bytes → optional gzip decompress
     ↓
 LogEvent (file_path, message = file content, ...)
     ↓
-SourceSender → e.g. 官方 aws_s3 sink（encoding=text/json，batch.max_bytes 分片）
+SourceSender → e.g. official aws_s3 sink (encoding=text/json, batch.max_bytes for chunking)
 ```
 
 ## Implementation Details
@@ -138,7 +138,7 @@ Each matching file emits a Vector LogEvent.
 }
 ```
 
-**Content mode** (`emit_content = true`): 除上述字段外增加 `message`，为文件内容（若为 .gz 则先解压再填入）。下游用官方 **aws_s3** sink（`encoding.codec = "text"` 或 `"json"`，`batch.max_bytes`）即可按大小聚合写回 S3。
+**Content mode** (`emit_content = true`): In addition to the above, adds `message` (file content; .gz is decompressed first). Downstream can use the official **aws_s3** sink (`encoding.codec = "text"` or `"json"`, `batch.max_bytes`) to aggregate and write back to S3.
 
 ## Configuration
 
@@ -257,18 +257,57 @@ When `max_content_buffer_bytes` is **unset or 0**, the source flushes after each
 
 ### Line parsing rules (emit_per_line)
 
-当 `emit_per_line = true` 或 `"auto"` 且当前文件走流式时：
+When `emit_per_line = true` or `"auto"` and the file is streamed:
 
-- **若配置了 `line_parse_regexes`（非空）**：仅用这些正则按顺序匹配；每条正则须含**命名捕获** `(?P<name>...)`，捕获名作为字段名。命中则 `line_type=custom`，未命中则 `line_type=raw`、仅 `message`。**内置 Python/HTTP 规则不再使用**。
-- **若未配置 `line_parse_regexes`**：使用以下两种内置规则。
+- **If `line_parse_regexes` is set (non-empty)**: Only these regexes are used, in order; each must have **named captures** `(?P<name>...)` (capture names become field names). Match → `line_type=custom`; no match → `line_type=raw`, `message` only. Built-in Python/HTTP rules are not used.
+- **If `line_parse_regexes` is not set**: The two built-in rules below are used.
 
-| 规则 | 匹配格式示例 | 正则（简要） | 输出字段 |
-|------|----------------|----------------|----------|
-| **Python logging** | `2026-02-04 11:40:12,114 [slowlogconverter] [INFO] [Memory] message body` | `^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[([^\]]+)\] \[([^\]]+)\]\s*(?:\[([^\]]*)\]\s*)?(.*)$` | `line_type=python_logging`, `log_timestamp`, `logger`, `level`, `tag`, `message_body`, `message`（整行原文） |
-| **HTTP access** | `10.1.103.150 - - [04/Feb/2026 11:40:17] "GET /metrics HTTP/1.1" 200 -` | `^(\S+) - - \[([^\]]+)\] "(\S+) ([^"]*) (\S+)" (\d+) (\S*).*$` | `line_type=http_access`, `client_ip`, `request_date`, `method`, `path`, `protocol`, `status`, `response_size`, `message`（整行原文） |
-| **未匹配** | 任意其他行 | — | `line_type=raw`, `message`（整行原文） |
+| Rule | Example | Regex (brief) | Output fields |
+|------|---------|----------------|---------------|
+| **Python logging** | `2026-02-04 11:40:12,114 [slowlogconverter] [INFO] [Memory] message body` | `^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) \[([^\]]+)\] \[([^\]]+)\]\s*(?:\[([^\]]*)\]\s*)?(.*)$` | `line_type=python_logging`, `log_timestamp`, `logger`, `level`, `tag`, `message_body`, `message` (raw line) |
+| **HTTP access** | `10.1.103.150 - - [04/Feb/2026 11:40:17] "GET /metrics HTTP/1.1" 200 -` | `^(\S+) - - \[([^\]]+)\] "(\S+) ([^"]*) (\S+)" (\d+) (\S*).*$` | `line_type=http_access`, `client_ip`, `request_date`, `method`, `path`, `protocol`, `status`, `response_size`, `message` (raw line) |
+| **No match** | Any other line | — | `line_type=raw`, `message` (raw line) |
 
-- 每条事件始终带 `message`（原始行）。自定义正则时，建议输出格式用 **JSON** 以保留所有捕获字段；CSV 需在 sink 的 `encoding.csv.fields` 中列出所需列名（含自定义名）。
+Every event has `message` (raw line). For custom regexes, use **JSON** output to keep all capture fields; for CSV, list column names in sink `encoding.csv.fields` (including custom names).
+
+### Event fields (for sink key_prefix / template)
+
+In aws_s3 and similar sinks, use `{{ field_name }}` in `key_prefix` to reference event fields. Fields available on file_list events:
+
+**raw_logs file content events (one event per log line)**
+
+| Field | Description | When present |
+|-------|-------------|--------------|
+| `component` | Component name, e.g. tidb / tikv / pd / tiflash / ticdc | raw_logs, parsed from merged-logs/{hour}/{component}/ |
+| `hour_partition` | Hour partition, 10 digits e.g. 2026020411 | Same as above |
+| `file_path` | Source file path in bucket | Always |
+| `data_type` | Always `"file"` | Always |
+| `message` | Raw line content | Always (when emit_content and per-line) |
+| `line_type` | Line parse type: `raw` / `python_logging` / `http_access` / `custom` | When line parsing is used |
+| `@timestamp` | Event time (RFC3339) | Always |
+| `file_size` | File size in bytes | When `emit_metadata = true` |
+| `last_modified` | File last modified time (RFC3339) | When `emit_metadata = true` |
+| `bucket` | Bucket name | When `emit_metadata = true` |
+| `full_path` | Full path (may match file_path) | When `emit_metadata = true` |
+
+**Built-in line parse fields (by line_type)**
+
+- `python_logging`: `log_timestamp`, `logger`, `level`, `tag`, `message_body`
+- `http_access`: `client_ip`, `request_date`, `method`, `path`, `protocol`, `status`, `response_size`
+- Custom `line_parse_regexes`: capture name `(?P<name>...)` becomes the field name
+
+**Delta / TopSQL list events (path only, no content)**
+
+| Field | Description |
+|-------|-------------|
+| `file_path` | Table or instance path |
+| `data_type` | `"delta_table"` |
+| `table_subdir` | Table subdir name (e.g. slowlog / topsql) |
+| `@timestamp` | Event time |
+
+**Legacy mode (prefix + pattern, not raw_logs)**
+
+No `component` / `hour_partition`; only `file_path`, `data_type`, `@timestamp`, and optionally `file_size`, `last_modified`, `bucket`, `full_path` when `emit_metadata = true`.
 
 ## Usage Examples
 
@@ -304,7 +343,7 @@ end_time = "2026-01-08T23:59:59Z"
 
 ### Example 3: Sync logs (download + decompress + write to local mysql)
 
-全流程在 Vector 内完成：file_list 拉取并解压，写到本地mysql。
+Full pipeline inside Vector: file_list fetches and decompresses, writes to local MySQL.
 
 ```toml
 [api]
@@ -341,7 +380,7 @@ connection_timeout = 30
 
 ### Example 4: Full pipeline (raw_logs with components → S3 by component/hour)
 
-完整示例：开启 API、file_list 按组件拉取解压、aws_s3 用 `key_prefix` 模板按 `{{ component }}/{{ hour_partition }}/` 写入目标。
+Full example: API enabled, file_list fetches and decompresses by component, aws_s3 uses `key_prefix` template `{{ component }}/{{ hour_partition }}/` for output.
 
 ```toml
 [api]
@@ -380,13 +419,13 @@ max_bytes = 33554432
 timeout_secs = 10
 ```
 
-Demo 的 sync-logs API 通过 **output_format** 控制写入 S3 的编码（与官方 aws_s3 encoding.codec 一致）：`text`（默认）、`json`、`csv`、`logfmt`、`raw_message`、`syslog`、`gelf`；始终需要 `dest_bucket`、`dest_prefix`。avro/cef/protobuf 等需额外 schema 的格式暂不支持；parquet 官方 sink 不支持。
+The demo sync-logs API uses **output_format** to control S3 write encoding (same as official aws_s3 encoding.codec): `text` (default), `json`, `csv`, `logfmt`, `raw_message`, `syslog`, `gelf`; `dest_bucket` and `dest_prefix` are always required. Formats that need extra schema (avro/cef/protobuf) are not supported; parquet is not supported by the official sink.
 
-- **尽量多保留信息**（如 o11ydiagnosis-deltalake 等多行/混合日志）：推荐 **json**。每条事件包含完整 `message`（原始日志内容）及 `file_path`、`component`、`hour_partition`、`file_size`、`last_modified`、`@timestamp` 等元数据，便于下游查询与解析。
+- **To keep maximum information** (e.g. multi-line/mixed logs like o11ydiagnosis-deltalake): use **json**. Each event has full `message` (raw log content) and metadata such as `file_path`, `component`, `hour_partition`, `file_size`, `last_modified`, `@timestamp` for downstream query and parsing.
 
-### Example 5: 同一 file_list 以 CSV 格式输出到本地文件
+### Example 5: Same file_list output as CSV to local file
 
-使用官方 **file** sink，`encoding.codec = "csv"`，将 file_list 的每条事件输出为 CSV 一行；需通过 `encoding.csv.fields` 指定列顺序（与 file_list 发出字段一致）。
+Use the official **file** sink with `encoding.codec = "csv"` to write each file_list event as one CSV row; set column order via `encoding.csv.fields` (must match file_list event fields).
 
 ```toml
 [api]
@@ -417,16 +456,16 @@ path = "/tmp/file_list-%Y-%m-%d.csv"
 [sinks.to_csv.encoding]
 codec = "csv"
 
-# 列顺序与 file_list 事件字段一致；无该字段时输出空串
+# Column order matches file_list event fields; missing field outputs empty string
 [sinks.to_csv.encoding.csv]
 fields = ["file_path", "data_type", "hour_partition", "component", "file_size", "last_modified", "bucket", "full_path", "@timestamp", "message"]
 ```
 
-说明：
+Notes:
 
-- **path**：输出文件路径，支持时间模板（如 `%Y-%m-%d`），多文件时按时间/模板分文件。
-- **encoding.csv.fields**：CSV 列顺序；若某事件缺少某字段，该列为空。`message` 为文件内容（`emit_content = true` 时），可能很大，若只关心元数据可去掉 `"message"`。
-- 仅列文件不拉内容时，可设 `emit_content = false`，并从 `fields` 中移除 `"message"`。
+- **path**: Output file path; supports time template (e.g. `%Y-%m-%d`); multiple files are split by time/template.
+- **encoding.csv.fields**: CSV column order; if an event is missing a field, that column is empty. `message` is file content (when `emit_content = true`) and can be large; omit `"message"` if you only need metadata.
+- For list-only (no content), set `emit_content = false` and remove `"message"` from `fields`.
 
 ## Multi-Cloud Configuration
 

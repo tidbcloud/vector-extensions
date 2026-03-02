@@ -1,39 +1,39 @@
-# s3_content_partitioned 架构说明
+# s3_content_partitioned architecture
 
-## 目的
+## Purpose
 
-将带有 `component` 与 `hour_partition` 的日志事件按分区写入 S3，使路径能直接反映**组件**和**小时分区**，便于按组件、时间查找与治理。典型上游为 file_list source（raw_logs 模式会下发上述字段）。
+Write log events that have `component` and `hour_partition` to S3 by partition, so object paths reflect **component** and **hour partition** for lookup and governance. Typical upstream is the file_list source (raw_logs mode emits these fields).
 
-## 架构概览
+## Overview
 
-- **输入**：Log 事件，需包含 `message`、`component`、`hour_partition`。
-- **缓冲**：按 `(component, hour_partition)` 分 key 缓冲，每个 key 达到 `max_file_bytes` 时上传一个对象。
-- **输出路径**：`{key_prefix}/{component}/{hour_partition}/part-NNNNN.log` 或 `.log.gz`。
+- **Input**: Log events with `message`, `component`, `hour_partition`.
+- **Buffering**: Buffer by key `(component, hour_partition)`; upload one object when a key’s buffer reaches `max_file_bytes`.
+- **Output path**: `{key_prefix}/{component}/{hour_partition}/part-NNNNN.log` or `.log.gz`.
 
-## 配置
+## Configuration
 
-| 配置项 | 说明 |
-|--------|------|
-| bucket | S3 bucket 名称 |
-| key_prefix | 对象 key 前缀，例如 `loki` 或 `logs/raw` |
-| region | AWS region 或 endpoint（可选） |
-| max_file_bytes | 每个分区缓冲达到该字节数时触发一次上传，默认 64MiB |
-| compression_gzip | 是否对上传内容做 gzip 压缩，默认 true |
+| Option | Description |
+|--------|-------------|
+| bucket | S3 bucket name |
+| key_prefix | Object key prefix, e.g. `loki` or `logs/raw` |
+| region | AWS region or endpoint (optional) |
+| max_file_bytes | Upload when a partition buffer reaches this many bytes; default 64MiB |
+| compression_gzip | Whether to gzip uploads; default true |
 
-## 数据流
+## Data flow
 
-1. 从事件中读取 `component`、`hour_partition`、`message`；缺字段则丢弃该事件。
-2. 将 `message`（必要时加换行）追加到对应 `(component, hour_partition)` 的缓冲。
-3. 当缓冲长度 ≥ `max_file_bytes` 时，取前 `max_file_bytes` 字节上传，对象 key 为  
-   `{key_prefix}/{component}/{hour_partition}/part-{part_index:05}.log[.gz]`，part_index 从 0 递增。
-4. 流结束时将各分区剩余缓冲依次上传。
+1. Read `component`, `hour_partition`, `message` from each event; drop event if any is missing.
+2. Append `message` (with newline if needed) to the buffer for that `(component, hour_partition)`.
+3. When buffer length ≥ `max_file_bytes`, upload the first `max_file_bytes` bytes; object key is  
+   `{key_prefix}/{component}/{hour_partition}/part-{part_index:05}.log[.gz]`, with part_index incrementing from 0.
+4. At stream end, upload remaining buffer for each partition.
 
-## 依赖
+## Dependencies
 
-- AWS SDK S3（与 vector 现有 s3 能力一致）
-- 上游需提供 `component`、`hour_partition`（如 file_list 的 raw_logs 发现/列表）
+- AWS SDK S3 (same as Vector’s existing S3 support)
+- Upstream must provide `component` and `hour_partition` (e.g. file_list raw_logs discovery/list)
 
-## 与 aws_s3 的区别
+## Difference from aws_s3
 
-- 官方 `aws_s3` sink 的 key 由时间等固定规则生成，**不能**按事件字段（如 component、hour_partition）动态分区。
-- 本 sink 专为“按组件 + 小时分区”写 S3 设计，路径即 `{component}/{hour_partition}/part-*.log[.gz]`，便于按组件、时间区分日志。
+- The official `aws_s3` sink builds keys from time-based rules and **cannot** partition by event fields (e.g. component, hour_partition).
+- This sink is designed for S3 writes by component + hour partition; paths are `{component}/{hour_partition}/part-*.log[.gz]` for component- and time-based organization.

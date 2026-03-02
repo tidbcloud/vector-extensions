@@ -25,7 +25,7 @@ spec:
         - name: config
           mountPath: /etc/vector
           readOnly: true
-        # data_dir：sink disk buffer 与 file_list checkpoint（需先 apply vector-pvc.yaml）
+        # data_dir: sink disk buffer and file_list checkpoint (apply vector-pvc.yaml first)
         - name: data
           mountPath: /var/lib/vector
       volumes:
