@@ -290,18 +290,21 @@ fn plan_event_batch_sizes(total_events: usize, batch_size: usize) -> Vec<usize> 
 }
 
 fn normalize_partition_mode(mode: &str) -> &'static str {
-    if mode.eq_ignore_ascii_case("half_hour") || mode.eq_ignore_ascii_case("half-hour") {
-        "half_hour"
+    if mode.eq_ignore_ascii_case("by_time_30m")
+        || mode.eq_ignore_ascii_case("half_hour")
+        || mode.eq_ignore_ascii_case("half-hour")
+    {
+        "by_time_30m"
     } else {
-        "day"
+        "by_day"
     }
 }
 
-fn time_30m_bucket_from_ts_ms(ts_ms: i64) -> String {
+fn half_hour_bucket_from_ts_ms(ts_ms: i64) -> String {
     let dt = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ts_ms)
         .unwrap_or_else(chrono::Utc::now);
     format!(
-        "{:02}:{:02}",
+        "{:02}{:02}",
         dt.hour(),
         if dt.minute() < 30 { 0 } else { 30 }
     )
@@ -379,11 +382,11 @@ pub(crate) fn build_schema_metadata_from_proto_schema(
     }
 
     match normalize_partition_mode(stmt_summary_partition_mode) {
-        "half_hour" => {
+        "by_time_30m" => {
             let mut field_info = serde_json::Map::new();
             field_info.insert(
                 "mysql_type".to_string(),
-                Value::String("varchar(5)".to_string()),
+                Value::String("varchar(4)".to_string()),
             );
             schema_metadata.insert("time_30m".to_string(), Value::Object(field_info));
             schema_metadata.insert(
@@ -1640,12 +1643,12 @@ impl SystemTablePushService for GrpcPushService {
                 out.insert(col.name.clone(), val);
             }
 
-            if partition_mode == "half_hour" {
+            if partition_mode == "by_time_30m" {
                 let ts_ms =
                     summary_begin_time_ms.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
                 out.insert(
                     "time_30m".to_string(),
-                    Value::String(time_30m_bucket_from_ts_ms(ts_ms)),
+                    Value::String(half_hour_bucket_from_ts_ms(ts_ms)),
                 );
             }
 
@@ -1810,7 +1813,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_schema_metadata_partition_mode_day() {
+    fn test_build_schema_metadata_partition_mode_by_day() {
         let schema = proto::TableSchema {
             table_name: "CLUSTER_STATEMENTS_SUMMARY".to_string(),
             columns: vec![proto::Column {
@@ -1822,7 +1825,7 @@ mod tests {
             }],
         };
 
-        let metadata = build_schema_metadata_from_proto_schema(&schema, &[], "day");
+        let metadata = build_schema_metadata_from_proto_schema(&schema, &[], "by_day");
         let partition = metadata.get("_partition_by").expect("partition missing");
         assert_eq!(
             partition,
@@ -1832,7 +1835,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_schema_metadata_partition_mode_half_hour() {
+    fn test_build_schema_metadata_partition_mode_by_time_30m() {
         let schema = proto::TableSchema {
             table_name: "CLUSTER_STATEMENTS_SUMMARY".to_string(),
             columns: vec![proto::Column {
@@ -1844,7 +1847,7 @@ mod tests {
             }],
         };
 
-        let metadata = build_schema_metadata_from_proto_schema(&schema, &[], "half_hour");
+        let metadata = build_schema_metadata_from_proto_schema(&schema, &[], "by_time_30m");
         let partition = metadata.get("_partition_by").expect("partition missing");
         assert_eq!(
             partition,

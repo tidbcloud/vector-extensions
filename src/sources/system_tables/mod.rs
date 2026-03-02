@@ -105,7 +105,8 @@ pub struct SystemTablesConfig {
     pub stmt_summary_max_memory_bytes: i64,
 
     /// Statement summary partition mode for Delta sink.
-    /// Supported values: day, half_hour.
+    /// Preferred values: by_day, by_time_30m.
+    /// Backward-compatible aliases: day, half_hour.
     #[serde(default = "default_stmt_summary_partition_mode")]
     pub stmt_summary_partition_mode: String,
 
@@ -215,7 +216,7 @@ pub const fn default_stmt_summary_max_memory_bytes() -> i64 {
 }
 
 pub fn default_stmt_summary_partition_mode() -> String {
-    "day".to_string()
+    "by_day".to_string()
 }
 
 /// Helper functions for reading environment variables
@@ -256,10 +257,10 @@ impl SystemTablesConfig {
         }
 
         match self.stmt_summary_partition_mode.to_lowercase().as_str() {
-            "day" | "half_hour" => {}
+            "by_day" | "by_time_30m" | "day" | "half_hour" => {}
             _ => {
                 return Err(format!(
-                    "unsupported stmt_summary_partition_mode: {}. Supported values: day, half_hour",
+                    "unsupported stmt_summary_partition_mode: {}. Supported values: by_day, by_time_30m (aliases: day, half_hour)",
                     self.stmt_summary_partition_mode
                 )
                 .into());

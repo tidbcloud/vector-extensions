@@ -248,7 +248,7 @@ pub enum CollectorConfigType {
         backpressure_reject_threshold: f64,
         /// Collection policy configuration
         collection_policy: CollectionPolicyConfig,
-        /// Statement summary partition mode (day or half_hour)
+        /// Statement summary partition mode (by_day or by_time_30m)
         stmt_summary_partition_mode: String,
     },
     /// gRPC pull-based collector configuration
@@ -549,7 +549,7 @@ mod tests {
             retention_days: 7,
             stmt_summary_max_digests_per_window: 200_000,
             stmt_summary_max_memory_bytes: 512 * 1024 * 1024,
-            stmt_summary_partition_mode: "day".to_string(),
+            stmt_summary_partition_mode: "by_day".to_string(),
         };
 
         assert_eq!(utils::parse_collection_interval("short", &config), 5);
@@ -570,7 +570,7 @@ mod tests {
             retention_days: 7,
             stmt_summary_max_digests_per_window: 321_000,
             stmt_summary_max_memory_bytes: 768 * 1024 * 1024,
-            stmt_summary_partition_mode: "day".to_string(),
+            stmt_summary_partition_mode: "by_day".to_string(),
         };
 
         let policy = utils::build_grpc_push_collection_policy("long", &config);
