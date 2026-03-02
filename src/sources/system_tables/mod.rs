@@ -55,6 +55,8 @@ impl DatabaseEnvVars {
     pub const SHORT_INTERVAL: &'static str = "SYSTEM_TABLES_SHORT_INTERVAL";
     pub const LONG_INTERVAL: &'static str = "SYSTEM_TABLES_LONG_INTERVAL";
     pub const RETENTION_DAYS: &'static str = "SYSTEM_TABLES_RETENTION_DAYS";
+    pub const STMT_SUMMARY_PARTITION_MODE: &'static str =
+        "SYSTEM_TABLES_STMT_SUMMARY_PARTITION_MODE";
     pub const TOPOLOGY_FETCH_INTERVAL: &'static str = "TOPOLOGY_FETCH_INTERVAL_SECONDS";
     pub const COLLECTION_METHOD: &'static str = "SYSTEM_TABLES_COLLECTION_METHOD";
 }
@@ -102,6 +104,11 @@ pub struct SystemTablesConfig {
     #[serde(default = "default_stmt_summary_max_memory_bytes")]
     pub stmt_summary_max_memory_bytes: i64,
 
+    /// Statement summary partition mode for Delta sink.
+    /// Supported values: day, half_hour.
+    #[serde(default = "default_stmt_summary_partition_mode")]
+    pub stmt_summary_partition_mode: String,
+
     /// Tables to collect data from (array of table configurations)
     pub tables: Vec<TableConfig>,
 
@@ -148,6 +155,9 @@ pub struct CollectionConfig {
 
     /// Statement summary max memory bytes per aggregation window.
     pub stmt_summary_max_memory_bytes: i64,
+
+    /// Statement summary partition mode for Delta sink.
+    pub stmt_summary_partition_mode: String,
 }
 
 /// Table configuration for data collection
@@ -204,6 +214,10 @@ pub const fn default_stmt_summary_max_memory_bytes() -> i64 {
     512 * 1024 * 1024
 }
 
+pub fn default_stmt_summary_partition_mode() -> String {
+    "day".to_string()
+}
+
 /// Helper functions for reading environment variables
 impl SystemTablesConfig {
     /// Validate configuration based on collection method
@@ -240,6 +254,18 @@ impl SystemTablesConfig {
                 return Err(format!("unsupported collection method: {}. Supported methods: sql, coprocessor, http_api, custom_grpc, grpc_push, grpc_pull", self.collection_method).into());
             }
         }
+
+        match self.stmt_summary_partition_mode.to_lowercase().as_str() {
+            "day" | "half_hour" => {}
+            _ => {
+                return Err(format!(
+                    "unsupported stmt_summary_partition_mode: {}. Supported values: day, half_hour",
+                    self.stmt_summary_partition_mode
+                )
+                .into());
+            }
+        }
+
         Ok(())
     }
     /// Helper function to build TLS configuration from environment variables
@@ -328,6 +354,9 @@ impl SystemTablesConfig {
                 self.retention_days = days;
             }
         }
+        if let Ok(val) = env::var(DatabaseEnvVars::STMT_SUMMARY_PARTITION_MODE) {
+            self.stmt_summary_partition_mode = val;
+        }
         if let Ok(val) = env::var(DatabaseEnvVars::TOPOLOGY_FETCH_INTERVAL) {
             if let Ok(interval) = val.parse() {
                 self.topology_fetch_interval_seconds = interval;
@@ -378,6 +407,7 @@ impl GenerateConfig for SystemTablesConfig {
             retention_days: 7,
             stmt_summary_max_digests_per_window: default_stmt_summary_max_digests_per_window(),
             stmt_summary_max_memory_bytes: default_stmt_summary_max_memory_bytes(),
+            stmt_summary_partition_mode: default_stmt_summary_partition_mode(),
             tables: vec![TableConfig {
                 source_schema: "information_schema".to_owned(),
                 source_table: "PROCESSLIST".to_owned(),
@@ -474,6 +504,7 @@ impl SourceConfig for SystemTablesConfig {
             retention_days: config.retention_days,
             stmt_summary_max_digests_per_window: config.stmt_summary_max_digests_per_window,
             stmt_summary_max_memory_bytes: config.stmt_summary_max_memory_bytes,
+            stmt_summary_partition_mode: config.stmt_summary_partition_mode.clone(),
         };
 
         // Use tables from merged configuration

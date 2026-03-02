@@ -390,6 +390,7 @@ impl Controller {
                     None, // backpressure_threshold - use default
                     None, // backpressure_reject_threshold - use default
                     grpc_push_policy,
+                    self.collection_config.stmt_summary_partition_mode.clone(),
                 )
             }
             CollectionMethod::GrpcPull => {

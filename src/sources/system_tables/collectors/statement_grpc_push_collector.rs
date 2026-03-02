@@ -597,7 +597,7 @@ impl SystemTablePushService for StatementGrpcPushService {
             }
         };
 
-        let schema_metadata = build_schema_metadata_from_proto_schema(schema, &batch.rows);
+        let schema_metadata = build_schema_metadata_from_proto_schema(schema, &batch.rows, "day");
         let mut rows = Vec::with_capacity(row_count);
         let mut rejected = 0i32;
         for row in &batch.rows {

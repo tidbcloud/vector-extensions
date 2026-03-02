@@ -248,6 +248,8 @@ pub enum CollectorConfigType {
         backpressure_reject_threshold: f64,
         /// Collection policy configuration
         collection_policy: CollectionPolicyConfig,
+        /// Statement summary partition mode (day or half_hour)
+        stmt_summary_partition_mode: String,
     },
     /// gRPC pull-based collector configuration
     GrpcPull {
@@ -324,6 +326,7 @@ impl CollectorConfig {
         backpressure_threshold: Option<f64>,
         backpressure_reject_threshold: Option<f64>,
         collection_policy: Option<CollectionPolicyConfig>,
+        stmt_summary_partition_mode: String,
     ) -> Self {
         let policy = collection_policy.unwrap_or_default();
         Self {
@@ -341,6 +344,7 @@ impl CollectorConfig {
                 backpressure_reject_threshold: backpressure_reject_threshold
                     .unwrap_or(policy.backpressure_reject_threshold),
                 collection_policy: policy,
+                stmt_summary_partition_mode,
             },
         }
     }
@@ -545,6 +549,7 @@ mod tests {
             retention_days: 7,
             stmt_summary_max_digests_per_window: 200_000,
             stmt_summary_max_memory_bytes: 512 * 1024 * 1024,
+            stmt_summary_partition_mode: "day".to_string(),
         };
 
         assert_eq!(utils::parse_collection_interval("short", &config), 5);
@@ -565,6 +570,7 @@ mod tests {
             retention_days: 7,
             stmt_summary_max_digests_per_window: 321_000,
             stmt_summary_max_memory_bytes: 768 * 1024 * 1024,
+            stmt_summary_partition_mode: "day".to_string(),
         };
 
         let policy = utils::build_grpc_push_collection_policy("long", &config);

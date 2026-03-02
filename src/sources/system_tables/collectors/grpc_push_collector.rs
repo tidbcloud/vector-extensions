@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::Timelike;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
@@ -288,6 +289,24 @@ fn plan_event_batch_sizes(total_events: usize, batch_size: usize) -> Vec<usize> 
     plan
 }
 
+fn normalize_partition_mode(mode: &str) -> &'static str {
+    if mode.eq_ignore_ascii_case("half_hour") || mode.eq_ignore_ascii_case("half-hour") {
+        "half_hour"
+    } else {
+        "day"
+    }
+}
+
+fn time_30m_bucket_from_ts_ms(ts_ms: i64) -> String {
+    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ts_ms)
+        .unwrap_or_else(chrono::Utc::now);
+    format!(
+        "{:02}:{:02}",
+        dt.hour(),
+        if dt.minute() < 30 { 0 } else { 30 }
+    )
+}
+
 fn proto_data_type_to_mysql_type(data_type: i32) -> &'static str {
     match data_type {
         // STRING
@@ -330,6 +349,7 @@ fn proto_value_to_mysql_type(value: &proto::Value) -> Option<&'static str> {
 pub(crate) fn build_schema_metadata_from_proto_schema(
     schema: &proto::TableSchema,
     rows: &[proto::TableRow],
+    stmt_summary_partition_mode: &str,
 ) -> serde_json::Map<String, Value> {
     let mut schema_metadata = serde_json::Map::new();
     let mut fallback_cols = Vec::new();
@@ -357,6 +377,31 @@ pub(crate) fn build_schema_metadata_from_proto_schema(
             fallback_cols
         );
     }
+
+    match normalize_partition_mode(stmt_summary_partition_mode) {
+        "half_hour" => {
+            let mut field_info = serde_json::Map::new();
+            field_info.insert(
+                "mysql_type".to_string(),
+                Value::String("varchar(5)".to_string()),
+            );
+            schema_metadata.insert("time_30m".to_string(), Value::Object(field_info));
+            schema_metadata.insert(
+                "_partition_by".to_string(),
+                Value::Array(vec![
+                    Value::String("date".to_string()),
+                    Value::String("time_30m".to_string()),
+                ]),
+            );
+        }
+        _ => {
+            schema_metadata.insert(
+                "_partition_by".to_string(),
+                Value::Array(vec![Value::String("date".to_string())]),
+            );
+        }
+    }
+
     schema_metadata
 }
 
@@ -736,6 +781,8 @@ pub struct GrpcPushCollector {
     backpressure: BackpressureState,
     /// Collection policy configuration
     collection_policy: CollectionPolicyConfig,
+    /// Statement summary partition mode for Delta table layout.
+    stmt_summary_partition_mode: String,
     /// Buffer capacity for backpressure calculation
     buffer_capacity: usize,
 }
@@ -755,6 +802,7 @@ impl GrpcPushCollector {
                 backpressure_threshold,
                 backpressure_reject_threshold,
                 collection_policy,
+                stmt_summary_partition_mode,
                 ..
             } => {
                 // Determine table type based on table_config
@@ -792,6 +840,7 @@ impl GrpcPushCollector {
                     rate_limiter,
                     backpressure,
                     collection_policy,
+                    stmt_summary_partition_mode,
                     buffer_capacity: 10000, // Default buffer capacity
                 })
             }
@@ -983,6 +1032,7 @@ impl GrpcPushCollector {
         let backpressure = self.backpressure.clone();
         let buffer_capacity = self.buffer_capacity;
         let collection_policy = self.collection_policy.clone();
+        let stmt_summary_partition_mode = self.stmt_summary_partition_mode.clone();
 
         let handle = tokio::spawn(async move {
             let addr = addr.parse().expect("Invalid gRPC bind address");
@@ -994,6 +1044,7 @@ impl GrpcPushCollector {
                 backpressure,
                 buffer_capacity,
                 collection_policy,
+                stmt_summary_partition_mode,
             };
 
             if let Err(e) = tonic::transport::Server::builder()
@@ -1020,6 +1071,7 @@ struct GrpcPushService {
     backpressure: BackpressureState,
     buffer_capacity: usize,
     collection_policy: CollectionPolicyConfig,
+    stmt_summary_partition_mode: String,
 }
 
 #[tonic::async_trait]
@@ -1565,7 +1617,9 @@ impl SystemTablePushService for GrpcPushService {
 
         info!("Received push: {} table rows", row_count);
 
-        let schema_metadata = build_schema_metadata_from_proto_schema(schema, &batch.rows);
+        let partition_mode = normalize_partition_mode(&self.stmt_summary_partition_mode);
+        let schema_metadata =
+            build_schema_metadata_from_proto_schema(schema, &batch.rows, partition_mode);
         let mut rows = Vec::with_capacity(row_count);
         let mut rejected = 0i32;
         for row in &batch.rows {
@@ -1574,11 +1628,27 @@ impl SystemTablePushService for GrpcPushService {
                 continue;
             }
 
-            let mut out = HashMap::with_capacity(schema.columns.len() + 1);
+            let mut out = HashMap::with_capacity(schema.columns.len() + 2);
+            let mut summary_begin_time_ms: Option<i64> = None;
             for (col, value) in schema.columns.iter().zip(row.values.iter()) {
+                if col.name == "SUMMARY_BEGIN_TIME" {
+                    if let Some(proto::value::Kind::TimestampMs(ts)) = &value.kind {
+                        summary_begin_time_ms = Some(*ts);
+                    }
+                }
                 let val = proto_value_to_json(value);
                 out.insert(col.name.clone(), val);
             }
+
+            if partition_mode == "half_hour" {
+                let ts_ms =
+                    summary_begin_time_ms.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+                out.insert(
+                    "time_30m".to_string(),
+                    Value::String(time_30m_bucket_from_ts_ms(ts_ms)),
+                );
+            }
+
             out.insert(
                 "_schema_metadata".to_string(),
                 Value::Object(schema_metadata.clone()),
@@ -1737,5 +1807,52 @@ mod tests {
         assert_eq!(plan_event_batch_sizes(5, 10), vec![5]);
         assert_eq!(plan_event_batch_sizes(20, 10), vec![10, 10]);
         assert_eq!(plan_event_batch_sizes(23, 10), vec![10, 10, 3]);
+    }
+
+    #[test]
+    fn test_build_schema_metadata_partition_mode_day() {
+        let schema = proto::TableSchema {
+            table_name: "CLUSTER_STATEMENTS_SUMMARY".to_string(),
+            columns: vec![proto::Column {
+                name: "DIGEST".to_string(),
+                r#type: 1,
+                nullable: true,
+                comment: Some("".to_string()),
+                ordinal: 0,
+            }],
+        };
+
+        let metadata = build_schema_metadata_from_proto_schema(&schema, &[], "day");
+        let partition = metadata.get("_partition_by").expect("partition missing");
+        assert_eq!(
+            partition,
+            &Value::Array(vec![Value::String("date".to_string())])
+        );
+        assert!(metadata.get("time_30m").is_none());
+    }
+
+    #[test]
+    fn test_build_schema_metadata_partition_mode_half_hour() {
+        let schema = proto::TableSchema {
+            table_name: "CLUSTER_STATEMENTS_SUMMARY".to_string(),
+            columns: vec![proto::Column {
+                name: "DIGEST".to_string(),
+                r#type: 1,
+                nullable: true,
+                comment: Some("".to_string()),
+                ordinal: 0,
+            }],
+        };
+
+        let metadata = build_schema_metadata_from_proto_schema(&schema, &[], "half_hour");
+        let partition = metadata.get("_partition_by").expect("partition missing");
+        assert_eq!(
+            partition,
+            &Value::Array(vec![
+                Value::String("date".to_string()),
+                Value::String("time_30m".to_string())
+            ])
+        );
+        assert!(metadata.get("time_30m").is_some());
     }
 }
