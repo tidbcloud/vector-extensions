@@ -110,6 +110,18 @@ pub struct SystemTablesConfig {
     #[serde(default = "default_stmt_summary_partition_mode")]
     pub stmt_summary_partition_mode: String,
 
+    /// Enable statement summary pre-aggregation in vector before sink writes.
+    #[serde(default)]
+    pub stmt_summary_preaggregate_enabled: bool,
+
+    /// Max grouped keys kept in pre-aggregation.
+    #[serde(default = "default_stmt_summary_preaggregate_max_groups")]
+    pub stmt_summary_preaggregate_max_groups: usize,
+
+    /// Max in-memory bytes budget for pre-aggregation state.
+    #[serde(default = "default_stmt_summary_preaggregate_max_memory_bytes")]
+    pub stmt_summary_preaggregate_max_memory_bytes: i64,
+
     /// Tables to collect data from (array of table configurations)
     pub tables: Vec<TableConfig>,
 
@@ -159,6 +171,15 @@ pub struct CollectionConfig {
 
     /// Statement summary partition mode for Delta sink.
     pub stmt_summary_partition_mode: String,
+
+    /// Enable statement summary pre-aggregation in vector before sink writes.
+    pub stmt_summary_preaggregate_enabled: bool,
+
+    /// Max grouped keys kept in pre-aggregation.
+    pub stmt_summary_preaggregate_max_groups: usize,
+
+    /// Max in-memory bytes budget for pre-aggregation state.
+    pub stmt_summary_preaggregate_max_memory_bytes: i64,
 }
 
 /// Table configuration for data collection
@@ -217,6 +238,14 @@ pub const fn default_stmt_summary_max_memory_bytes() -> i64 {
 
 pub fn default_stmt_summary_partition_mode() -> String {
     "by_day".to_string()
+}
+
+pub const fn default_stmt_summary_preaggregate_max_groups() -> usize {
+    50_000
+}
+
+pub const fn default_stmt_summary_preaggregate_max_memory_bytes() -> i64 {
+    256 * 1024 * 1024
 }
 
 /// Helper functions for reading environment variables
@@ -409,6 +438,10 @@ impl GenerateConfig for SystemTablesConfig {
             stmt_summary_max_digests_per_window: default_stmt_summary_max_digests_per_window(),
             stmt_summary_max_memory_bytes: default_stmt_summary_max_memory_bytes(),
             stmt_summary_partition_mode: default_stmt_summary_partition_mode(),
+            stmt_summary_preaggregate_enabled: false,
+            stmt_summary_preaggregate_max_groups: default_stmt_summary_preaggregate_max_groups(),
+            stmt_summary_preaggregate_max_memory_bytes:
+                default_stmt_summary_preaggregate_max_memory_bytes(),
             tables: vec![TableConfig {
                 source_schema: "information_schema".to_owned(),
                 source_table: "PROCESSLIST".to_owned(),
@@ -506,6 +539,10 @@ impl SourceConfig for SystemTablesConfig {
             stmt_summary_max_digests_per_window: config.stmt_summary_max_digests_per_window,
             stmt_summary_max_memory_bytes: config.stmt_summary_max_memory_bytes,
             stmt_summary_partition_mode: config.stmt_summary_partition_mode.clone(),
+            stmt_summary_preaggregate_enabled: config.stmt_summary_preaggregate_enabled,
+            stmt_summary_preaggregate_max_groups: config.stmt_summary_preaggregate_max_groups,
+            stmt_summary_preaggregate_max_memory_bytes: config
+                .stmt_summary_preaggregate_max_memory_bytes,
         };
 
         // Use tables from merged configuration

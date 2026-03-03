@@ -391,6 +391,10 @@ impl Controller {
                     None, // backpressure_reject_threshold - use default
                     grpc_push_policy,
                     self.collection_config.stmt_summary_partition_mode.clone(),
+                    self.collection_config.stmt_summary_preaggregate_enabled,
+                    self.collection_config.stmt_summary_preaggregate_max_groups,
+                    self.collection_config
+                        .stmt_summary_preaggregate_max_memory_bytes,
                 )
             }
             CollectionMethod::GrpcPull => {

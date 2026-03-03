@@ -289,6 +289,212 @@ fn plan_event_batch_sizes(total_events: usize, batch_size: usize) -> Vec<usize> 
     plan
 }
 
+fn get_str<'a>(row: &'a HashMap<String, Value>, key: &str) -> &'a str {
+    row.get(key)
+        .or_else(|| row.get(&key.to_ascii_lowercase()))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn get_i64(row: &HashMap<String, Value>, key: &str) -> Option<i64> {
+    let v = row
+        .get(key)
+        .or_else(|| row.get(&key.to_ascii_lowercase()))?;
+    match v {
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_u64().and_then(|u| i64::try_from(u).ok())),
+        Value::String(s) => s.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn get_f64(row: &HashMap<String, Value>, key: &str) -> Option<f64> {
+    let v = row
+        .get(key)
+        .or_else(|| row.get(&key.to_ascii_lowercase()))?;
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn value_to_i64(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_u64().and_then(|u| i64::try_from(u).ok())),
+        Value::String(s) => s.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn value_to_f64(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn normalize_epoch_to_ms(epoch: i64) -> i64 {
+    let abs = epoch.abs();
+    if abs >= 1_000_000_000_000_000 {
+        // microseconds
+        epoch / 1000
+    } else if abs >= 1_000_000_000_000 {
+        // milliseconds
+        epoch
+    } else if abs >= 1_000_000_000 {
+        // seconds
+        epoch * 1000
+    } else {
+        // keep tiny values unchanged for tests/synthetic inputs
+        epoch
+    }
+}
+
+fn value_to_epoch_ms(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_u64().and_then(|u| i64::try_from(u).ok()))
+            .map(normalize_epoch_to_ms),
+        Value::String(s) => {
+            if let Ok(raw) = s.parse::<i64>() {
+                return Some(normalize_epoch_to_ms(raw));
+            }
+
+            if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(s) {
+                return Some(ts.timestamp_millis());
+            }
+
+            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|ts| ts.and_utc().timestamp_millis())
+        }
+        _ => None,
+    }
+}
+
+fn set_number(row: &mut HashMap<String, Value>, key: &str, val: f64) {
+    if val.fract() == 0.0 && val >= i64::MIN as f64 && val <= i64::MAX as f64 {
+        row.insert(key.to_string(), Value::Number((val as i64).into()));
+        return;
+    }
+    if let Some(n) = serde_json::Number::from_f64(val) {
+        row.insert(key.to_string(), Value::Number(n));
+    }
+}
+
+fn preaggregate_statement_rows(
+    rows: Vec<HashMap<String, Value>>,
+    max_groups: usize,
+    max_memory_bytes: i64,
+    partition_mode: &str,
+) -> Vec<HashMap<String, Value>> {
+    if rows.is_empty() {
+        return rows;
+    }
+
+    let mut grouped: HashMap<(String, String, String, String), HashMap<String, Value>> =
+        HashMap::new();
+    let mut grouped_rows = Vec::new();
+    let mut approx_bytes: i64 = 0;
+
+    for row in rows {
+        let key = (
+            get_str(&row, "SCHEMA_NAME").to_string(),
+            get_str(&row, "DIGEST").to_string(),
+            get_str(&row, "PLAN_DIGEST").to_string(),
+            get_str(&row, "RESOURCE_GROUP").to_string(),
+        );
+
+        if !grouped.contains_key(&key) {
+            approx_bytes += row.len() as i64 * 64;
+            if grouped.len() >= max_groups || approx_bytes > max_memory_bytes {
+                grouped_rows.push(row);
+                continue;
+            }
+            grouped.insert(key.clone(), row);
+            continue;
+        }
+
+        let agg = grouped.get_mut(&key).expect("group must exist");
+        for (k, v) in row {
+            if k == "_schema_metadata" {
+                continue;
+            }
+            if !agg.contains_key(&k) {
+                agg.insert(k.clone(), v);
+                continue;
+            }
+
+            if k == "SUMMARY_BEGIN_TIME" || k == "FIRST_SEEN" {
+                if let (Some(a), Some(b)) = (
+                    agg.get(&k).and_then(value_to_epoch_ms),
+                    value_to_epoch_ms(&v),
+                ) {
+                    if b < a {
+                        agg.insert(k.clone(), v);
+                    }
+                }
+                continue;
+            }
+            if k == "SUMMARY_END_TIME" || k == "LAST_SEEN" {
+                if let (Some(a), Some(b)) = (
+                    agg.get(&k).and_then(value_to_epoch_ms),
+                    value_to_epoch_ms(&v),
+                ) {
+                    if b > a {
+                        agg.insert(k.clone(), v);
+                    }
+                }
+                continue;
+            }
+
+            if k == "EXEC_COUNT" || k.starts_with("SUM_") {
+                if let (Some(a), Some(b)) = (get_f64(agg, &k), value_to_f64(&v)) {
+                    set_number(agg, &k, a + b);
+                }
+                continue;
+            }
+            if k.starts_with("MAX_") {
+                if let (Some(a), Some(b)) = (get_f64(agg, &k), value_to_f64(&v)) {
+                    set_number(agg, &k, a.max(b));
+                }
+                continue;
+            }
+            if k.starts_with("MIN_") {
+                if let (Some(a), Some(b)) = (get_f64(agg, &k), value_to_f64(&v)) {
+                    set_number(agg, &k, a.min(b));
+                }
+                continue;
+            }
+        }
+
+        agg.insert(
+            "INSTANCE".to_string(),
+            Value::String("__MERGED__".to_string()),
+        );
+
+        if normalize_partition_mode(partition_mode) == "by_time_30m" {
+            if let Some(begin_ms) = get_value(agg, &["SUMMARY_BEGIN_TIME", "summary_begin_time"])
+                .and_then(|v| value_to_epoch_ms(&v))
+            {
+                agg.insert(
+                    "time_30m".to_string(),
+                    Value::String(half_hour_bucket_from_ts_ms(begin_ms)),
+                );
+            }
+        }
+    }
+
+    grouped_rows.extend(grouped.into_values());
+    grouped_rows
+}
+
 fn normalize_partition_mode(mode: &str) -> &'static str {
     if mode.eq_ignore_ascii_case("by_time_30m")
         || mode.eq_ignore_ascii_case("half_hour")
@@ -426,17 +632,6 @@ pub(crate) fn proto_value_to_json(value: &proto::Value) -> Value {
         Some(proto::value::Kind::JsonVal(v)) => serde_json::from_slice(v).unwrap_or(Value::Null),
         Some(proto::value::Kind::NullVal(_)) => Value::Null,
         None => Value::Null,
-    }
-}
-
-fn value_to_f64(v: &Value) -> Option<f64> {
-    match v {
-        Value::Number(n) => n
-            .as_f64()
-            .or_else(|| n.as_i64().map(|x| x as f64))
-            .or_else(|| n.as_u64().map(|x| x as f64)),
-        Value::String(s) => s.parse::<f64>().ok(),
-        _ => None,
     }
 }
 
@@ -786,6 +981,12 @@ pub struct GrpcPushCollector {
     collection_policy: CollectionPolicyConfig,
     /// Statement summary partition mode for Delta table layout.
     stmt_summary_partition_mode: String,
+    /// Enable vector-side pre-aggregation for statement rows.
+    stmt_summary_preaggregate_enabled: bool,
+    /// Max grouped keys for pre-aggregation.
+    stmt_summary_preaggregate_max_groups: usize,
+    /// Max memory budget for pre-aggregation.
+    stmt_summary_preaggregate_max_memory_bytes: i64,
     /// Buffer capacity for backpressure calculation
     buffer_capacity: usize,
 }
@@ -806,6 +1007,9 @@ impl GrpcPushCollector {
                 backpressure_reject_threshold,
                 collection_policy,
                 stmt_summary_partition_mode,
+                stmt_summary_preaggregate_enabled,
+                stmt_summary_preaggregate_max_groups,
+                stmt_summary_preaggregate_max_memory_bytes,
                 ..
             } => {
                 // Determine table type based on table_config
@@ -844,6 +1048,9 @@ impl GrpcPushCollector {
                     backpressure,
                     collection_policy,
                     stmt_summary_partition_mode,
+                    stmt_summary_preaggregate_enabled,
+                    stmt_summary_preaggregate_max_groups,
+                    stmt_summary_preaggregate_max_memory_bytes,
                     buffer_capacity: 10000, // Default buffer capacity
                 })
             }
@@ -865,6 +1072,10 @@ impl GrpcPushCollector {
         let table_config = self.table_config.clone().expect("table_config not set");
         let instance = self.instance.clone();
         let collection_policy = self.collection_policy.clone();
+        let preaggregate_enabled = self.stmt_summary_preaggregate_enabled;
+        let preaggregate_max_groups = self.stmt_summary_preaggregate_max_groups;
+        let preaggregate_max_memory_bytes = self.stmt_summary_preaggregate_max_memory_bytes;
+        let stmt_summary_partition_mode = self.stmt_summary_partition_mode.clone();
 
         tokio::spawn(async move {
             // Clone sender once, then reuse the reference
@@ -887,6 +1098,15 @@ impl GrpcPushCollector {
                 let mut all_rows = Vec::new();
                 for batch in &batches {
                     all_rows.extend(batch.statements.clone());
+                }
+
+                if preaggregate_enabled {
+                    all_rows = preaggregate_statement_rows(
+                        all_rows,
+                        preaggregate_max_groups,
+                        preaggregate_max_memory_bytes,
+                        &stmt_summary_partition_mode,
+                    );
                 }
 
                 let row_count = all_rows.len();
@@ -1857,5 +2077,112 @@ mod tests {
             ])
         );
         assert!(metadata.get("time_30m").is_some());
+    }
+
+    #[test]
+    fn test_preaggregate_statement_rows_v3_key_and_window_bounds() {
+        let mut r1 = HashMap::new();
+        r1.insert("SCHEMA_NAME".to_string(), Value::String("db1".to_string()));
+        r1.insert("DIGEST".to_string(), Value::String("d1".to_string()));
+        r1.insert("PLAN_DIGEST".to_string(), Value::String("p1".to_string()));
+        r1.insert(
+            "RESOURCE_GROUP".to_string(),
+            Value::String("rg1".to_string()),
+        );
+        r1.insert(
+            "SUMMARY_BEGIN_TIME".to_string(),
+            Value::Number(1_000_000_i64.into()),
+        );
+        r1.insert(
+            "SUMMARY_END_TIME".to_string(),
+            Value::Number(2_000_000_i64.into()),
+        );
+        r1.insert("EXEC_COUNT".to_string(), Value::Number(2_i64.into()));
+        r1.insert("SUM_LATENCY".to_string(), Value::Number(20_i64.into()));
+
+        let mut r2 = HashMap::new();
+        r2.insert("SCHEMA_NAME".to_string(), Value::String("db1".to_string()));
+        r2.insert("DIGEST".to_string(), Value::String("d1".to_string()));
+        r2.insert("PLAN_DIGEST".to_string(), Value::String("p1".to_string()));
+        r2.insert(
+            "RESOURCE_GROUP".to_string(),
+            Value::String("rg1".to_string()),
+        );
+        r2.insert(
+            "SUMMARY_BEGIN_TIME".to_string(),
+            Value::Number(900_000_i64.into()),
+        );
+        r2.insert(
+            "SUMMARY_END_TIME".to_string(),
+            Value::Number(2_200_000_i64.into()),
+        );
+        r2.insert("EXEC_COUNT".to_string(), Value::Number(3_i64.into()));
+        r2.insert("SUM_LATENCY".to_string(), Value::Number(30_i64.into()));
+
+        let out = preaggregate_statement_rows(vec![r1, r2], 1000, 1024 * 1024, "by_day");
+        assert_eq!(out.len(), 1);
+        let merged = &out[0];
+        assert_eq!(get_i64(merged, "SUMMARY_BEGIN_TIME"), Some(900_000));
+        assert_eq!(get_i64(merged, "SUMMARY_END_TIME"), Some(2_200_000));
+        assert_eq!(get_i64(merged, "EXEC_COUNT"), Some(5));
+        assert_eq!(get_i64(merged, "SUM_LATENCY"), Some(50));
+        assert_eq!(get_str(merged, "INSTANCE"), "__MERGED__");
+    }
+
+    #[test]
+    fn test_preaggregate_statement_rows_keeps_different_plan_digest_separate() {
+        let mut r1 = HashMap::new();
+        r1.insert("SCHEMA_NAME".to_string(), Value::String("db1".to_string()));
+        r1.insert("DIGEST".to_string(), Value::String("d1".to_string()));
+        r1.insert("PLAN_DIGEST".to_string(), Value::String("p1".to_string()));
+        r1.insert(
+            "RESOURCE_GROUP".to_string(),
+            Value::String("rg1".to_string()),
+        );
+
+        let mut r2 = HashMap::new();
+        r2.insert("SCHEMA_NAME".to_string(), Value::String("db1".to_string()));
+        r2.insert("DIGEST".to_string(), Value::String("d1".to_string()));
+        r2.insert("PLAN_DIGEST".to_string(), Value::String("p2".to_string()));
+        r2.insert(
+            "RESOURCE_GROUP".to_string(),
+            Value::String("rg1".to_string()),
+        );
+
+        let out = preaggregate_statement_rows(vec![r1, r2], 1000, 1024 * 1024, "by_day");
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn test_preaggregate_statement_rows_sets_time_30m_from_string_begin_time() {
+        let mut r1 = HashMap::new();
+        r1.insert("SCHEMA_NAME".to_string(), Value::String("db1".to_string()));
+        r1.insert("DIGEST".to_string(), Value::String("d1".to_string()));
+        r1.insert("PLAN_DIGEST".to_string(), Value::String("p1".to_string()));
+        r1.insert(
+            "RESOURCE_GROUP".to_string(),
+            Value::String("rg1".to_string()),
+        );
+        r1.insert(
+            "SUMMARY_BEGIN_TIME".to_string(),
+            Value::String("2026-01-01 10:40:00".to_string()),
+        );
+
+        let mut r2 = HashMap::new();
+        r2.insert("SCHEMA_NAME".to_string(), Value::String("db1".to_string()));
+        r2.insert("DIGEST".to_string(), Value::String("d1".to_string()));
+        r2.insert("PLAN_DIGEST".to_string(), Value::String("p1".to_string()));
+        r2.insert(
+            "RESOURCE_GROUP".to_string(),
+            Value::String("rg1".to_string()),
+        );
+        r2.insert(
+            "SUMMARY_BEGIN_TIME".to_string(),
+            Value::String("2026-01-01 10:55:00".to_string()),
+        );
+
+        let out = preaggregate_statement_rows(vec![r1, r2], 1000, 1024 * 1024, "by_time_30m");
+        assert_eq!(out.len(), 1);
+        assert_eq!(get_str(&out[0], "time_30m"), "1030");
     }
 }

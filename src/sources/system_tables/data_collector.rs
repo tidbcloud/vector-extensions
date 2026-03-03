@@ -250,6 +250,12 @@ pub enum CollectorConfigType {
         collection_policy: CollectionPolicyConfig,
         /// Statement summary partition mode (by_day or by_time_30m)
         stmt_summary_partition_mode: String,
+        /// Enable vector-side pre-aggregation before sink writes
+        stmt_summary_preaggregate_enabled: bool,
+        /// Max grouped keys for pre-aggregation
+        stmt_summary_preaggregate_max_groups: usize,
+        /// Max memory bytes budget for pre-aggregation
+        stmt_summary_preaggregate_max_memory_bytes: i64,
     },
     /// gRPC pull-based collector configuration
     GrpcPull {
@@ -327,6 +333,9 @@ impl CollectorConfig {
         backpressure_reject_threshold: Option<f64>,
         collection_policy: Option<CollectionPolicyConfig>,
         stmt_summary_partition_mode: String,
+        stmt_summary_preaggregate_enabled: bool,
+        stmt_summary_preaggregate_max_groups: usize,
+        stmt_summary_preaggregate_max_memory_bytes: i64,
     ) -> Self {
         let policy = collection_policy.unwrap_or_default();
         Self {
@@ -345,6 +354,9 @@ impl CollectorConfig {
                     .unwrap_or(policy.backpressure_reject_threshold),
                 collection_policy: policy,
                 stmt_summary_partition_mode,
+                stmt_summary_preaggregate_enabled,
+                stmt_summary_preaggregate_max_groups,
+                stmt_summary_preaggregate_max_memory_bytes,
             },
         }
     }
@@ -550,6 +562,9 @@ mod tests {
             stmt_summary_max_digests_per_window: 200_000,
             stmt_summary_max_memory_bytes: 512 * 1024 * 1024,
             stmt_summary_partition_mode: "by_day".to_string(),
+            stmt_summary_preaggregate_enabled: false,
+            stmt_summary_preaggregate_max_groups: 50_000,
+            stmt_summary_preaggregate_max_memory_bytes: 256 * 1024 * 1024,
         };
 
         assert_eq!(utils::parse_collection_interval("short", &config), 5);
@@ -571,6 +586,9 @@ mod tests {
             stmt_summary_max_digests_per_window: 321_000,
             stmt_summary_max_memory_bytes: 768 * 1024 * 1024,
             stmt_summary_partition_mode: "by_day".to_string(),
+            stmt_summary_preaggregate_enabled: false,
+            stmt_summary_preaggregate_max_groups: 50_000,
+            stmt_summary_preaggregate_max_memory_bytes: 256 * 1024 * 1024,
         };
 
         let policy = utils::build_grpc_push_collection_policy("long", &config);
