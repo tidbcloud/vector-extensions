@@ -14,6 +14,11 @@ pub struct DuckDBQueryExecutor {
     endpoint: String,
     cloud_provider: String,
     memory_limit: Option<String>,
+    /// Temp directory for disk spill when memory is exhausted (e.g. during ORDER BY sort).
+    /// When set, DuckDB spills intermediate data to disk instead of OOM.
+    temp_directory: Option<std::path::PathBuf>,
+    /// Max threads for DuckDB. Lower values reduce parallel buffer memory usage.
+    threads: Option<usize>,
     /// AWS region for S3. When set, used for DuckDB S3 access; otherwise falls back to AWS_REGION env.
     region: Option<String>,
 }
@@ -24,6 +29,8 @@ impl DuckDBQueryExecutor {
         endpoint: String,
         cloud_provider: String,
         memory_limit: Option<String>,
+        temp_directory: Option<std::path::PathBuf>,
+        threads: Option<usize>,
         region: Option<String>,
     ) -> vector::Result<Self> {
         let connection = Connection::open_in_memory()
@@ -34,6 +41,8 @@ impl DuckDBQueryExecutor {
             endpoint,
             cloud_provider,
             memory_limit,
+            temp_directory,
+            threads,
             region,
         };
 
@@ -50,6 +59,31 @@ impl DuckDBQueryExecutor {
             conn.execute(&format!("SET memory_limit='{}'", limit), [])
                 .map_err(|e| format!("Failed to set memory limit: {}", e))?;
         }
+
+        // Set temp_directory for disk spill (ORDER BY sort, hash joins, etc.)
+        // When memory_limit is exceeded, DuckDB spills to this directory
+        if let Some(ref dir) = self.temp_directory {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                warn!("Could not create duckdb_temp_directory {}: {}. Spill may fail.", dir.display(), e);
+            }
+            let path = dir.to_string_lossy().replace('\\', "/");
+            let path_escaped = path.replace("'", "''");
+            conn.execute(&format!("SET temp_directory='{}'", path_escaped), [])
+                .map_err(|e| format!("Failed to set temp_directory: {}", e))?;
+            info!("DuckDB temp_directory set to {} (enables disk spill)", path);
+        }
+
+        // Reduce threads to lower parallel buffer memory (ORDER BY + wide SELECT * can be heavy)
+        if let Some(n) = self.threads {
+            conn.execute(&format!("SET threads={}", n), [])
+                .map_err(|e| format!("Failed to set threads: {}", e))?;
+            info!("DuckDB threads set to {}", n);
+        }
+
+        // Disable insertion-order preservation to reduce memory (recommended by DuckDB OOM guide)
+        // Safe for read-only SELECT workloads like delta_scan
+        conn.execute("SET preserve_insertion_order=false", [])
+            .map_err(|e| format!("Failed to set preserve_insertion_order: {}", e))?;
 
         // Install and load delta extension
         // Note: This requires the delta extension to be available
@@ -464,6 +498,8 @@ mod tests {
             "aws".to_string(),
             None,
             None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -490,6 +526,8 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
+            None,
             None,
             None,
         )
@@ -521,6 +559,8 @@ mod tests {
             "aws".to_string(),
             None,
             None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -543,6 +583,8 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
+            None,
             None,
             None,
         )
@@ -571,6 +613,8 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
+            None,
             None,
             None,
         )
@@ -602,6 +646,8 @@ mod tests {
             "aws".to_string(),
             None,
             None,
+            None,
+            None,
         );
         assert!(executor.is_ok());
     }
@@ -615,6 +661,8 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "oss://bucket/table".to_string(),
             "aliyun".to_string(),
+            None,
+            None,
             None,
             None,
         );
@@ -652,6 +700,8 @@ mod tests {
             "gcp".to_string(),
             None,
             None,
+            None,
+            None,
         );
         assert!(executor.is_ok());
     }
@@ -661,6 +711,8 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "az://account/container/table".to_string(),
             "azure".to_string(),
+            None,
+            None,
             None,
             None,
         );
@@ -676,6 +728,8 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
+            None,
             None,
             None,
         )
@@ -719,6 +773,8 @@ mod tests {
             "aws".to_string(),
             None,
             None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -755,6 +811,8 @@ mod tests {
             "aws".to_string(),
             Some("1GB".to_string()),
             None,
+            None,
+            None,
         );
 
         // Executor creation might fail if delta extension is not available
@@ -787,6 +845,8 @@ mod tests {
             "aws".to_string(),
             Some("512MB".to_string()),
             None,
+            None,
+            None,
         );
 
         // Similar to above, initialization might fail due to delta extension
@@ -816,6 +876,8 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
+            None,
             None,
             None,
         );
@@ -849,6 +911,8 @@ mod tests {
         let executor = DuckDBQueryExecutor::new(
             "s3://bucket/table".to_string(),
             "aws".to_string(),
+            None,
+            None,
             None,
             None,
         );

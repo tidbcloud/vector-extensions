@@ -42,14 +42,22 @@ impl Controller {
         acknowledgements: bool,
         unique_id_column: Option<String>,
         duckdb_memory_limit: Option<String>,
+        duckdb_temp_directory: Option<PathBuf>,
+        duckdb_threads: Option<usize>,
         region: Option<String>,
         out: SourceSender,
     ) -> vector::Result<Self> {
+        // Default temp_directory to data_dir/duckdb_temp when not specified (enables disk spill)
+        let temp_dir = duckdb_temp_directory
+            .or_else(|| Some(data_dir.join("duckdb_temp")));
+
         // Create DuckDB executor
         let executor = Arc::new(DuckDBQueryExecutor::new(
             endpoint.clone(),
             cloud_provider,
             duckdb_memory_limit,
+            temp_dir,
+            duckdb_threads,
             region,
         )?);
 

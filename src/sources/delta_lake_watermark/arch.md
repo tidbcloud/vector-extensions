@@ -158,6 +158,8 @@ batch_size = 10000
 poll_interval_secs = 30
 acknowledgements = true
 duckdb_memory_limit = "2GB"  # Optional
+duckdb_temp_directory = "/fast-ssd/duckdb_temp"  # Optional, enables disk spill; defaults to {data_dir}/duckdb_temp
+duckdb_threads = 4  # Optional, reduce for lower memory (e.g. when ORDER BY + SELECT * over wide time range)
 ```
 
 ## Acknowledgment Mechanism
@@ -290,11 +292,26 @@ Checkpoint files are stored under `data_dir`, using persistent volumes (PV) to e
 
 ## Performance Optimization
 
-### Memory Control
+### Memory Control (Critical for Wide Tables / Large Records)
 
-- **DuckDB Memory Limit**: Configure through `duckdb_memory_limit`
-- **Batch Size**: Control number of rows per query through `batch_size`
-- **Parquet Scanning**: DuckDB automatically performs predicate pushdown, reducing scanned data
+When using `ORDER BY` + `SELECT *` over Delta Lake with wide time ranges, DuckDB may need to read and sort large amounts of data before applying `LIMIT`. This is especially true when:
+- Records are large (e.g. 60KB+ per row with many columns)
+- Delta Lake uses large compact files (e.g. 500MB each)
+- The time range in `condition` spans many files
+
+**Recommended configuration for high-memory scenarios:**
+
+```toml
+duckdb_memory_limit = "2GB"
+duckdb_temp_directory = "/fast-ssd/duckdb_temp"  # Enables disk spill - use SSD
+duckdb_threads = 4   # Reduce from default to lower parallel buffer usage
+batch_size = 500     # Smaller batches reduce per-query memory
+```
+
+- **duckdb_memory_limit**: Hard cap on DuckDB memory. When exceeded, DuckDB spills to disk (if `duckdb_temp_directory` is set).
+- **duckdb_temp_directory**: **Required for spill**. When unset, defaults to `{data_dir}/duckdb_temp`. Use fast storage (SSD/NVMe) for acceptable spill performance.
+- **duckdb_threads**: Lower values (2–4) reduce parallel buffer memory; useful when memory is tight.
+- **batch_size**: Smaller values (e.g. 500) reduce data volume per query; 1000 rows × 60KB ≈ 60MB per batch.
 
 ### Query Optimization
 

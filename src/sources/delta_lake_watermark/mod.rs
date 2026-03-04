@@ -71,6 +71,15 @@ pub struct DeltaLakeWatermarkConfig {
     /// DuckDB memory limit (e.g., "2GB")
     pub duckdb_memory_limit: Option<String>,
 
+    /// DuckDB temp directory for disk spill when memory is exceeded (e.g. during ORDER BY sort).
+    /// When set, DuckDB spills intermediate data to disk instead of OOM. Use fast storage (SSD).
+    /// If unset and data_dir is writable, defaults to {data_dir}/duckdb_temp.
+    pub duckdb_temp_directory: Option<PathBuf>,
+
+    /// DuckDB max threads. Lower values (e.g. 2-4) reduce parallel buffer memory for heavy queries.
+    /// Useful when ORDER BY + SELECT * over wide time range causes high memory usage.
+    pub duckdb_threads: Option<usize>,
+
     /// AWS region for S3 (e.g., "us-west-2"). When set, overrides AWS_REGION env for DuckDB S3 access.
     pub region: Option<String>,
 }
@@ -112,6 +121,8 @@ impl GenerateConfig for DeltaLakeWatermarkConfig {
             acknowledgements: default_acknowledgements(),
             unique_id_column: Some("unique_id".to_string()),
             duckdb_memory_limit: Some("2GB".to_string()),
+            duckdb_temp_directory: None,
+            duckdb_threads: None,
             region: Some("us-west-2".to_string()),
         })
         .unwrap()
@@ -135,6 +146,8 @@ impl SourceConfig for DeltaLakeWatermarkConfig {
         let acknowledgements = self.acknowledgements;
         let unique_id_column = self.unique_id_column.clone();
         let duckdb_memory_limit = self.duckdb_memory_limit.clone();
+        let duckdb_temp_directory = self.duckdb_temp_directory.clone();
+        let duckdb_threads = self.duckdb_threads;
         let region = self.region.clone();
 
         // Clone values for the async block
@@ -148,6 +161,8 @@ impl SourceConfig for DeltaLakeWatermarkConfig {
         let acknowledgements_clone = acknowledgements;
         let unique_id_column_clone = unique_id_column.clone();
         let duckdb_memory_limit_clone = duckdb_memory_limit.clone();
+        let duckdb_temp_directory_clone = duckdb_temp_directory.clone();
+        let duckdb_threads_clone = duckdb_threads;
         let region_clone = region.clone();
         let out_clone = cx.out;
 
@@ -163,6 +178,8 @@ impl SourceConfig for DeltaLakeWatermarkConfig {
                 acknowledgements_clone,
                 unique_id_column_clone,
                 duckdb_memory_limit_clone,
+                duckdb_temp_directory_clone,
+                duckdb_threads_clone,
                 region_clone,
                 out_clone,
             )
@@ -257,6 +274,8 @@ mod tests {
             acknowledgements: true,
             unique_id_column: None,
             duckdb_memory_limit: None,
+            duckdb_temp_directory: None,
+            duckdb_threads: None,
             region: None,
         };
         assert!(config.validate().is_ok());
@@ -275,6 +294,8 @@ mod tests {
             acknowledgements: true,
             unique_id_column: None,
             duckdb_memory_limit: None,
+            duckdb_temp_directory: None,
+            duckdb_threads: None,
             region: None,
         };
         assert!(config.validate().is_err());
@@ -293,6 +314,8 @@ mod tests {
             acknowledgements: true,
             unique_id_column: None,
             duckdb_memory_limit: None,
+            duckdb_temp_directory: None,
+            duckdb_threads: None,
             region: None,
         };
         assert!(config.validate().is_err());
@@ -315,6 +338,8 @@ mod tests {
             acknowledgements: true,
             unique_id_column: None,
             duckdb_memory_limit: None,
+            duckdb_temp_directory: None,
+            duckdb_threads: None,
             region: None,
         };
         assert!(config.validate().is_err());
@@ -334,6 +359,8 @@ mod tests {
             acknowledgements: default_acknowledgements(),
             unique_id_column: None,
             duckdb_memory_limit: None,
+            duckdb_temp_directory: None,
+            duckdb_threads: None,
             region: None,
         };
         assert_eq!(config.cloud_provider, "aws");
@@ -378,6 +405,8 @@ mod tests {
                 acknowledgements: true,
                 unique_id_column: None,
                 duckdb_memory_limit: None,
+                duckdb_temp_directory: None,
+                duckdb_threads: None,
                 region: None,
             };
             assert!(config.validate().is_ok(), "Endpoint {} should be valid", endpoint);
