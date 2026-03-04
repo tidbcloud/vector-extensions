@@ -8,17 +8,13 @@ spec:
     spec:
       containers:
       - name: vector
-        image: 552185537300.dkr.ecr.us-west-2.amazonaws.com/dev/vector:nightly-52d4d16-modified-5
+        #image: 552185537300.dkr.ecr.us-west-2.amazonaws.com/dev/vector:nightly-52d4d16-modified-5
+        image: slggamer/vector:s3sync
         imagePullPolicy: Always
-        args: ["--config", "/etc/vector/vector.toml"]
-        ports:
-        - containerPort: 8686
-          name: api
-          protocol: TCP
-        - containerPort: 9598
-          name: metrics
-          protocol: TCP
+        # s3-sync 镜像以脚本为入口，无需 Vector 的 args；配置路径需与下面 volumeMount 一致
         env:
+        - name: CONFIG_FILE
+          value: /etc/vector/vector.toml
         - name: AWS_REGION
           value: "us-west-2"
         volumeMounts:
@@ -29,5 +25,5 @@ spec:
       - name: config
         configMap:
           name: vector-s3-sync-config
-      restartPolicy: OnFailure
-  backoffLimit: 1
+      restartPolicy: Never
+  backoffLimit: 0

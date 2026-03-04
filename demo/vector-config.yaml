@@ -29,11 +29,8 @@ data:
     poll_interval_secs = 0
     emit_metadata = true
     emit_content = true
-    emit_per_line = "auto"
-    # Files larger than this use streaming (by line) to avoid one huge event and sink BufferTooSmall
-    stream_file_above_bytes = 6553600
-    # Parallelism: process 2 files at once (decompress + S3 read) to use both cores
-    stream_concurrency = 2
+    emit_per_line = true
+    stream_concurrency = 3
     # flush_after_each_file default true for output rate; no max_content_buffer_bytes — source writes to sink directly, sink buffer handles batching
     decompress_gzip = true
     region = "us-west-2"
@@ -48,7 +45,7 @@ data:
     inputs = [ "file_list" ]
     bucket = "o11y-dev-shared-us-west-2"
     # Ensure these fields exist in event metadata or key_prefix will error
-    key_prefix = "leotest5/{{ component }}/{{ hour_partition }}/"
+    key_prefix = "leotestS3sync/"
     # gzip to S3 uses CPU; set compression = "none" to save CPU if downstream does not require it (more bandwidth/storage)
     compression = "gzip"
     region = "us-west-2"
