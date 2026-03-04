@@ -8,23 +8,22 @@ spec:
     spec:
       containers:
       - name: vector
-        image: slggamer/vector:nightly-ca2f707
-        args: ["--config", "/etc/vector/vector.toml"]
+        #image: 552185537300.dkr.ecr.us-west-2.amazonaws.com/dev/vector:nightly-52d4d16-modified-5
+        image: slggamer/vector:s3sync
+        imagePullPolicy: Always
+        # s3-sync 镜像以脚本为入口，无需 Vector 的 args；配置路径需与下面 volumeMount 一致
         env:
+        - name: CONFIG_FILE
+          value: /etc/vector/vector.toml
         - name: AWS_REGION
           value: "us-west-2"
         volumeMounts:
         - name: config
           mountPath: /etc/vector
           readOnly: true
-        - name: duckdb-temp
-          mountPath: /tmp
       volumes:
       - name: config
         configMap:
           name: vector-s3-sync-config
-      - name: duckdb-temp
-        persistentVolumeClaim:
-          claimName: vector-data
       restartPolicy: Never
   backoffLimit: 0

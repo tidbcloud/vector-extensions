@@ -56,6 +56,7 @@ MySQL/TiDB Database
 - `max_connections`: Maximum connections in pool (default: 10)
 - `connection_timeout`: Connection timeout in seconds (default: 30)
 - `batch_size`: Batch size for inserts (default: 1000)
+- `auto_create_table`: When true (default), create the table automatically from the first batch if it doesn't exist
 - `tls`: TLS configuration
 - `acknowledgements`: Acknowledgments configuration
 
@@ -73,9 +74,21 @@ max_connections = 10
 
 ## Implementation Details
 
+### Auto-Create Table
+
+When `auto_create_table` is true (default) and the target table does not exist:
+
+1. On first batch, the sink creates the table using `CREATE TABLE` from the first event's field structure
+2. Column types are inferred from Vector `Value` types (Integer→BIGINT, Float→DOUBLE, Bytes→TEXT/VARCHAR, etc.)
+3. If events contain `_schema_metadata` with `mysql_type` (e.g. from deltalake/topsql sinks), those types are used for better accuracy
+4. An `id` column is added as `BIGINT AUTO_INCREMENT PRIMARY KEY`
+5. After creation, the schema is loaded and inserts proceed normally
+
+Set `auto_create_table = false` to require the table to exist beforehand (original behavior).
+
 ### Dynamic Schema Discovery
 
-The sink automatically queries the target table schema on initialization using `SHOW COLUMNS FROM table`. This allows the sink to:
+When the table exists, the sink queries the target table schema on initialization using `SHOW COLUMNS FROM table`. This allows the sink to:
 - Discover all available columns dynamically
 - Adapt to different table structures without code changes
 - Handle nullable/non-nullable columns appropriately

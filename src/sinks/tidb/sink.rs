@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{stream::BoxStream, StreamExt};
 use sqlx::{MySqlPool, Row};
+use tokio::sync::Mutex;
 use vector_lib::{
     event::{Event, LogEvent, Value},
     sink::StreamSink,
@@ -26,8 +28,9 @@ pub struct TiDBSink {
     pool: MySqlPool,
     table: String,
     batch_size: usize,
-    /// Cached table schema: column name -> ColumnInfo
-    schema: HashMap<String, ColumnInfo>,
+    /// Cached table schema: column name -> ColumnInfo.
+    /// None when table doesn't exist yet and auto_create_table was true (filled on first batch).
+    schema: Arc<Mutex<Option<HashMap<String, ColumnInfo>>>>,
 }
 
 impl TiDBSink {
@@ -38,6 +41,7 @@ impl TiDBSink {
         max_connections: u32,
         connection_timeout: Duration,
         batch_size: usize,
+        auto_create_table: bool,
     ) -> vector::Result<Self> {
         use sqlx::mysql::MySqlPoolOptions;
 
@@ -49,16 +53,29 @@ impl TiDBSink {
             .await
             .map_err(|e| vector::Error::from(format!("Failed to create connection pool: {}", e)))?;
 
-        // Query table schema to get column information
-        let schema = Self::get_table_schema(&pool, &table).await?;
-
-        info!(
-            message = "TiDB sink initialized",
-            table = %table,
-            columns = schema.len(),
-            max_connections = max_connections,
-            batch_size = batch_size
-        );
+        // Query table schema; if table doesn't exist and auto_create_table, defer to first batch
+        let schema = match Self::get_table_schema(&pool, &table).await {
+            Ok(s) => {
+                info!(
+                    message = "TiDB sink initialized with existing table",
+                    table = %table,
+                    columns = s.len(),
+                    max_connections = max_connections,
+                    batch_size = batch_size
+                );
+                Arc::new(Mutex::new(Some(s)))
+            }
+            Err(e) if auto_create_table && Self::is_table_not_found_error(&e) => {
+                info!(
+                    message = "TiDB sink initialized, table will be created from first batch",
+                    table = %table,
+                    max_connections = max_connections,
+                    batch_size = batch_size
+                );
+                Arc::new(Mutex::new(None))
+            }
+            Err(e) => return Err(e),
+        };
 
         Ok(Self {
             pool,
@@ -66,6 +83,11 @@ impl TiDBSink {
             batch_size,
             schema,
         })
+    }
+
+    fn is_table_not_found_error(e: &vector::Error) -> bool {
+        let msg = e.to_string().to_lowercase();
+        msg.contains("doesn't exist") || msg.contains("not found") || msg.contains("1146")
     }
 
     /// Query table schema to get column information
@@ -127,6 +149,110 @@ impl TiDBSink {
         Ok(schema)
     }
 
+    /// Create table from the first event's field structure
+    async fn create_table_from_event(
+        pool: &MySqlPool,
+        table: &str,
+        log_event: &LogEvent,
+    ) -> vector::Result<()> {
+        let mut col_defs: Vec<String> = Vec::new();
+        col_defs.push("`id` BIGINT AUTO_INCREMENT PRIMARY KEY".to_string());
+
+        // Prefer _schema_metadata mysql_type when present (e.g. from deltalake/topsql sinks)
+        let schema_meta = log_event
+            .get("_schema_metadata")
+            .and_then(|v| v.as_object())
+            .cloned();
+
+        let mut fields_seen = std::collections::HashSet::new();
+        if let Some(iter) = log_event.all_event_fields() {
+            for (key, value) in iter {
+                let name = key.as_ref();
+                if name.starts_with('_') || name == "id" {
+                    continue;
+                }
+                if fields_seen.contains(name) {
+                    continue;
+                }
+                fields_seen.insert(name.to_string());
+
+                let mysql_type = schema_meta
+                    .as_ref()
+                    .and_then(|m| m.get(name))
+                    .and_then(|info| info.as_object())
+                    .and_then(|obj| obj.get("mysql_type"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| Self::infer_mysql_type(value));
+
+                let col_def = format!("`{}` {}", Self::escape_ident(name), mysql_type);
+                col_defs.push(col_def);
+            }
+        }
+
+        if col_defs.len() <= 1 {
+            return Err(vector::Error::from(
+                "No insertable fields found in event for auto-create table",
+            ));
+        }
+
+        let create_sql = format!(
+            "CREATE TABLE IF NOT EXISTS `{}` ({})",
+            table.replace('`', "``"),
+            col_defs.join(", ")
+        );
+        info!(message = "Creating table from first event", table = %table, sql = %create_sql);
+
+        sqlx::query(&create_sql)
+            .execute(pool)
+            .await
+            .map_err(|e| vector::Error::from(format!("Failed to create table: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Infer MySQL column type from Vector Value
+    fn infer_mysql_type(value: &Value) -> String {
+        match value {
+            Value::Integer(_) => "BIGINT",
+            Value::Float(_) => "DOUBLE",
+            Value::Boolean(_) => "TINYINT(1)",
+            Value::Timestamp(_) => "DATETIME(6)",
+            Value::Null => "TEXT",
+            Value::Object(_) | Value::Array(_) => "JSON",
+            Value::Bytes(bytes) => {
+                let len = bytes.len();
+                if len <= 255 {
+                    "VARCHAR(255)"
+                } else if len <= 65535 {
+                    "TEXT"
+                } else {
+                    "LONGTEXT"
+                }
+            }
+            Value::Regex(_) => "TEXT",
+        }
+        .to_string()
+    }
+
+    fn escape_ident(s: &str) -> String {
+        s.replace('`', "``")
+    }
+
+    /// Convert boolean-like string to "0" or "1" for TINYINT(1) columns.
+    /// Source data (e.g. from Delta Lake/DuckDB) often has "true"/"false" as strings.
+    fn convert_bool_string_for_tinyint(value: &str) -> Option<&'static str> {
+        let v = value.trim().to_lowercase();
+        if v.is_empty() {
+            return None;
+        }
+        match v.as_str() {
+            "true" | "t" | "1" | "yes" | "y" => Some("1"),
+            "false" | "f" | "0" | "no" | "n" => Some("0"),
+            _ => None,
+        }
+    }
+
     /// Extract maximum length from MySQL data type string
     /// Examples: "VARCHAR(255)" -> Some(255), "TEXT" -> None, "CHAR(10)" -> Some(10)
     fn extract_max_length(data_type: &str) -> Option<usize> {
@@ -142,8 +268,7 @@ impl TiDBSink {
         None
     }
 
-    /// Extract value from log event for a given column
-    /// Tries to match event field names to column names (case-insensitive)
+    /// Extract value from log event for a given column (case-insensitive match)
     fn extract_value_for_column(&self, log_event: &LogEvent, column_name: &str) -> Option<String> {
         // Try exact match first
         if let Some(value) = log_event.get(column_name) {
@@ -216,12 +341,34 @@ impl TiDBSink {
             return Ok(());
         }
 
+        // Ensure schema is loaded; create table from first event if needed
+        {
+            let mut guard = self.schema.lock().await;
+            if guard.is_none() {
+                let first_log = events.iter().find_map(|e| {
+                    if let Event::Log(log) = e {
+                        Some(log)
+                    } else {
+                        None
+                    }
+                });
+                let log_event = first_log.ok_or_else(|| {
+                    vector::Error::from("No log events in batch for auto-create table")
+                })?;
+                Self::create_table_from_event(&self.pool, &self.table, log_event).await?;
+                let s = Self::get_table_schema(&self.pool, &self.table).await?;
+                *guard = Some(s);
+            }
+        }
+
+        let schema = {
+            let guard = self.schema.lock().await;
+            guard.as_ref().unwrap().clone()
+        };
+
         // Build INSERT statement dynamically based on table schema
-        // Only include columns that exist in the schema and have matching event fields
         let mut columns: Vec<String> = Vec::new();
-        for column_info in self.schema.values() {
-            // Skip auto-increment or auto-generated columns (like id, created_at)
-            // These will be handled by the database
+        for column_info in schema.values() {
             if column_info.name == "id" || column_info.name == "created_at" {
                 continue;
             }
@@ -241,14 +388,13 @@ impl TiDBSink {
             .collect();
         let placeholders: Vec<String> = (0..columns.len()).map(|_| "?".to_string()).collect();
         let query = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            self.table,
+            "INSERT INTO `{}` ({}) VALUES ({})",
+            self.table.replace('`', "``"),
             columns_quoted.join(", "),
             placeholders.join(", ")
         );
 
         for event in events {
-            // Extract LogEvent from Event
             let log_event = match event {
                 Event::Log(log) => log,
                 Event::Metric(_) => {
@@ -261,13 +407,11 @@ impl TiDBSink {
                 }
             };
 
-            // Build values for each column
             let mut query_builder = sqlx::query(&query);
             for column_name in &columns {
                 let value = self.extract_value_for_column(&log_event, column_name);
 
-                // Handle timestamp columns specially - convert to MySQL format
-                let column_info = self.schema.get(column_name).unwrap();
+                let column_info = schema.get(column_name).unwrap();
                 let mut final_value = if column_info.data_type.to_lowercase().contains("datetime")
                     || column_info.data_type.to_lowercase().contains("timestamp")
                 {
@@ -277,6 +421,19 @@ impl TiDBSink {
                 } else {
                     value
                 };
+
+                // Convert boolean-like strings to "0"/"1" for TINYINT(1)/BOOL columns
+                let dt_lower = column_info.data_type.to_lowercase();
+                let is_bool_column = dt_lower.contains("tinyint(1)") || dt_lower == "tinyint"
+                    || dt_lower == "bool" || dt_lower == "boolean"
+                    || (dt_lower.contains("tinyint") && column_info.max_length == Some(1));
+                if is_bool_column {
+                    if let Some(ref v) = final_value {
+                        if let Some(normalized) = Self::convert_bool_string_for_tinyint(v) {
+                            final_value = Some(normalized.to_string());
+                        }
+                    }
+                }
 
                 // Truncate string values if they exceed column max length
                 if let Some(ref mut v) = final_value {

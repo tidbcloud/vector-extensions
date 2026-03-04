@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-s3-sync-config
+  namespace: default
+data:
+  vector.toml: |
+    # Top-level data_dir: sink disk buffer etc. write here
+    data_dir = "/var/lib/vector"
+
+    # Enable API: health check /health, management
+    [api]
+    enabled = true
+    address = "0.0.0.0:8686"
+    playground = false
+
+    # Internal metrics source: Vector's own metrics (throughput, buffer, errors)
+    [sources.internal_metrics]
+    type = "internal_metrics"
+    scrape_interval_secs = 15
+
+    [sources.delta_lake_source]
+    type = "delta_lake_watermark"
+    endpoint = "s3://o11y-dev-shared-us-west-2/deltalake/30061/019c9e6d-c311-7bf1-a609-1090376b03df/slowlogs"
+    cloud_provider = "aws"
+    data_dir1 = "/tmp/vector-data/9acf7387-d7c1-4ce2-a728-ed187571c3bb/checkpoints"
+    order_by_column = "time"
+    batch_size = 1000
+    poll_interval_secs = 0
+    acknowledgements = true
+    duckdb_temp_directory = "/tmp/duckdb_temp"
+    duckdb_threads = 1
+    duckdb_memory_limit = "4GB"
+    condition = "time >= 1769990400 AND time < 1770595200"
+
+    [sinks.tidb_sink]
+    type = "tidb"
+    inputs = [ "delta_lake_source",]
+    connection_string = "mysql://4CXN88WA4NSFaoQ.root:6Avts99mIaPmOBuZ@gateway01.ap-southeast-1.prod.aws.tidbcloud.com:4000/test"
+    table = "slowlogs"
+    batch_size = 1000
+    max_connections = 10
+    connection_timeout = 30
+
+    # Prometheus-format metrics for scraping
+    [sinks.prometheus_exporter]
+    type = "prometheus_exporter"
+    inputs = [ "internal_metrics" ]
+    address = "0.0.0.0:9598"
+    default_namespace = "vector"

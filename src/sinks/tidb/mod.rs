@@ -40,6 +40,10 @@ pub struct TiDBConfig {
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 
+    /// When true (default), create the table automatically from the first batch if it doesn't exist
+    #[serde(default = "default_auto_create_table")]
+    pub auto_create_table: bool,
+
     /// TLS configuration
     pub tls: Option<TlsConfig>,
 
@@ -64,6 +68,10 @@ pub const fn default_batch_size() -> usize {
     1000
 }
 
+fn default_auto_create_table() -> bool {
+    true
+}
+
 impl GenerateConfig for TiDBConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
@@ -72,6 +80,7 @@ impl GenerateConfig for TiDBConfig {
             max_connections: default_max_connections(),
             connection_timeout: default_connection_timeout(),
             batch_size: default_batch_size(),
+            auto_create_table: default_auto_create_table(),
             tls: None,
             acknowledgements: Default::default(),
         })
@@ -92,6 +101,7 @@ impl SinkConfig for TiDBConfig {
             self.max_connections,
             Duration::from_secs(self.connection_timeout),
             self.batch_size,
+            self.auto_create_table,
         )
         .await?;
 
