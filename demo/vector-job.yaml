@@ -8,7 +8,7 @@ spec:
     spec:
       containers:
       - name: vector
-        image: slggamer/vector:nightly-ca2f707
+        image: slggamer/vector:nightly-b7b8f66
         args: ["--config", "/etc/vector/vector.toml"]
         env:
         - name: AWS_REGION

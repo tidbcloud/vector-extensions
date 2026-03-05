@@ -222,8 +222,8 @@ impl TiDBSink {
             Value::Object(_) | Value::Array(_) => "JSON",
             Value::Bytes(bytes) => {
                 let len = bytes.len();
-                if len <= 255 {
-                    "VARCHAR(255)"
+                if len <= 4096 {
+                    "VARCHAR(4096)"
                 } else if len <= 65535 {
                     "TEXT"
                 } else {
@@ -253,10 +253,17 @@ impl TiDBSink {
         }
     }
 
-    /// Extract maximum length from MySQL data type string
-    /// Examples: "VARCHAR(255)" -> Some(255), "TEXT" -> None, "CHAR(10)" -> Some(10)
+    /// Extract maximum character length from MySQL string-type columns.
+    /// Only applies to VARCHAR(n), CHAR(n), etc. — NOT numeric types where (n) is display width.
     fn extract_max_length(data_type: &str) -> Option<usize> {
-        // Check for VARCHAR(n), CHAR(n), etc.
+        let dt_lower = data_type.to_lowercase();
+        let is_string_type = dt_lower.starts_with("varchar")
+            || dt_lower.starts_with("char")
+            || dt_lower.starts_with("binary")
+            || dt_lower.starts_with("varbinary");
+        if !is_string_type {
+            return None;
+        }
         if let Some(start) = data_type.find('(') {
             if let Some(end) = data_type.find(')') {
                 if let Ok(length) = data_type[start + 1..end].parse::<usize>() {
@@ -264,8 +271,51 @@ impl TiDBSink {
                 }
             }
         }
-        // TEXT, LONGTEXT, MEDIUMTEXT, TINYTEXT, BLOB, etc. have no explicit length limit
         None
+    }
+
+    /// Sanitize a value for a numeric MySQL column.
+    /// Handles NaN, Infinity, empty strings, and float-to-int coercion.
+    /// Returns None if the value cannot be represented and should become NULL.
+    fn sanitize_numeric_value(value: &str, data_type: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let lower = trimmed.to_lowercase();
+        if lower == "nan" || lower == "inf" || lower == "-inf"
+            || lower == "infinity" || lower == "-infinity"
+            || lower == "none" || lower == "null"
+        {
+            return None;
+        }
+        let dt_lower = data_type.to_lowercase();
+        let is_integer_type = dt_lower.contains("int") || dt_lower == "serial";
+        if is_integer_type {
+            if let Ok(i) = trimmed.parse::<i64>() {
+                return Some(i.to_string());
+            }
+            if let Ok(f) = trimmed.parse::<f64>() {
+                if f.is_finite() {
+                    return Some((f as i64).to_string());
+                }
+                return None;
+            }
+            return None;
+        }
+        if let Ok(f) = trimmed.parse::<f64>() {
+            if f.is_finite() {
+                return Some(f.to_string());
+            }
+            return None;
+        }
+        None
+    }
+
+    fn is_numeric_column(data_type: &str) -> bool {
+        let dt = data_type.to_lowercase();
+        dt.contains("int") || dt.contains("float") || dt.contains("double")
+            || dt.contains("decimal") || dt.contains("numeric") || dt == "serial"
     }
 
     /// Extract value from log event for a given column (case-insensitive match)
@@ -424,13 +474,30 @@ impl TiDBSink {
 
                 // Convert boolean-like strings to "0"/"1" for TINYINT(1)/BOOL columns
                 let dt_lower = column_info.data_type.to_lowercase();
-                let is_bool_column = dt_lower.contains("tinyint(1)") || dt_lower == "tinyint"
-                    || dt_lower == "bool" || dt_lower == "boolean"
-                    || (dt_lower.contains("tinyint") && column_info.max_length == Some(1));
+                let is_bool_column = dt_lower.contains("tinyint") || dt_lower == "bool"
+                    || dt_lower == "boolean";
                 if is_bool_column {
                     if let Some(ref v) = final_value {
                         if let Some(normalized) = Self::convert_bool_string_for_tinyint(v) {
                             final_value = Some(normalized.to_string());
+                        }
+                    }
+                }
+
+                // Sanitize values for numeric columns (handle NaN, Infinity, float-to-int, etc.)
+                if Self::is_numeric_column(&column_info.data_type) && !is_bool_column {
+                    if let Some(ref v) = final_value {
+                        match Self::sanitize_numeric_value(v, &column_info.data_type) {
+                            Some(sanitized) => final_value = Some(sanitized),
+                            None => {
+                                warn!(
+                                    message = "Invalid numeric value, converting to NULL",
+                                    column = %column_name,
+                                    value = %v,
+                                    data_type = %column_info.data_type,
+                                );
+                                final_value = None;
+                            }
                         }
                     }
                 }

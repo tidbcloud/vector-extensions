@@ -25,7 +25,7 @@ data:
     cloud_provider = "aws"
     data_dir1 = "/tmp/vector-data/9acf7387-d7c1-4ce2-a728-ed187571c3bb/checkpoints"
     order_by_column = "time"
-    batch_size = 1000
+    batch_size = 2000
     poll_interval_secs = 0
     acknowledgements = true
     duckdb_temp_directory = "/tmp/duckdb_temp"
@@ -37,7 +37,7 @@ data:
     type = "tidb"
     inputs = [ "delta_lake_source",]
     connection_string = "mysql://4CXN88WA4NSFaoQ.root:6Avts99mIaPmOBuZ@gateway01.ap-southeast-1.prod.aws.tidbcloud.com:4000/test"
-    table = "slowlogs"
+    table = "slowlogs1"
     batch_size = 1000
     max_connections = 10
     connection_timeout = 30
