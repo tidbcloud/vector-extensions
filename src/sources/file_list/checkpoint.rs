@@ -112,3 +112,87 @@ impl Checkpoint {
         self.status = "error".to_string();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_default_checkpoint() {
+        let cp = Checkpoint::default();
+        assert!(cp.completed_keys.is_empty());
+        assert_eq!(cp.status, "running");
+    }
+
+    #[test]
+    fn test_add_and_is_completed() {
+        let mut cp = Checkpoint::default();
+        assert!(!cp.is_completed("key1"));
+        cp.add_completed("key1".to_string());
+        assert!(cp.is_completed("key1"));
+        assert!(!cp.is_completed("key2"));
+    }
+
+    #[test]
+    fn test_save_and_load() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("checkpoint.json");
+        let mut cp = Checkpoint::default();
+        cp.add_completed("prefix1".to_string());
+        cp.add_completed("prefix2".to_string());
+        cp.save(&path).unwrap();
+
+        let loaded = Checkpoint::load(&path).unwrap();
+        assert!(loaded.is_completed("prefix1"));
+        assert!(loaded.is_completed("prefix2"));
+        assert!(!loaded.is_completed("prefix3"));
+        assert_eq!(loaded.status, "running");
+    }
+
+    #[test]
+    fn test_load_nonexistent() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("nonexistent.json");
+        let loaded = Checkpoint::load(&path).unwrap();
+        assert!(loaded.completed_keys.is_empty());
+        assert_eq!(loaded.status, "running");
+    }
+
+    #[test]
+    fn test_load_corrupted_json() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("corrupted.json");
+        fs::write(&path, "not valid json!!!").unwrap();
+        let loaded = Checkpoint::load(&path).unwrap();
+        assert!(loaded.completed_keys.is_empty());
+        assert_eq!(loaded.status, "running");
+    }
+
+    #[test]
+    fn test_mark_error() {
+        let mut cp = Checkpoint::default();
+        assert_eq!(cp.status, "running");
+        cp.mark_error();
+        assert_eq!(cp.status, "error");
+    }
+
+    #[test]
+    fn test_get_path_sanitizes_url() {
+        let data_dir = Path::new("/tmp/data");
+        let path = Checkpoint::get_path(data_dir, "s3://my-bucket/path/to");
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("file_list_"));
+        assert!(name.ends_with(".json"));
+        assert!(!name.contains("://"));
+    }
+
+    #[test]
+    fn test_save_creates_parent_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("nested").join("dir").join("checkpoint.json");
+        let cp = Checkpoint::default();
+        cp.save(&path).unwrap();
+        assert!(path.exists());
+    }
+}

@@ -558,6 +558,227 @@ impl TiDBSink {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vector_lib::event::Value;
+    use bytes::Bytes;
+    use ordered_float::NotNan;
+
+    // -- infer_mysql_type --
+
+    #[test]
+    fn test_infer_mysql_type_integer() {
+        assert_eq!(TiDBSink::infer_mysql_type(&Value::Integer(42)), "BIGINT");
+    }
+
+    #[test]
+    fn test_infer_mysql_type_float() {
+        assert_eq!(
+            TiDBSink::infer_mysql_type(&Value::Float(NotNan::new(3.14).unwrap())),
+            "DOUBLE"
+        );
+    }
+
+    #[test]
+    fn test_infer_mysql_type_boolean() {
+        assert_eq!(TiDBSink::infer_mysql_type(&Value::Boolean(true)), "TINYINT(1)");
+    }
+
+    #[test]
+    fn test_infer_mysql_type_null() {
+        assert_eq!(TiDBSink::infer_mysql_type(&Value::Null), "TEXT");
+    }
+
+    #[test]
+    fn test_infer_mysql_type_object() {
+        assert_eq!(
+            TiDBSink::infer_mysql_type(&Value::Object(Default::default())),
+            "JSON"
+        );
+    }
+
+    #[test]
+    fn test_infer_mysql_type_array() {
+        assert_eq!(TiDBSink::infer_mysql_type(&Value::Array(vec![])), "JSON");
+    }
+
+    #[test]
+    fn test_infer_mysql_type_short_bytes() {
+        let val = Value::Bytes(Bytes::from("short text"));
+        assert_eq!(TiDBSink::infer_mysql_type(&val), "VARCHAR(4096)");
+    }
+
+    #[test]
+    fn test_infer_mysql_type_medium_bytes() {
+        let val = Value::Bytes(Bytes::from(vec![b'a'; 5000]));
+        assert_eq!(TiDBSink::infer_mysql_type(&val), "TEXT");
+    }
+
+    #[test]
+    fn test_infer_mysql_type_large_bytes() {
+        let val = Value::Bytes(Bytes::from(vec![b'a'; 70000]));
+        assert_eq!(TiDBSink::infer_mysql_type(&val), "LONGTEXT");
+    }
+
+    // -- escape_ident --
+
+    #[test]
+    fn test_escape_ident_no_backtick() {
+        assert_eq!(TiDBSink::escape_ident("column_name"), "column_name");
+    }
+
+    #[test]
+    fn test_escape_ident_with_backtick() {
+        assert_eq!(TiDBSink::escape_ident("col`name"), "col``name");
+    }
+
+    // -- convert_bool_string_for_tinyint --
+
+    #[test]
+    fn test_convert_bool_true_variants() {
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("true"), Some("1"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("True"), Some("1"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("t"), Some("1"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("1"), Some("1"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("yes"), Some("1"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("y"), Some("1"));
+    }
+
+    #[test]
+    fn test_convert_bool_false_variants() {
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("false"), Some("0"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("False"), Some("0"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("f"), Some("0"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("0"), Some("0"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("no"), Some("0"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("n"), Some("0"));
+    }
+
+    #[test]
+    fn test_convert_bool_empty_and_invalid() {
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint(""), None);
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("maybe"), None);
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("2"), None);
+    }
+
+    #[test]
+    fn test_convert_bool_whitespace() {
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("  true  "), Some("1"));
+        assert_eq!(TiDBSink::convert_bool_string_for_tinyint("  false  "), Some("0"));
+    }
+
+    // -- extract_max_length --
+
+    #[test]
+    fn test_extract_max_length_varchar() {
+        assert_eq!(TiDBSink::extract_max_length("VARCHAR(255)"), Some(255));
+        assert_eq!(TiDBSink::extract_max_length("varchar(4096)"), Some(4096));
+    }
+
+    #[test]
+    fn test_extract_max_length_char() {
+        assert_eq!(TiDBSink::extract_max_length("CHAR(10)"), Some(10));
+    }
+
+    #[test]
+    fn test_extract_max_length_binary() {
+        assert_eq!(TiDBSink::extract_max_length("BINARY(16)"), Some(16));
+        assert_eq!(TiDBSink::extract_max_length("VARBINARY(1024)"), Some(1024));
+    }
+
+    #[test]
+    fn test_extract_max_length_non_string_types() {
+        assert_eq!(TiDBSink::extract_max_length("BIGINT"), None);
+        assert_eq!(TiDBSink::extract_max_length("INT(11)"), None);
+        assert_eq!(TiDBSink::extract_max_length("TINYINT(1)"), None);
+        assert_eq!(TiDBSink::extract_max_length("TEXT"), None);
+        assert_eq!(TiDBSink::extract_max_length("DOUBLE"), None);
+    }
+
+    // -- sanitize_numeric_value --
+
+    #[test]
+    fn test_sanitize_numeric_integer() {
+        assert_eq!(TiDBSink::sanitize_numeric_value("42", "BIGINT"), Some("42".to_string()));
+        assert_eq!(TiDBSink::sanitize_numeric_value("-1", "INT"), Some("-1".to_string()));
+    }
+
+    #[test]
+    fn test_sanitize_numeric_float() {
+        assert_eq!(TiDBSink::sanitize_numeric_value("3.14", "DOUBLE"), Some("3.14".to_string()));
+    }
+
+    #[test]
+    fn test_sanitize_numeric_float_to_int_coercion() {
+        assert_eq!(TiDBSink::sanitize_numeric_value("3.7", "BIGINT"), Some("3".to_string()));
+    }
+
+    #[test]
+    fn test_sanitize_numeric_nan_inf() {
+        assert_eq!(TiDBSink::sanitize_numeric_value("NaN", "DOUBLE"), None);
+        assert_eq!(TiDBSink::sanitize_numeric_value("nan", "DOUBLE"), None);
+        assert_eq!(TiDBSink::sanitize_numeric_value("inf", "DOUBLE"), None);
+        assert_eq!(TiDBSink::sanitize_numeric_value("-inf", "DOUBLE"), None);
+        assert_eq!(TiDBSink::sanitize_numeric_value("Infinity", "DOUBLE"), None);
+        assert_eq!(TiDBSink::sanitize_numeric_value("-Infinity", "DOUBLE"), None);
+    }
+
+    #[test]
+    fn test_sanitize_numeric_empty_and_null() {
+        assert_eq!(TiDBSink::sanitize_numeric_value("", "BIGINT"), None);
+        assert_eq!(TiDBSink::sanitize_numeric_value("none", "BIGINT"), None);
+        assert_eq!(TiDBSink::sanitize_numeric_value("null", "BIGINT"), None);
+    }
+
+    #[test]
+    fn test_sanitize_numeric_non_numeric_string() {
+        assert_eq!(TiDBSink::sanitize_numeric_value("abc", "BIGINT"), None);
+        assert_eq!(TiDBSink::sanitize_numeric_value("abc", "DOUBLE"), None);
+    }
+
+    #[test]
+    fn test_sanitize_numeric_whitespace() {
+        assert_eq!(TiDBSink::sanitize_numeric_value("  42  ", "BIGINT"), Some("42".to_string()));
+    }
+
+    // -- is_numeric_column --
+
+    #[test]
+    fn test_is_numeric_column() {
+        assert!(TiDBSink::is_numeric_column("BIGINT"));
+        assert!(TiDBSink::is_numeric_column("INT(11)"));
+        assert!(TiDBSink::is_numeric_column("TINYINT(1)"));
+        assert!(TiDBSink::is_numeric_column("FLOAT"));
+        assert!(TiDBSink::is_numeric_column("DOUBLE"));
+        assert!(TiDBSink::is_numeric_column("DECIMAL(10,2)"));
+        assert!(TiDBSink::is_numeric_column("NUMERIC"));
+        assert!(TiDBSink::is_numeric_column("serial"));
+    }
+
+    #[test]
+    fn test_is_not_numeric_column() {
+        assert!(!TiDBSink::is_numeric_column("VARCHAR(255)"));
+        assert!(!TiDBSink::is_numeric_column("TEXT"));
+        assert!(!TiDBSink::is_numeric_column("DATETIME"));
+        assert!(!TiDBSink::is_numeric_column("JSON"));
+    }
+
+    // -- is_table_not_found_error --
+
+    #[test]
+    fn test_is_table_not_found_error() {
+        let e1 = vector::Error::from("Table 'test.logs' doesn't exist");
+        assert!(TiDBSink::is_table_not_found_error(&e1));
+
+        let e2 = vector::Error::from("Error 1146 (42S02): Table not found");
+        assert!(TiDBSink::is_table_not_found_error(&e2));
+
+        let e3 = vector::Error::from("Connection refused");
+        assert!(!TiDBSink::is_table_not_found_error(&e3));
+    }
+}
+
 #[async_trait::async_trait]
 impl StreamSink<Event> for TiDBSink {
     async fn run(self: Box<Self>, input: BoxStream<'_, Event>) -> Result<(), ()> {

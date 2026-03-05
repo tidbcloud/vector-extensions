@@ -16,7 +16,7 @@ use vector_lib::{
 };
 
 /// Key for partitioning: (component, hour_partition).
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct PartitionKey {
     component: String,
     hour_partition: String,
@@ -109,6 +109,115 @@ impl S3ContentPartitionedSink {
             .await
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         Ok(len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vector_lib::event::{LogEvent, Value};
+    use bytes::Bytes;
+
+    // -- object_key --
+
+    #[test]
+    fn test_object_key_no_gzip() {
+        let key = S3ContentPartitionedSink::object_key("loki", "tidb", "2026010804", 0, false);
+        assert_eq!(key, "loki/tidb/2026010804/part-00000.log");
+    }
+
+    #[test]
+    fn test_object_key_with_gzip() {
+        let key = S3ContentPartitionedSink::object_key("loki", "tidb", "2026010804", 3, true);
+        assert_eq!(key, "loki/tidb/2026010804/part-00003.log.gz");
+    }
+
+    #[test]
+    fn test_object_key_trailing_slash_prefix() {
+        let key = S3ContentPartitionedSink::object_key("loki/", "tidb", "2026010804", 0, false);
+        assert_eq!(key, "loki/tidb/2026010804/part-00000.log");
+    }
+
+    #[test]
+    fn test_object_key_large_part_index() {
+        let key = S3ContentPartitionedSink::object_key("prefix", "comp", "hour", 99999, true);
+        assert_eq!(key, "prefix/comp/hour/part-99999.log.gz");
+    }
+
+    // -- key_from_event --
+
+    #[test]
+    fn test_key_from_event_valid() {
+        let mut log = LogEvent::default();
+        log.insert("component", Value::Bytes(Bytes::from("tidb")));
+        log.insert("hour_partition", Value::Bytes(Bytes::from("2026010804")));
+        let key = S3ContentPartitionedSink::key_from_event(&log).unwrap();
+        assert_eq!(key.component, "tidb");
+        assert_eq!(key.hour_partition, "2026010804");
+    }
+
+    #[test]
+    fn test_key_from_event_missing_component() {
+        let mut log = LogEvent::default();
+        log.insert("hour_partition", Value::Bytes(Bytes::from("2026010804")));
+        assert!(S3ContentPartitionedSink::key_from_event(&log).is_none());
+    }
+
+    #[test]
+    fn test_key_from_event_missing_hour_partition() {
+        let mut log = LogEvent::default();
+        log.insert("component", Value::Bytes(Bytes::from("tidb")));
+        assert!(S3ContentPartitionedSink::key_from_event(&log).is_none());
+    }
+
+    #[test]
+    fn test_key_from_event_missing_both() {
+        let log = LogEvent::default();
+        assert!(S3ContentPartitionedSink::key_from_event(&log).is_none());
+    }
+
+    // -- message_bytes --
+
+    #[test]
+    fn test_message_bytes_with_newline() {
+        let mut log = LogEvent::default();
+        log.insert("message", Value::Bytes(Bytes::from("hello world\n")));
+        let bytes = S3ContentPartitionedSink::message_bytes(&log).unwrap();
+        assert_eq!(bytes, b"hello world\n");
+    }
+
+    #[test]
+    fn test_message_bytes_without_newline() {
+        let mut log = LogEvent::default();
+        log.insert("message", Value::Bytes(Bytes::from("hello world")));
+        let bytes = S3ContentPartitionedSink::message_bytes(&log).unwrap();
+        assert_eq!(bytes, b"hello world\n");
+    }
+
+    #[test]
+    fn test_message_bytes_missing() {
+        let log = LogEvent::default();
+        assert!(S3ContentPartitionedSink::message_bytes(&log).is_none());
+    }
+
+    // -- PartitionKey equality --
+
+    #[test]
+    fn test_partition_key_equality() {
+        let k1 = PartitionKey {
+            component: "tidb".to_string(),
+            hour_partition: "2026010804".to_string(),
+        };
+        let k2 = PartitionKey {
+            component: "tidb".to_string(),
+            hour_partition: "2026010804".to_string(),
+        };
+        let k3 = PartitionKey {
+            component: "tikv".to_string(),
+            hour_partition: "2026010804".to_string(),
+        };
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
     }
 }
 
