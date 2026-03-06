@@ -231,6 +231,7 @@ impl TopologyFetcher {
                     host: common_comp.host,
                     primary_port: common_comp.primary_port,
                     secondary_port: common_comp.secondary_port,
+                    instance_name: None,
                 };
 
                 components.insert(conprof_comp);
@@ -653,6 +654,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 2379,
             secondary_port: 2379,
+            instance_name: None,
         };
         components.insert(pd_component);
 
@@ -661,6 +663,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         components.insert(tidb_component);
 
@@ -669,6 +672,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         components.insert(tikv_component);
 
@@ -680,6 +684,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let before_len = components.len();
         components.insert(duplicate);
@@ -717,6 +722,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 primary_port: primary,
                 secondary_port: secondary,
+                instance_name: None,
             });
         }
 
@@ -762,6 +768,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 primary_port: 4000,
                 secondary_port: 10080,
+                instance_name: None,
             };
             assert_eq!(conprof_comp.instance_type, conprof_type);
         }
@@ -783,6 +790,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         assert_eq!(component.instance_type, InstanceType::TiDB);

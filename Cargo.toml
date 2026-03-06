@@ -201,5 +201,5 @@ sinks-metrics = [
 ]
 
 [patch.crates-io]
-# Patch 仅替换源码，不在此处写 features（无效会告警）；features 在 [dependencies] 里对 async-compression 的依赖上指定即可。
+# Patch replaces source only; do not add features here (invalid, will warn). Specify features in [dependencies] for async-compression.
 async-compression = { git = "https://github.com/nolouch/async-compression", rev = "ba69fdc" }

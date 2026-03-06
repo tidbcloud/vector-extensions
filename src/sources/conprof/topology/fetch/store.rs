@@ -58,6 +58,7 @@ impl<'a> StoreTopologyFetcher<'a> {
                 host,
                 primary_port,
                 secondary_port,
+                instance_name: None,
             });
         }
 
@@ -256,6 +257,7 @@ mod tests {
                 host,
                 primary_port,
                 secondary_port,
+                instance_name: None,
             });
         }
 
@@ -288,6 +290,7 @@ mod tests {
                 host,
                 primary_port,
                 secondary_port,
+                instance_name: None,
             });
         }
 
@@ -327,6 +330,7 @@ mod tests {
                 host,
                 primary_port,
                 secondary_port,
+                instance_name: None,
             });
         }
 
@@ -372,6 +376,7 @@ mod tests {
                 host,
                 primary_port,
                 secondary_port,
+                instance_name: None,
             });
         }
 
@@ -424,6 +429,7 @@ mod tests {
                 host,
                 primary_port,
                 secondary_port,
+                instance_name: None,
             });
         }
 

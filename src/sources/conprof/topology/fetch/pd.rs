@@ -63,6 +63,7 @@ impl<'a> PDTopologyFetcher<'a> {
                         host,
                         primary_port: port,
                         secondary_port: port,
+                        instance_name: None,
                     });
                 }
             }
@@ -275,6 +276,7 @@ mod tests {
                     host,
                     primary_port: port,
                     secondary_port: port,
+                    instance_name: None,
                 });
             }
         }
@@ -351,6 +353,7 @@ mod tests {
                             host,
                             primary_port: port,
                             secondary_port: port,
+                            instance_name: None,
                         });
                     }
                 }
@@ -526,6 +529,7 @@ mod tests {
                             host,
                             primary_port: port,
                             secondary_port: port,
+                            instance_name: None,
                         });
                     }
                 }

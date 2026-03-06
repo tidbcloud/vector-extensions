@@ -79,6 +79,7 @@ impl<'a> TiDBTopologyFetcher<'a> {
                             host,
                             primary_port: port,
                             secondary_port: value.status_port,
+                            instance_name: None,
                         },
                     ));
                 }
@@ -374,6 +375,7 @@ mod tests {
                 host,
                 primary_port: port,
                 secondary_port: 10080,
+                instance_name: None,
             },
         ));
 
@@ -421,6 +423,7 @@ mod tests {
                     host: "127.0.0.1".to_string(),
                     primary_port: 4000,
                     secondary_port: 10080,
+                    instance_name: None,
                 },
             ),
             (
@@ -430,6 +433,7 @@ mod tests {
                     host: "127.0.0.1".to_string(),
                     primary_port: 4002,
                     secondary_port: 10080,
+                    instance_name: None,
                 },
             ),
         ];
@@ -529,6 +533,7 @@ mod tests {
                 host: host1,
                 primary_port: port1,
                 secondary_port: 10080,
+                instance_name: None,
             },
         ));
 
@@ -540,6 +545,7 @@ mod tests {
                 host: host2,
                 primary_port: port2,
                 secondary_port: 10080,
+                instance_name: None,
             },
         ));
 
@@ -552,6 +558,7 @@ mod tests {
                 host: host3,
                 primary_port: port3,
                 secondary_port: 10080,
+                instance_name: None,
             },
         ));
 

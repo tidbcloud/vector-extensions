@@ -1,7 +1,7 @@
 ARG BASE_IMAGE=385595570414.dkr.ecr.us-west-2.amazonaws.com/tidbcloud/vector:0.37.1-2d79df-debian
 FROM ${BASE_IMAGE}
 
-# 修改perl的优先级，避免vector被饿死
+# Lower perl priority to avoid starving vector
 RUN if [ -f /usr/bin/perl ]; then \
       mv /usr/bin/perl /usr/bin/perl_original && \
       echo '#!/bin/sh' > /usr/bin/perl && \
@@ -12,18 +12,18 @@ RUN if [ -f /usr/bin/perl ]; then \
       echo "WARNING: /usr/bin/perl not found, skipping wrapper creation"; \
     fi
 
-# 验证perl包装脚本是否正常工作
+# Verify perl wrapper works
 RUN if [ -f /usr/bin/perl ]; then \
       /usr/bin/perl -v > /dev/null 2>&1 && \
       echo "INFO: Perl wrapper verified successfully"; \
     fi
 
-# 设置vector为实时进程并设置高优先级
-# 使用exec形式确保信号正确传递，并验证nice值
+# Set vector as real-time process with high priority
+# Use exec form for proper signal handling and nice value
 RUN echo '#!/bin/sh' > /entrypoint.sh && \
     echo 'echo "Starting vector with nice -n -20..."' >> /entrypoint.sh && \
     echo 'exec nice -n -20 /usr/bin/vector "$@"' >> /entrypoint.sh && \
     chmod +x /entrypoint.sh
 
-# 使用shell形式确保子进程继承nice值
+# Use shell form so child inherits nice value
 ENTRYPOINT ["/entrypoint.sh"]

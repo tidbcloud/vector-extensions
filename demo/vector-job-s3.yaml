@@ -11,7 +11,7 @@ spec:
         #image: 552185537300.dkr.ecr.us-west-2.amazonaws.com/dev/vector:nightly-52d4d16-modified-5
         image: slggamer/vector:s3sync
         imagePullPolicy: Always
-        # s3-sync 镜像以脚本为入口，无需 Vector 的 args；配置路径需与下面 volumeMount 一致
+        # s3-sync image uses script as entrypoint; config path must match volumeMount below
         env:
         - name: CONFIG_FILE
           value: /etc/vector/vector.toml

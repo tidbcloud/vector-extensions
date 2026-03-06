@@ -32,7 +32,7 @@ Create a demo that uses Vector to backup slowlogs from S3 to MySQL, with the man
 
 **Issues**:
 - Still violates principle - Python app is processing data
-- User feedback: "demo的目的只是生成vector的配置和对vector状态进行管理"
+- User feedback: "demo only generates vector config and manages vector state"
 
 **Result**: Abandoned - user explicitly stated app should not process data.
 

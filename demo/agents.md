@@ -1,63 +1,63 @@
-# Demo - AI Agent 指南
+# Demo - AI Agent Guide
 
-本文档为 Demo 目录的开发与维护规范，供 AI Agent 与开发者遵循。
+This document defines development and maintenance rules for the Demo directory, for AI agents and developers.
 
-## 核心原则：Demo 不包含业务逻辑
+## Core Principle: Demo Contains No Business Logic
 
-**Demo 中不得包含任何业务逻辑代码。**
+**Demo must not contain any business logic code.**
 
-- Demo 的职责仅限于：
-  - 生成 Vector 配置（TOML）
-  - 管理 Vector 进程（启动、监控、停止）
-  - 提供任务/配置的 REST API（创建任务、查询状态等）
-- 所有与数据本身相关的逻辑（过滤、转换、目录解析、时间范围等）必须由 **Vector 扩展** 完成，而不是在 Demo 的 Python/脚本中实现。
+- Demo responsibilities are limited to:
+  - Generating Vector config (TOML)
+  - Managing Vector process (start, monitor, stop)
+  - Providing task/config REST API (create task, query status, etc.)
+- All data-related logic (filtering, transformation, path parsing, time range, etc.) must be implemented in **Vector extensions**, not in Demo Python/scripts.
 
-### 目录过滤：由 file_list source 完成（路径在代码中固定）
+### Directory Filtering: Done by file_list source (paths fixed in code)
 
-目录/路径过滤不应在 Demo 中写死或由 Demo 拼路径。**路径规则在 file_list source 内部按数据类型写死**，用户不需要知道文件具体存在哪。
+Directory/path filtering should not be hardcoded in Demo or assembled by Demo. **Path rules are fixed in file_list source by data type**; users do not need to know where files live.
 
-file_list source 支持「按数据类型」配置时，**用户只需指定**：
+When file_list supports "by data type" config, **users only specify**:
 
-| 参数名 | 说明 |
-|--------|------|
-| `cluster_id` | 集群 ID（必填） |
-| `project_id` | 项目 ID（slowlog / sql_statement / top_sql / conprof 时需要） |
-| `types` | 数据类型，可多选：`raw_logs`、`slowlog`、`sql_statement`、`top_sql`、`conprof` |
-| `start_time` | 时间范围起点（ISO 8601，raw_logs 必填） |
-| `end_time` | 时间范围终点（ISO 8601，raw_logs 必填） |
+| Parameter | Description |
+|-----------|-------------|
+| `cluster_id` | Cluster ID (required) |
+| `project_id` | Project ID (required for slowlog / sql_statement / top_sql / conprof) |
+| `types` | Data types: `raw_logs`, `slowlog`, `sql_statement`, `top_sql`, `conprof` |
+| `start_time` | Time range start (ISO 8601, required for raw_logs) |
+| `end_time` | Time range end (ISO 8601, required for raw_logs) |
 
-各类型与路径的对应关系在 **file_list 源码中固定**，例如：
+Type-to-path mapping is **fixed in file_list source**, e.g.:
 
-- **raw_logs**：gz 压缩的原始日志 → `diagnosis/data/{cluster_id}/merged-logs/{YYYYMMDDHH}/tidb/*.log`
-- **slowlog**：Delta Lake 表 → `deltalake/{project_id}/{uuid}/slowlogs/`
-- **sql_statement**：Delta Lake 表 → `deltalake/{project_id}/{uuid}/sqlstatement/`
-- **top_sql**：按 instance 的 Delta Lake → `deltalake/org={project_id}/cluster={cluster_id}/type=topsql_tidb/instance=*`
-- **conprof**：pprof 压缩文件 → `0/{project_id}/{conprof_org_id}/{cluster_id}/profiles/*.log.gz`
+- **raw_logs**: gzip raw logs → `diagnosis/data/{cluster_id}/merged-logs/{YYYYMMDDHH}/tidb/*.log`
+- **slowlog**: Delta Lake table → `deltalake/{project_id}/{uuid}/slowlogs/`
+- **sql_statement**: Delta Lake table → `deltalake/{project_id}/{uuid}/sqlstatement/`
+- **top_sql**: per-instance Delta Lake → `deltalake/org={project_id}/cluster={cluster_id}/type=topsql_tidb/instance=*`
+- **conprof**: pprof compressed files → `0/{project_id}/{conprof_org_id}/{cluster_id}/profiles/*.log.gz`
 
-Demo 只需在生成 Vector 配置时，将 `cluster_id`、`project_id`（按需）、`types`、`start_time`、`end_time` 透传给 file_list；**路径识别与拼装均在 file_list source 内部实现**。
+Demo passes `cluster_id`, `project_id` (if needed), `types`, `start_time`, `end_time` to file_list when generating Vector config; **path resolution and assembly are inside file_list source**.
 
-### 同步/拷贝：全流程在 Vector 内完成
+### Sync/Copy: Full flow in Vector
 
-同步日志（如 sync-logs）**不得**在 Demo 中用 boto3 等做拷贝。正确做法：
+Log sync (e.g. sync-logs) must **not** use boto3 etc. in Demo. Correct approach:
 
-- **file_list** 配置 `emit_content = true`、`decompress_gzip = true`，由 source 拉取文件、解压，事件中带 `message`（文件内容）。
-- 下游使用 **官方 aws_s3 sink**：`encoding.codec = "text"` 或 `"json"`（只写 message），`batch.max_bytes` 控制每对象大小，`key_prefix` 为目标前缀。
-- Demo 仅：生成上述 Vector 配置、启动 Vector、返回任务状态；**不解析 file_list 输出、不执行任何拷贝逻辑**。
+- **file_list**: `emit_content = true`, `decompress_gzip = true`; source fetches files, decompresses, puts content in event `message`.
+- Downstream uses **official aws_s3 sink**: `encoding.codec = "text"` or `"json"`, `batch.max_bytes` controls object size, `key_prefix` for target prefix.
+- Demo only: generates above Vector config, starts Vector, returns task status; **does not parse file_list output or perform any copy logic**.
 
-## Demo 目录结构
+## Demo Directory Structure
 
 ```
 demo/
-├── app.py              # 仅：API 服务、生成 Vector 配置、进程管理
-├── agents.md           # 本文件
-├── config/             # 示例/测试用配置文件
-├── extension/          # 扩展脚本（若仍需要，应尽量迁移为 Vector 插件）
-├── scripts/            # 环境准备、启动、测试脚本
-└── tests/              # 测试脚本
+├── app.py              # API service, Vector config generation, process management
+├── agents.md           # This file
+├── config/             # Example/test configs
+├── extension/          # Extension scripts (prefer migrating to Vector plugins)
+├── scripts/            # Setup, start, test scripts
+└── tests/              # Test scripts
 ```
 
-## 相关文档
+## Related Docs
 
-- 项目总览与组件说明：[AGENTS.md](../AGENTS.md)
-- Demo 架构与 API 说明：[doc/v1/agent.md](../doc/v1/agent.md)
-- file_list source 架构：[src/sources/file_list/arch.md](../src/sources/file_list/arch.md)
+- Project overview and components: [AGENTS.md](../AGENTS.md)
+- Demo architecture and API: [doc/v1/agent.md](../doc/v1/agent.md)
+- file_list source architecture: [src/sources/file_list/arch.md](../src/sources/file_list/arch.md)

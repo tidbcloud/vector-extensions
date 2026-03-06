@@ -56,12 +56,35 @@ impl FromStr for InstanceType {
     }
 }
 
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Component {
     pub instance_type: InstanceType,
     pub host: String,
     pub primary_port: u16,
     pub secondary_port: u16,
+    /// Optional display/upload identifier. When set (e.g. K8s pod name), used for instance
+    /// identification in filenames and metadata instead of host:port. Connection still uses host.
+    pub instance_name: Option<String>,
+}
+
+impl PartialEq for Component {
+    fn eq(&self, other: &Self) -> bool {
+        self.instance_type == other.instance_type
+            && self.host == other.host
+            && self.primary_port == other.primary_port
+            && self.secondary_port == other.secondary_port
+    }
+}
+
+impl Eq for Component {}
+
+impl std::hash::Hash for Component {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.instance_type.hash(state);
+        self.host.hash(state);
+        self.primary_port.hash(state);
+        self.secondary_port.hash(state);
+    }
 }
 
 impl Component {
@@ -77,6 +100,14 @@ impl Component {
             | InstanceType::CoprocessorWorker
             | InstanceType::Other(_) => Some(format!("{}:{}", self.host, self.secondary_port)),
         }
+    }
+
+    /// Instance identifier for filenames and upload metadata. Uses instance_name when set
+    /// (e.g. K8s pod name), otherwise falls back to conprof_address (host:port).
+    pub fn instance_id(&self) -> String {
+        self.instance_name
+            .clone()
+            .unwrap_or_else(|| self.conprof_address().unwrap_or_default())
     }
 }
 
@@ -117,6 +148,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         assert_eq!(
             component.to_string(),
@@ -131,6 +163,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 2379,
             secondary_port: 10080,
+            instance_name: None,
         };
         assert_eq!(
             component.conprof_address(),
@@ -145,6 +178,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         assert_eq!(
             component.conprof_address(),
@@ -159,6 +193,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         assert_eq!(
             component.conprof_address(),
@@ -173,6 +208,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
         assert_eq!(
             component.conprof_address(),
@@ -187,6 +223,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 6000,
             secondary_port: 10080,
+            instance_name: None,
         };
         assert_eq!(
             component.conprof_address(),
@@ -201,6 +238,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 8287,
             secondary_port: 8286,
+            instance_name: None,
         };
         assert_eq!(
             component.conprof_address(),
@@ -215,6 +253,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         assert_eq!(
             component.conprof_address(),
@@ -229,6 +268,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 10080,
             secondary_port: 10080,
+            instance_name: None,
         };
         assert_eq!(
             component.conprof_address(),
@@ -243,18 +283,21 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component2 = Component {
             instance_type: InstanceType::TiDB,
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component3 = Component {
             instance_type: InstanceType::TiDB,
             host: "127.0.0.1".to_string(),
             primary_port: 4001,
             secondary_port: 10080,
+            instance_name: None,
         };
         assert_eq!(component1, component2);
         assert_ne!(component1, component3);
@@ -268,12 +311,14 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component2 = Component {
             instance_type: InstanceType::TiDB,
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let mut set = HashSet::new();
         set.insert(component1.clone());

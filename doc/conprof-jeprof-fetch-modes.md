@@ -1,62 +1,62 @@
-# conprof jeprof/jeheap 采集模式说明
+# conprof jeprof/jeheap Fetch Mode Description
 
-## 背景
+## Background
 
-TiKV 使用 jemalloc 时，heap 数据通过 jeprof 兼容的接口暴露（如 `/debug/pprof/heap`）。conprof 支持两种采集方式，由配置项 `jeprof_fetch_mode` 选择。
+When TiKV uses jemalloc, heap data is exposed via jeprof-compatible endpoints (e.g. `/debug/pprof/heap`). conprof supports two fetch modes, selectable via `jeprof_fetch_mode`.
 
-## jeprof 脚本在 `--raw` + 远程 URL 下实际做了什么
+## What the jeprof Script Actually Does with `--raw` + Remote URL
 
-Perl 脚本 `jeprof --raw <url>` 在远程 URL 场景下**并不只是**发一次 HTTP GET，而是：
+The Perl script `jeprof --raw <url>` on a remote URL does **more than** a single HTTP GET:
 
-1. **GET 拉取 profile**  
-   用 `URL_FETCHER`（默认 `curl -s --fail`）请求 URL，将响应写入临时文件 `$collected_profile`。
+1. **GET profile**  
+   Uses `URL_FETCHER` (default `curl -s --fail`) to request the URL and writes the response to temp file `$collected_profile`.
 
-2. **解析 profile 得到 PC 列表**  
-   `ReadProfile` 读取该文件，解析 heap 格式（如 `heap profile: ...` 头、栈记录等），得到所有出现过的程序计数器地址集合 `$pcs`。
+2. **Parse profile to get PC list**  
+   `ReadProfile` reads the file, parses heap format (e.g. `heap profile: ...` header, stack entries), and collects all program counter addresses into `$pcs`.
 
-3. **向服务端拉取符号**  
-   `FetchSymbols($pcs)`：将 PC 列表通过 **POST** 发给同 host 的 `/pprof/symbol`，拿到地址→符号名映射；必要时还通过 `c++filt` 做 demangle。
+3. **Fetch symbols from server**  
+   `FetchSymbols($pcs)`: POSTs the PC list to the same host's `/pprof/symbol`, gets address→symbol mapping; uses `c++filt` for demangling when needed.
 
-4. **可选：拉取程序名**  
-   `FetchProgramName()`：GET `/pprof/cmdline` 得到 binary 名。
+4. **Optional: Fetch program name**  
+   `FetchProgramName()`: GET `/pprof/cmdline` for the binary name.
 
-5. **输出 “symbolized raw” 格式**  
-   `PrintSymbolizedProfile` 输出到 stdout 的内容是：
-   - 一行 `--- symbol`
-   - 一行 `binary=<program name>`
-   - 多行符号表：`0x<addr> <symbol>`
-   - 一行 `---`
-   - 一行 `--- heap`（或 growth/contention/cpu）
-   - **紧接着**把 `$collected_profile` 文件的**原始内容**原样输出（即 GET 得到的 body）
+5. **Output "symbolized raw" format**  
+   `PrintSymbolizedProfile` outputs to stdout:
+   - one line `--- symbol`
+   - one line `binary=<program name>`
+   - symbol table lines: `0x<addr> <symbol>`
+   - one line `---`
+   - one line `--- heap` (or growth/contention/cpu)
+   - **then** the raw content of `$collected_profile` (the GET response body) verbatim
 
-也就是说，**Perl 模式的 stdout = 符号头 + 原始 heap body**，是一份可以离线用 `jeprof --text` 分析、且不再依赖当时进程的“自包含”格式。
+So **Perl mode stdout = symbol header + raw heap body**—a self-contained format usable offline with `jeprof --text` without the live process.
 
-## 两种配置模式对比
+## Mode Comparison
 
-| 项目           | `jeprof_fetch_mode = "perl"`（默认） | `jeprof_fetch_mode = "rust"`      |
-|----------------|--------------------------------------|-----------------------------------|
-| 实现           | 起 Perl 进程执行 jeprof 脚本         | 本进程内 Rust：GET heap → 解析 PC → POST symbol → 拼输出 |
-| 依赖           | 需要系统有 Perl、curl（TLS 时用你配的 curl） | 仅 Rust/reqwest，无 Perl         |
-| 输出内容       | **符号头 + 原始 heap**               | **符号头 + 原始 heap**（与 Perl 一致） |
-| 与 jeprof 兼容 | 与 `jeprof --raw` 输出一致           | 与 `jeprof --raw` 输出一致        |
-| 离线分析       | 存下来的 blob 可直接 `jeprof --text` | 同上                             |
+| Item | `jeprof_fetch_mode = "perl"` (default) | `jeprof_fetch_mode = "rust"` |
+|------|---------------------------------------|------------------------------|
+| Implementation | Spawn Perl process to run jeprof script | In-process Rust: GET heap → parse PCs → POST symbol → compose output |
+| Dependencies | Needs Perl, curl (your curl for TLS) | Rust/reqwest only, no Perl |
+| Output | **Symbol header + raw heap** | **Symbol header + raw heap** (same as Perl) |
+| jeprof compatible | Matches `jeprof --raw` output | Matches `jeprof --raw` output |
+| Offline analysis | Saved blob works with `jeprof --text` | Same |
 
-## 何时用哪种模式
+## When to Use Which Mode
 
-- **用 `perl`**：  
-  需要和现有 jeprof 流程完全一致、或下游会把采到的数据存起来以后用 `jeprof --text` 等做离线分析（且希望不再依赖当时进程），或当前 Rust 实现有 bug 需要快速回退。
+- **Use `perl`** when:  
+  You need full parity with existing jeprof workflows, or downstream stores data for offline `jeprof --text` analysis without the live process; or you need a quick fallback if the Rust implementation has bugs.
 
-- **用 `rust`**：  
-  不打算依赖 Perl、只做采集与归档，且下游不依赖“带符号头的 jeprof --raw”格式；或后续会在别处做符号解析/展示。
+- **Use `rust`** when:  
+  You prefer not to depend on Perl, only need collection and archival, and downstream does not rely on the "symbolized raw" format; or symbol resolution will be done elsewhere.
 
-## Rust 模式实现说明
+## Rust Mode Implementation
 
-Rust 模式（`jeprof_fetch_mode = "rust"`）已实现与 Perl 等价的流程：
+Rust mode (`jeprof_fetch_mode = "rust"`) implements the same flow as Perl:
 
-1. GET `/debug/pprof/heap`，得到 body。
-2. 解析 heap 文本格式，提取所有 PC；对除第一个外的地址做 FixCallerAddresses（减 1）。
-3. POST 这些 PC（`0xaddr1+0xaddr2+...`）到同 base URL 的 `/debug/pprof/symbol`，解析响应得到符号表。
-4. GET `/debug/pprof/cmdline` 得到程序名。
-5. 按 jeprof 约定拼出：`--- symbol`、`binary=...`、符号行、`---`、`--- heap`、再拼上原始 body。
+1. GET `/debug/pprof/heap`, get body.
+2. Parse heap text format, extract PCs; apply FixCallerAddresses (minus 1) to addresses except the first.
+3. POST those PCs (`0xaddr1+0xaddr2+...`) to same base URL's `/debug/pprof/symbol`, parse response for symbol table.
+4. GET `/debug/pprof/cmdline` for program name.
+5. Assemble per jeprof: `--- symbol`, `binary=...`, symbol lines, `---`, `--- heap`, then raw body.
 
-若 heap 为二进制或解析不到 PC，或 symbol 请求失败，则回退为只返回原始 body（与仅 GET 等价）。
+If heap is binary, no PCs can be parsed, or symbol request fails, it falls back to returning only the raw body (equivalent to plain GET).

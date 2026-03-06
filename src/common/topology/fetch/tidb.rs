@@ -78,6 +78,7 @@ impl<'a> TiDBTopologyFetcher<'a> {
                             host,
                             primary_port: port,
                             secondary_port: value.status_port,
+                            instance_name: None,
                         },
                     ));
                 }

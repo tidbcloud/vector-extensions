@@ -47,8 +47,8 @@ impl ConprofSource {
         match component.conprof_address() {
             Some(address) => Some(ConprofSource {
                 client,
-                // instance: address.clone(),
-                instance_b64: BASE64_URL_SAFE_NO_PAD.encode(&address),
+                // instance: use instance_name (e.g. K8s pod name) when set, else address
+                instance_b64: BASE64_URL_SAFE_NO_PAD.encode(&component.instance_id()),
                 instance_type: component.instance_type,
                 uri: if tls.is_some() {
                     format!("https://{}", address)
@@ -439,6 +439,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let result = ConprofSource::new(
@@ -461,6 +462,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let result = ConprofSource::new(
@@ -485,6 +487,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -521,6 +524,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -555,6 +559,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -589,6 +594,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -623,6 +629,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -653,6 +660,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -687,6 +695,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -721,6 +730,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -755,6 +765,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -789,6 +800,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 2379,
             secondary_port: 2379,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let result = ConprofSource::new(
@@ -809,6 +821,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 6000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let result = ConprofSource::new(
@@ -829,6 +842,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 8287,
             secondary_port: 8286,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let result = ConprofSource::new(
@@ -849,6 +863,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let result = ConprofSource::new(
@@ -872,6 +887,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -910,6 +926,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 2379,
             secondary_port: 2379,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -955,6 +972,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 6000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -994,6 +1012,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 8287,
             secondary_port: 8286,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -1033,6 +1052,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -1072,6 +1092,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -1111,6 +1132,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -1143,6 +1165,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
         let mut source = ConprofSource::new(
@@ -1193,6 +1216,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 primary_port: 4000,
                 secondary_port: 10080,
+                instance_name: None,
             };
             // Test that conprof_address works for all types
             let _ = component.conprof_address();
@@ -1217,6 +1241,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 primary_port: 4000,
                 secondary_port: 10080,
+                instance_name: None,
             };
 
             // Verify component structure

@@ -390,6 +390,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Simulate start_component returning true
@@ -419,6 +420,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
 
         // TiFlash has conprof address, so it should work
@@ -433,6 +435,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let mut running_components: HashMap<Component, ShutdownNotifier> = HashMap::new();
@@ -593,6 +596,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let component2 = Component {
@@ -600,6 +604,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
 
         prev_components.insert(component1.clone());
@@ -624,6 +629,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Test that component has conprof address
@@ -664,6 +670,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Test that component can be used in HashMap
@@ -708,12 +715,14 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component2 = Component {
             instance_type: InstanceType::TiKV,
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
 
         let (notifier1, _subscriber1) = pair();
@@ -741,6 +750,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
 
         // Test that component has conprof address
@@ -767,6 +777,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
 
         let out = create_test_source_sender();
@@ -789,6 +800,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let mut running_components: HashMap<Component, ShutdownNotifier> = HashMap::new();
@@ -821,6 +833,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Simulate starting a component
@@ -844,6 +857,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         components.insert(component1.clone());
 
@@ -858,6 +872,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         components.insert(component2.clone());
         prev_components.insert(component2.clone());
@@ -867,6 +882,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 2379,
             secondary_port: 2379,
+            instance_name: None,
         };
         prev_components.insert(component3.clone());
 
@@ -884,6 +900,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Verify component has conprof address
@@ -898,6 +915,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Test that component can be used in HashMap
@@ -923,12 +941,14 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component2 = Component {
             instance_type: InstanceType::TiKV,
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
 
         let (notifier1, _subscriber1) = pair();
@@ -990,6 +1010,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Simulate start_component returning true
@@ -1029,6 +1050,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let removed = running_components.remove(&component);
@@ -1050,6 +1072,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let out = create_test_source_sender();
@@ -1133,6 +1156,7 @@ mod tests {
                     host: "127.0.0.1".to_string(),
                     primary_port: 4000,
                     secondary_port: 10080,
+                    instance_name: None,
                 };
 
                 // Execute the exact code from start_component_impl
@@ -1167,6 +1191,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // This actually calls start_component_impl
@@ -1188,6 +1213,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the code from stop_component_impl
@@ -1222,6 +1248,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the logic from fetch_and_update_impl
@@ -1277,6 +1304,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the logic from fetch_and_update_impl
@@ -1327,6 +1355,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the logic from fetch_and_update_impl
@@ -1386,6 +1415,7 @@ mod tests {
                     host: "127.0.0.1".to_string(),
                     primary_port: 4000,
                     secondary_port: 10080,
+                    instance_name: None,
                 };
 
                 let mut running_components = HashMap::new();
@@ -1414,6 +1444,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let started = controller.start_component(&component).await;
@@ -1436,6 +1467,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let out = create_test_source_sender();
@@ -1470,6 +1502,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the logic from stop_component_impl

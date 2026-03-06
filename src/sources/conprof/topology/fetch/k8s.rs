@@ -117,12 +117,14 @@ impl K8sTopologyFetcher {
                 Some(ip) if !ip.is_empty() => ip.clone(),
                 _ => continue,
             };
+            let pod_name = pod.metadata.name.clone().unwrap_or_default();
             let port = port_from_pod_or_default(&pod, &instance_type);
             components.insert(Component {
                 instance_type,
                 host: pod_ip,
                 primary_port: port,
                 secondary_port: port,
+                instance_name: Some(pod_name),
             });
         }
         Ok(())

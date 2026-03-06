@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-## 构建基于现有镜像的 perl-nice 版本
-## 这个脚本会基于指定的基础镜像构建多平台镜像
+## Build perl-nice variant from existing base image
+## Builds multi-platform image from specified base image
 
-# 基础镜像
+# Base image
 BASE_IMAGE="${BASE_IMAGE:-385595570414.dkr.ecr.us-west-2.amazonaws.com/tidbcloud/vector:0.37.1-2d79df-debian}"
 
-# 目标镜像标签
-# 如果未指定 TAG，则从 BASE_IMAGE 提取仓库和标签，然后添加 -perl-nice 后缀
+# Target image tag
+# If TAG not set, extract repo and tag from BASE_IMAGE, add -perl-nice suffix
 if [ -z "${TAG:-}" ]; then
-  # 提取仓库路径（去掉标签部分）
+  # Extract repo path (without tag)
   REPO=$(echo "$BASE_IMAGE" | sed 's/:.*$//')
-  # 提取标签部分，如果没有标签则使用 latest
+  # Extract tag part; use latest if none
   IMAGE_TAG=$(echo "$BASE_IMAGE" | sed 's/^.*://')
   if [ "$IMAGE_TAG" = "$BASE_IMAGE" ]; then
     IMAGE_TAG="latest"
@@ -20,23 +20,23 @@ if [ -z "${TAG:-}" ]; then
   TAG="${REPO}:${IMAGE_TAG}-chrt"
 fi
 
-# Dockerfile 路径
+# Dockerfile path
 DOCKERFILE="scripts/docker/Dockerfile.perl-nice"
 
-# 支持的平台
+# Supported platforms
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 
 echo "Building docker image: $TAG for $PLATFORMS"
 echo "Base image: $BASE_IMAGE"
 echo "Dockerfile: $DOCKERFILE"
 
-# 获取脚本所在目录的父目录（项目根目录）
+# Get project root (parent of script dir)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 
 cd "$PROJECT_ROOT"
 
-# 验证路径
+# Verify paths
 echo "Current directory: $(pwd)"
 echo "Dockerfile path: $DOCKERFILE"
 if [ ! -f "$DOCKERFILE" ]; then
@@ -45,8 +45,8 @@ if [ ! -f "$DOCKERFILE" ]; then
 fi
 echo "Dockerfile found, proceeding with build..."
 
-# 使用 buildx 构建多平台镜像
-# 注意：多平台构建时，必须使用 --push 推送到仓库，或者使用 --load 只构建当前平台
+# Use buildx for multi-platform build
+# Note: multi-platform requires --push, or --load for current platform only
 if [ "${PUSH:-false}" = "true" ]; then
   echo "Building and pushing multi-platform image..."
   docker buildx build --push \
@@ -56,14 +56,14 @@ if [ "${PUSH:-false}" = "true" ]; then
     -f "$DOCKERFILE" \
     .
 else
-  # 本地测试：只构建当前平台（可以使用 --load）
+  # Local test: build current platform only (uses --load)
   CURRENT_PLATFORM=$(docker version --format '{{.Server.Arch}}')
   if [ "$CURRENT_PLATFORM" = "amd64" ]; then
     PLATFORM="linux/amd64"
   elif [ "$CURRENT_PLATFORM" = "arm64" ] || [ "$CURRENT_PLATFORM" = "aarch64" ]; then
     PLATFORM="linux/arm64"
   else
-    PLATFORM="linux/amd64"  # 默认
+    PLATFORM="linux/amd64"  # default
   fi
   echo "Building single-platform image for local testing: $PLATFORM"
   echo "Use PUSH=true to build and push multi-platform image"

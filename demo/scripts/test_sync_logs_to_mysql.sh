@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# 测试 POST /api/v1/sync-logs-to-mysql
-# 使用前：1) 启动 demo: cd demo && python3 app.py
-#        2) 确保 MySQL 已建表: mysql -u root -p testdb < config/create_parsed_logs_table.sql
-#        3) 如需读 S3，请 export AWS 凭证
+# Test POST /api/v1/sync-logs-to-mysql
+# Before use: 1) Start demo: cd demo && python3 app.py
+#             2) Ensure MySQL table exists: mysql -u root -p testdb < config/create_parsed_logs_table.sql
+#             3) Export AWS creds if reading from S3
 #
-# 使用自定义解析 line_parse_regexes 匹配 Loki/Go logfmt 格式：
-#   level=info ts=... caller=... [其他 key=value] msg="..."
-# caller 与 msg 之间可能有 index-store=... 等，用 .*? 允许中间任意内容；命名捕获与表列一致
+# Custom line_parse_regexes for Loki/Go logfmt: level=info ts=... caller=... [key=value] msg="..."
+# Use .*? between caller and msg for optional fields; capture names match table columns
 
 curl -s -X POST http://127.0.0.1:8080/api/v1/sync-logs-to-mysql \
   -H "Content-Type: application/json" \

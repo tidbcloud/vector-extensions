@@ -58,6 +58,7 @@ impl KubeLightningTopologyFetcher {
                             host: pod_ip,
                             primary_port: 8289,
                             secondary_port: 8289,
+                            instance_name: None,
                         });
                     }
                 }
@@ -115,6 +116,7 @@ mod tests {
                 host: pod_ip,
                 primary_port: 8289,
                 secondary_port: 8289,
+                instance_name: None,
             };
 
             assert_eq!(component.instance_type, InstanceType::Lightning);
@@ -209,6 +211,7 @@ mod tests {
                 host: pod_ip,
                 primary_port: 8289,
                 secondary_port: 8289,
+                instance_name: None,
             });
         }
 
@@ -227,6 +230,7 @@ mod tests {
                 host: pod_ip_empty,
                 primary_port: 8289,
                 secondary_port: 8289,
+                instance_name: None,
             });
         }
         assert_eq!(components2.len(), 0);

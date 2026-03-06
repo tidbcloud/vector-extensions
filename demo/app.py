@@ -340,14 +340,14 @@ def generate_sync_logs_vector_config(
     parse_lines: bool = False,
     line_parse_regexes: Optional[List[str]] = None,
 ) -> str:
-    """生成用于同步日志文件的 Vector 配置。
+    """Generate Vector config for syncing log files.
 
-    全流程在 Vector 内完成：file_list 拉取并解压，官方 aws_s3 sink 按 key_prefix 模板写入目标 bucket。
-    output_format 为写入 S3 时的编码格式（text/json/csv 等）。parse_lines=True 时按行解析；若提供 line_parse_regexes（带命名捕获 (?P<name>...) 的正则列表），则仅用自定义正则解析，否则用内置 Python/HTTP 规则。
+    Full flow in Vector: file_list fetch and decompress, official aws_s3 sink writes to target bucket by key_prefix template.
+    output_format is the encoding for S3 (text/json/csv etc). parse_lines=True enables per-line parsing; line_parse_regexes (list of regexes with (?P<name>...) capture groups) uses custom regex only, else built-in Python/HTTP rules.
 
-    支持两种模式：
-    1) types 模式：传入 cluster_id, project_id, types (如 ["raw_logs"]), start_time, end_time
-    2) 前缀模式：传入 source_prefix，可选 pattern 和 start_time/end_time
+    Two modes:
+    1) types mode: cluster_id, project_id, types (e.g. ["raw_logs"]), start_time, end_time
+    2) prefix mode: source_prefix, optionally pattern and start_time/end_time
     """
     endpoint = f"s3://{source_bucket}"
     data_dir = Path(f"/tmp/vector-data/{task_id}")
@@ -382,7 +382,7 @@ def generate_sync_logs_vector_config(
             file_list_source["raw_log_components"] = raw_log_components
     else:
         if not source_prefix:
-            raise ValueError("sync_logs: 请提供 source_prefix 或 types")
+            raise ValueError("sync_logs: provide source_prefix or types")
         file_list_source["prefix"] = source_prefix.rstrip("/") + "/"
         if pattern:
             file_list_source["pattern"] = pattern
@@ -392,28 +392,28 @@ def generate_sync_logs_vector_config(
             file_list_source["time_range_end"] = end_time
 
     dest_prefix_normalized = dest_prefix.rstrip("/") + "/" if dest_prefix else ""
-    # 官方 aws_s3 支持的 codec：text, json, csv, logfmt, raw_message, syslog, gelf（不含需 schema 的 avro/cef/protobuf 等）
+    # Official aws_s3 supported codecs: text, json, csv, logfmt, raw_message, syslog, gelf (avro/cef/protobuf need schema, not supported)
     SUPPORTED_OUTPUT_FORMATS = ("text", "json", "csv", "logfmt", "raw_message", "syslog", "gelf")
     fmt = (output_format or "text").lower()
     if fmt not in SUPPORTED_OUTPUT_FORMATS:
         raise ValueError(
-            f"output_format 仅支持 {', '.join(SUPPORTED_OUTPUT_FORMATS)}，当前为 {output_format}；"
-            "avro/cef/protobuf 等需额外 schema 配置，暂不支持"
+            f"output_format must be one of {', '.join(SUPPORTED_OUTPUT_FORMATS)}, got {output_format}; "
+            "avro/cef/protobuf require schema config, not supported"
         )
 
-    # 使用官方 aws_s3：key_prefix 模板 {{ component }}/{{ hour_partition }}/；编码由 output_format 决定
+    # Use official aws_s3: key_prefix template {{ component }}/{{ hour_partition }}/; encoding from output_format
     aws_s3_sink = {
         "type": "aws_s3",
         "inputs": ["file_list"],
         "bucket": dest_bucket,
         "key_prefix": dest_prefix_normalized + "{{ component }}/{{ hour_partition }}/",
         "encoding": {"codec": fmt},
-        # timeout_secs 设短：官方默认 300s，小 batch 会一直等到超时才写；sync-logs 希望「读完尽快写」，设 10s 便于尽早 flush
+        # Short timeout_secs: default 300s waits too long for small batches; 10s for faster flush
         "batch": {"max_bytes": max_file_bytes, "timeout_secs": 10},
         "compression": "gzip",
     }
     if fmt == "csv":
-        # 按行解析时：每条记录含 line_type, log_timestamp, logger, level, tag, message_body（Python）或 client_ip, method, path, status 等（HTTP），便于按列过滤
+        # With parse_lines: each record has line_type, log_timestamp, logger, level, tag, message_body (Python) or client_ip, method, path, status (HTTP), for column filtering
         aws_s3_sink["encoding"]["csv"] = {
             "fields": (
                 [
@@ -473,11 +473,11 @@ def generate_sync_logs_to_mysql_config(
     parse_lines: bool = False,
     line_parse_regexes: Optional[List[str]] = None,
 ) -> str:
-    """生成 file_list 源 + tidb sink 的 Vector 配置，将解析后的日志行写入本地 MySQL/TiDB。
+    """Generate Vector config with file_list source + tidb sink, writing parsed log lines to local MySQL/TiDB.
 
-    与 sync-logs 相同的源与解析参数（types/raw_log_components/time_range、parse_lines、line_parse_regexes），
-    但写入目标为 MySQL 表，由 tidb sink 按表结构自动映射事件字段到列。
-    表结构需与事件字段一致，可参考 demo/config/create_parsed_logs_table.sql。
+    Same source and parse params as sync-logs (types/raw_log_components/time_range, parse_lines, line_parse_regexes),
+    but writes to MySQL table; tidb sink maps event fields to columns by table schema.
+    Table schema must match event fields; see demo/config/create_parsed_logs_table.sql.
     """
     endpoint = f"s3://{source_bucket}"
     data_dir = Path(f"/tmp/vector-data/{task_id}")
@@ -512,7 +512,7 @@ def generate_sync_logs_to_mysql_config(
             file_list_source["raw_log_components"] = raw_log_components
     else:
         if not source_prefix:
-            raise ValueError("sync_logs_to_mysql: 请提供 source_prefix 或 types")
+            raise ValueError("sync_logs_to_mysql: provide source_prefix or types")
         file_list_source["prefix"] = source_prefix.rstrip("/") + "/"
         if pattern:
             file_list_source["pattern"] = pattern
@@ -521,7 +521,7 @@ def generate_sync_logs_to_mysql_config(
         if end_time:
             file_list_source["time_range_end"] = end_time
 
-    # tidb sink：与 generate_vector_config 相同的连接串解析
+    # tidb sink: same connection string parsing as generate_vector_config
     mysql_parts = mysql_connection.replace("mysql://", "").split("@")
     user_pass = mysql_parts[0].split(":")
     mysql_user, mysql_pass = user_pass[0], user_pass[1] if len(user_pass) > 1 else ""
@@ -558,8 +558,8 @@ def run_vector_sync(
     timeout_secs: int = 300,
     env_extra: Optional[Dict[str, str]] = None,
 ) -> Tuple[bool, Optional[str], Optional[Path]]:
-    """同步执行 Vector，等待退出。返回 (成功, 错误信息, Vector 日志文件路径)。
-    日志实时写入 log_file，任务执行期间即可 tail -f 查看，无需等任务结束。
+    """Run Vector synchronously and wait for exit. Returns (success, error_msg, vector_log_path).
+    Logs are written to log_file in real time; tail -f during execution.
     """
     config_file = CONFIG_DIR / f"{task_id}_sync_logs.toml"
     log_file = CONFIG_DIR / f"{task_id}_sync_logs.log"
@@ -570,7 +570,7 @@ def run_vector_sync(
     env["TASK_ID"] = task_id
     cmd = [vector_binary, "--config", str(config_file)]
     try:
-        # 实时写入日志：Vector 的 stdout/stderr 直接写到文件，执行中即可 tail -f 查看
+        # Stream Vector stdout/stderr to file for tail -f
         with open(log_file, "w", encoding="utf-8") as f:
             f.write("=== Vector (stdout + stderr) ===\n")
             f.flush()
@@ -586,7 +586,7 @@ def run_vector_sync(
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-                return False, f"Vector 执行超时 ({timeout_secs}s)", log_file
+                return False, f"Vector timeout ({timeout_secs}s)", log_file
         if proc.returncode != 0:
             err = _read_tail(log_file, max_chars=500)
             return False, err or f"Vector exited with code {proc.returncode}", log_file
@@ -613,7 +613,7 @@ def _read_tail(path: Path, max_chars: int = 500) -> str:
 
 
 def parse_file_list_output(output_path: Path) -> List[str]:
-    """从 file_list 的 file sink 输出（JSONL）中解析出 file_path 列表。"""
+    """Parse file_path list from file_list file sink output (JSONL)."""
     if not output_path.exists():
         return []
     keys = []
@@ -623,7 +623,7 @@ def parse_file_list_output(output_path: Path) -> List[str]:
             continue
         try:
             obj = json.loads(line)
-            # file_list 事件字段：file_path 为 bucket 内相对路径
+            # file_list event field: file_path is bucket-relative path
             path = obj.get("file_path") or obj.get("full_path")
             if path:
                 keys.append(path)
@@ -1408,12 +1408,12 @@ def copy_s3_files_with_boto3(
 
 @app.route("/api/v1/sync-logs", methods=["POST"])
 def sync_logs():
-    """同步日志：由 Vector 完成全流程（file_list 拉取+解压 -> 官方 aws_s3 按 key_prefix 模板分区写入目标 bucket）。
+    """Sync logs: Vector does full flow (file_list fetch+decompress -> official aws_s3 write to target bucket by key_prefix template).
 
-    Demo 仅生成 Vector 配置并执行 Vector，不包含任何拷贝业务逻辑。
+    Demo only generates Vector config and runs Vector; no copy logic.
 
-    请求体（二选一）：
-    A) 按类型（如 TiDB raw_logs）：
+    Request body (choose one):
+    A) By type (e.g. TiDB raw_logs):
     {
         "source_bucket": "my-bucket",
         "dest_bucket": "dest-bucket",
@@ -1430,8 +1430,8 @@ def sync_logs():
         "dest_aws_secret_access_key": "...",
         "dest_aws_session_token": "..."
     }
-    其中 dest_aws_* 可选；若提供则 sink 写入目标桶时使用该凭证，读取源桶仍用环境变量。
-    B) 按前缀：
+    dest_aws_* optional; if set, sink uses these creds for dest bucket; source bucket still uses env vars.
+    B) By prefix:
     {
         "source_bucket": "my-bucket",
         "source_prefix": "path/to/logs/",
@@ -1442,18 +1442,16 @@ def sync_logs():
         "region": "us-west-2",
         "max_keys": 10000
     }
-        region 可选，默认 "us-west-2"。结果写入 dest_bucket/dest_prefix 下，按 component/hour_partition 分区。
-        output_format 可选，默认 "text"：写入 S3 时的编码格式（text/json/csv 等）。parse_lines 可选，默认 false：为 true 时按行解析。line_parse_regexes 可选：字符串数组，每条为正则且须含命名捕获 (?P<name>...)，按顺序匹配，命中则捕获名作为列；不传则用内置 Python/HTTP 规则。始终需要 dest_bucket、dest_prefix。
-    timeout_secs 可选，默认 3600：Vector 子进程最长运行时间，超时会被终止。多组件/大时间范围请适当调大。
+    region optional, default "us-west-2". Output under dest_bucket/dest_prefix, partitioned by component/hour_partition.
+    output_format optional, default "text": S3 encoding (text/json/csv etc). parse_lines optional, default false. line_parse_regexes optional: list of regex strings with (?P<name>...) captures; if omitted, built-in Python/HTTP rules. dest_bucket and dest_prefix required.
+    timeout_secs optional, default 3600: max Vector subprocess time; increase for large ranges.
 
-    凭证：读取源 bucket 使用**环境变量**中的 AWS 凭证（启动 demo 时 export 的账号）；写入目标 bucket 可使用请求体中的
-    dest_aws_access_key_id、dest_aws_secret_access_key、dest_aws_session_token（可选）指定独立账号，便于“只读源 + 可写目标”分离。
+    Credentials: source bucket uses AWS creds from env; dest bucket can use dest_aws_access_key_id, dest_aws_secret_access_key, dest_aws_session_token for separate read-only source + writable dest.
 
-    Vector 日志：每次执行后 stdout/stderr 会写入 CONFIG_DIR/{task_id}_sync_logs.log（默认 /tmp/vector-tasks/）。
-    响应里会返回 vector_log_path。若任务显示成功但目标桶里没有文件，请查看该日志：
-    - file_list 是否列到文件（关键词 file_list_files_found_total、list_files_at）
-    - 源路径是否正确（raw_logs 为 diagnosis/data/{cluster_id}/merged-logs/{YYYYMMDDHH}/{component}/*.log）
-    - aws_s3 是否有 template_failed 等（缺少 component/hour_partition 时事件会被丢弃）
+    Vector logs: stdout/stderr written to CONFIG_DIR/{task_id}_sync_logs.log (default /tmp/vector-tasks/). Response returns vector_log_path. If success but no files in dest, check logs:
+    - file_list found files (keywords file_list_files_found_total, list_files_at)
+    - source path correct (raw_logs: diagnosis/data/{cluster_id}/merged-logs/{YYYYMMDDHH}/{component}/*.log)
+    - aws_s3 template_failed etc (events dropped if component/hour_partition missing)
     """
     try:
         data = request.json or {}
@@ -1464,10 +1462,10 @@ def sync_logs():
         parse_lines = bool(data.get("parse_lines"))
         line_parse_regexes = data.get("line_parse_regexes")  # optional list of regex strings
         if not source_bucket or not dest_bucket:
-            return jsonify({"error": "缺少 source_bucket 或 dest_bucket"}), 400
+            return jsonify({"error": "source_bucket and dest_bucket required"}), 400
         _supported = ("text", "json", "csv", "logfmt", "raw_message", "syslog", "gelf")
         if output_format not in _supported:
-            return jsonify({"error": f"output_format 仅支持 {', '.join(_supported)}（avro/cef/protobuf 等需 schema 的暂不支持）"}), 400
+            return jsonify({"error": f"output_format must be one of {', '.join(_supported)}; avro/cef/protobuf require schema"}), 400
 
         task_id = str(uuid.uuid4())
         time_range = data.get("time_range") or {}
@@ -1489,15 +1487,15 @@ def sync_logs():
             cluster_id = data.get("cluster_id")
             project_id = data.get("project_id")
             if not cluster_id:
-                return jsonify({"error": "使用 types 时需提供 cluster_id"}), 400
+                return jsonify({"error": "cluster_id required when using types"}), 400
             if not start_time or not end_time:
-                return jsonify({"error": "使用 types（如 raw_logs）时需提供 time_range.start 与 time_range.end"}), 400
+                return jsonify({"error": "time_range.start and time_range.end required when using types (e.g. raw_logs)"}), 400
             source_prefix = None
             pattern = None
         else:
             source_prefix = data.get("source_prefix")
             if not source_prefix:
-                return jsonify({"error": "请提供 source_prefix 或 types"}), 400
+                return jsonify({"error": "provide source_prefix or types"}), 400
             pattern = data.get("pattern")
             cluster_id = project_id = None
 
@@ -1510,7 +1508,7 @@ def sync_logs():
                     vector_binary_path = candidate
                     break
         if not vector_binary_path.exists() or not os.access(vector_binary_path, os.X_OK):
-            return jsonify({"error": "未找到 Vector 可执行文件，请先编译"}), 500
+            return jsonify({"error": "Vector binary not found; build first"}), 500
         vector_binary = str(vector_binary_path.resolve())
 
         config_content = generate_sync_logs_vector_config(
@@ -1541,7 +1539,7 @@ def sync_logs():
 
         ok, err, vector_log_path = run_vector_sync(task_id, config_content, vector_binary, timeout_secs=timeout_secs)
         if not ok:
-            return jsonify({"error": f"Vector 执行失败: {err}", "task_id": task_id}), 500
+            return jsonify({"error": f"Vector failed: {err}", "task_id": task_id}), 500
 
         log_path_str = str(vector_log_path) if vector_log_path else None
         tasks[task_id] = {
@@ -1559,15 +1557,15 @@ def sync_logs():
                 "line_parse_regexes": line_parse_regexes,
             },
             "result": {
-                "message": "由 Vector file_list + 官方 aws_s3 sink（key_prefix 模板）完成，结果在目标 bucket 按 component/hour_partition 分区，编码 "
+                "message": "Done by Vector file_list + aws_s3 sink (key_prefix template); output in dest bucket by component/hour_partition, encoding "
                 + output_format
-                + ("，按行解析" if parse_lines else ""),
+                + (", line parsing enabled" if parse_lines else ""),
                 "vector_log_path": log_path_str,
             },
         }
 
         return jsonify({
-            "message": "同步完成（Vector file_list 拉取解压 + aws_s3 按组件/时间分区写入目标，编码 " + output_format + "）",
+            "message": "Sync done (Vector file_list fetch+decompress + aws_s3 write by component/hour, encoding " + output_format + ")",
             "task_id": task_id,
             "status": "completed",
             "dest_bucket": dest_bucket,
@@ -1585,12 +1583,12 @@ def sync_logs():
 
 @app.route("/api/v1/sync-logs-to-mysql", methods=["POST"])
 def sync_logs_to_mysql():
-    """从 S3 拉取日志（file_list），按行解析后写入本地 MySQL/TiDB（tidb sink）。
+    """Fetch logs from S3 (file_list), parse per line, write to local MySQL/TiDB (tidb sink).
 
-    请求体与 sync-logs 的源与解析参数一致，额外必填 mysql_connection、mysql_table；不需要 dest_bucket/dest_prefix。
-    表结构需与事件字段一致，tidb sink 会按列名做 case-insensitive 映射。建表示例：demo/config/create_parsed_logs_table.sql。
+    Request body: same source/parse params as sync-logs; additionally require mysql_connection, mysql_table. No dest_bucket/dest_prefix.
+    Table schema must match event fields; tidb sink maps by column name (case-insensitive). Example: demo/config/create_parsed_logs_table.sql.
 
-    请求体示例：
+    Example request:
     {
         "source_bucket": "my-bucket",
         "cluster_id": "10324983984131567830",
@@ -1598,7 +1596,7 @@ def sync_logs_to_mysql():
         "time_range": { "start": "2026-01-08T00:00:00Z", "end": "2026-01-08T01:00:00Z" },
         "raw_log_components": ["loki", "operator"],
         "parse_lines": true,
-        "line_parse_regexes": [],   // 可选，不传则用内置 Python/HTTP 规则
+        "line_parse_regexes": [],   // optional; if omitted, use built-in Python/HTTP rules
         "mysql_connection": "mysql://root:root@localhost:3306/testdb",
         "mysql_table": "parsed_logs",
         "max_keys": 10000,
@@ -1615,9 +1613,9 @@ def sync_logs_to_mysql():
         line_parse_regexes = data.get("line_parse_regexes")
 
         if not source_bucket:
-            return jsonify({"error": "缺少 source_bucket"}), 400
+            return jsonify({"error": "source_bucket required"}), 400
         if not mysql_connection or not mysql_table:
-            return jsonify({"error": "缺少 mysql_connection 或 mysql_table"}), 400
+            return jsonify({"error": "mysql_connection and mysql_table required"}), 400
 
         task_id = str(uuid.uuid4())
         time_range = data.get("time_range") or {}
@@ -1634,15 +1632,15 @@ def sync_logs_to_mysql():
             cluster_id = data.get("cluster_id")
             project_id = data.get("project_id")
             if not cluster_id:
-                return jsonify({"error": "使用 types 时需提供 cluster_id"}), 400
+                return jsonify({"error": "cluster_id required when using types"}), 400
             if not start_time or not end_time:
-                return jsonify({"error": "使用 types（如 raw_logs）时需提供 time_range.start 与 time_range.end"}), 400
+                return jsonify({"error": "time_range.start and time_range.end required when using types (e.g. raw_logs)"}), 400
             source_prefix = None
             pattern = None
         else:
             source_prefix = data.get("source_prefix")
             if not source_prefix:
-                return jsonify({"error": "请提供 source_prefix 或 types"}), 400
+                return jsonify({"error": "provide source_prefix or types"}), 400
             pattern = data.get("pattern")
             cluster_id = project_id = None
 
@@ -1655,7 +1653,7 @@ def sync_logs_to_mysql():
                     vector_binary_path = candidate
                     break
         if not vector_binary_path.exists() or not os.access(vector_binary_path, os.X_OK):
-            return jsonify({"error": "未找到 Vector 可执行文件，请先编译"}), 500
+            return jsonify({"error": "Vector binary not found; build first"}), 500
         vector_binary = str(vector_binary_path.resolve())
 
         config_content = generate_sync_logs_to_mysql_config(
@@ -1680,7 +1678,7 @@ def sync_logs_to_mysql():
 
         ok, err, vector_log_path = run_vector_sync(task_id, config_content, vector_binary, timeout_secs=timeout_secs)
         if not ok:
-            return jsonify({"error": f"Vector 执行失败: {err}", "task_id": task_id}), 500
+            return jsonify({"error": f"Vector failed: {err}", "task_id": task_id}), 500
 
         log_path_str = str(vector_log_path) if vector_log_path else None
         tasks[task_id] = {
@@ -1696,11 +1694,11 @@ def sync_logs_to_mysql():
                 "parse_lines": parse_lines,
                 "line_parse_regexes": line_parse_regexes,
             },
-            "result": {"message": "file_list 拉取并按行解析，tidb sink 写入 MySQL", "vector_log_path": log_path_str},
+            "result": {"message": "file_list fetch + line parsing, tidb sink writes to MySQL", "vector_log_path": log_path_str},
         }
 
         return jsonify({
-            "message": "同步完成，解析日志已写入 MySQL 表",
+            "message": "Sync done; parsed logs written to MySQL table",
             "task_id": task_id,
             "status": "completed",
             "mysql_table": mysql_table,
