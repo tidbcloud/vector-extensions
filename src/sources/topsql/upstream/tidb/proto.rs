@@ -24,6 +24,9 @@ impl ByteSizeOf for RespOneof {
             RespOneof::PlanMeta(plan_meta) => {
                 plan_meta.plan_digest.len() + plan_meta.normalized_plan.len()
             }
+            RespOneof::TopRuRecords(top_ru_records) => {
+                top_ru_records.records.size_of()
+            }
         }
     }
 }
@@ -31,5 +34,21 @@ impl ByteSizeOf for RespOneof {
 impl ByteSizeOf for TopSqlRecordItem {
     fn allocated_bytes(&self) -> usize {
         self.stmt_kv_exec_count.size_of()
+    }
+}
+
+impl ByteSizeOf for TopRuRecord {
+    fn allocated_bytes(&self) -> usize {
+        self.keyspace_name.len() + 
+        self.user.len() + 
+        self.sql_digest.len() + 
+        self.plan_digest.len() + 
+        self.items.size_of()
+    }
+}
+
+impl ByteSizeOf for TopRuRecordItem {
+    fn allocated_bytes(&self) -> usize {
+        8 + 8 + 8 + 8 // timestamp_sec + total_ru + exec_count + exec_duration
     }
 }

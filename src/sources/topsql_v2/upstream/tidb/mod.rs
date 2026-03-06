@@ -12,6 +12,7 @@ use tonic::{Status, Streaming};
 
 use crate::sources::topsql_v2::shutdown::ShutdownSubscriber;
 use crate::sources::topsql_v2::upstream::{tls_proxy, Upstream};
+use crate::sources::topsql_v2::TopRUConfig;
 
 pub struct TiDBUpstream;
 
@@ -52,10 +53,28 @@ impl Upstream for TiDBUpstream {
 
     async fn build_stream(
         mut client: Self::Client,
+        topru_config: Option<&TopRUConfig>,
     ) -> Result<Streaming<Self::UpstreamEvent>, Status> {
-        client
-            .subscribe(proto::TopSqlSubRequest {})
-            .await
-            .map(|r| r.into_inner())
+        let topru = topru_config
+            .filter(|c| c.enable)
+            .map(|c| proto::TopRuConfig {
+                report_interval_seconds: c.report_interval_seconds,
+                item_interval_seconds: c.item_interval_seconds,
+            });
+
+        let collectors: Vec<i32> = if topru.is_some() {
+            vec![
+                proto::CollectorType::Topsql as i32,
+                proto::CollectorType::Topru as i32,
+            ]
+        } else {
+            vec![proto::CollectorType::Topsql as i32]
+        };
+
+        let req = proto::TopSqlSubRequest {
+            collectors,
+            topru,
+        };
+        client.subscribe(req).await.map(|r| r.into_inner())
     }
 }

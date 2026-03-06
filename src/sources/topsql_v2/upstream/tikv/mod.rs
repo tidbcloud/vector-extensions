@@ -12,6 +12,7 @@ use tonic::{Status, Streaming};
 
 use crate::sources::topsql_v2::shutdown::ShutdownSubscriber;
 use crate::sources::topsql_v2::upstream::{tls_proxy, Upstream};
+use crate::sources::topsql_v2::TopRUConfig;
 
 pub struct TiKVUpstream;
 
@@ -52,7 +53,9 @@ impl Upstream for TiKVUpstream {
 
     async fn build_stream(
         mut client: Self::Client,
+        _topru_config: Option<&TopRUConfig>,
     ) -> Result<Streaming<Self::UpstreamEvent>, Status> {
+        let _ = _topru_config; // TiKV does not use TopRU config
         client
             .subscribe(proto::ResourceMeteringRequest {})
             .await
