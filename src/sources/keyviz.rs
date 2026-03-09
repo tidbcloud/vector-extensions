@@ -92,6 +92,8 @@ impl SourceConfig for KeyvizConfig {
             // Since we already checked is_nextgen_mode() above, we know we're in legacy mode here
             let topo = TopologyFetcher::new(
                 Some(pd_address.clone()),
+                None, // manager_server_address
+                None, // manager_server_namespace
                 tls.clone(),
                 &cx.proxy,
                 None, // tidb_group
