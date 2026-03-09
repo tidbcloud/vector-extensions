@@ -36,7 +36,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             }
             Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
             Some(RespOneof::PlanMeta(plan_meta)) => Self::parse_tidb_plan_meta(plan_meta),
-            Some(RespOneof::TopRuRecords(top_ru_records)) => Self::parse_top_ru_records(top_ru_records),
+            Some(RespOneof::RuRecord(ru_record)) => Self::parse_top_ru_record(ru_record),
             None => vec![],
         }
     }
@@ -320,52 +320,48 @@ impl TopSqlSubResponseParser {
         events
     }
 
-    fn parse_top_ru_records(top_ru_records: crate::sources::topsql_v2::upstream::tidb::proto::ReportTopRuRecords) -> Vec<LogEvent> {
+    fn parse_top_ru_record(record: crate::sources::topsql_v2::upstream::tidb::proto::TopRuRecord) -> Vec<LogEvent> {
         let mut events = vec![];
         let mut date = String::new();
-        
-        for record in top_ru_records.records {
-            let mut keyspace_name_str = "".to_string();
-            if !record.keyspace_name.is_empty() {
-                if let Ok(ks) = String::from_utf8(record.keyspace_name.clone()) {
-                    keyspace_name_str = ks;
-                }
-            }
-            
-            for item in record.items {
-                let mut event = Event::Log(LogEvent::default());
-                let log = event.as_mut_log();
 
-                // Add metadata with Vector prefix
-                log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPRU);
-                log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec));
-                
-                if date.is_empty() {
-                    date = chrono::DateTime::from_timestamp(item.timestamp_sec as i64, 0)
-                        .map(|dt| dt.format("%Y-%m-%d").to_string())
-                        .unwrap_or_else(|| "1970-01-01".to_string());
-                }
-                log.insert(LABEL_DATE, LogValue::from(date.clone()));
-                
-                // Note: TopRU doesn't use instance_key - all instances write to same table
-                if !keyspace_name_str.is_empty() {
-                    log.insert(LABEL_KEYSPACE, keyspace_name_str.clone());
-                }
-                log.insert(LABEL_USER, record.user.clone());
-                log.insert(
-                    LABEL_SQL_DIGEST,
-                    hex::encode_upper(record.sql_digest.clone()),
-                );
-                log.insert(
-                    LABEL_PLAN_DIGEST,
-                    hex::encode_upper(record.plan_digest.clone()),
-                );
-                log.insert(METRIC_NAME_TOTAL_RU, LogValue::from(item.total_ru));
-                log.insert(METRIC_NAME_EXEC_COUNT, LogValue::from(item.exec_count));
-                log.insert(METRIC_NAME_EXEC_DURATION, LogValue::from(item.exec_duration));
-                
-                events.push(event.into_log());
+        let mut keyspace_name_str = "".to_string();
+        if !record.keyspace_name.is_empty() {
+            if let Ok(ks) = String::from_utf8(record.keyspace_name.clone()) {
+                keyspace_name_str = ks;
             }
+        }
+
+        for item in record.items {
+            let mut event = Event::Log(LogEvent::default());
+            let log = event.as_mut_log();
+
+            log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPRU);
+            log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec));
+
+            if date.is_empty() {
+                date = chrono::DateTime::from_timestamp(item.timestamp_sec as i64, 0)
+                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| "1970-01-01".to_string());
+            }
+            log.insert(LABEL_DATE, LogValue::from(date.clone()));
+
+            if !keyspace_name_str.is_empty() {
+                log.insert(LABEL_KEYSPACE, keyspace_name_str.clone());
+            }
+            log.insert(LABEL_USER, record.user.clone());
+            log.insert(
+                LABEL_SQL_DIGEST,
+                hex::encode_upper(record.sql_digest.clone()),
+            );
+            log.insert(
+                LABEL_PLAN_DIGEST,
+                hex::encode_upper(record.plan_digest.clone()),
+            );
+            log.insert(METRIC_NAME_TOTAL_RU, LogValue::from(item.total_ru));
+            log.insert(METRIC_NAME_EXEC_COUNT, LogValue::from(item.exec_count));
+            log.insert(METRIC_NAME_EXEC_DURATION, LogValue::from(item.exec_duration));
+
+            events.push(event.into_log());
         }
         events
     }
@@ -374,7 +370,7 @@ impl TopSqlSubResponseParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::topsql_v2::upstream::tidb::proto::{TopSqlRecordItem, TopRuRecord, TopRuRecordItem, ReportTopRuRecords};
+    use crate::sources::topsql_v2::upstream::tidb::proto::{TopSqlRecordItem, TopRuRecord, TopRuRecordItem};
 
     const MOCK_RECORDS: &'static str = include_str!("testdata/mock-records.json");
 
@@ -885,33 +881,29 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_top_ru_records() {
-        let top_ru_records = ReportTopRuRecords {
-            records: vec![
-                TopRuRecord {
-                    keyspace_name: b"test_keyspace".to_vec(),
-                    user: "test_user".to_string(),
-                    sql_digest: b"sql_digest_123".to_vec(),
-                    plan_digest: b"plan_digest_456".to_vec(),
-                    items: vec![
-                        TopRuRecordItem {
-                            timestamp_sec: 1709646900,
-                            total_ru: 100.5,
-                            exec_count: 10,
-                            exec_duration: 50000000, // 50ms in nanoseconds
-                        },
-                        TopRuRecordItem {
-                            timestamp_sec: 1709646960,
-                            total_ru: 200.0,
-                            exec_count: 20,
-                            exec_duration: 100000000, // 100ms in nanoseconds
-                        },
-                    ],
+    fn test_parse_top_ru_record() {
+        let ru_record = TopRuRecord {
+            keyspace_name: b"test_keyspace".to_vec(),
+            user: "test_user".to_string(),
+            sql_digest: b"sql_digest_123".to_vec(),
+            plan_digest: b"plan_digest_456".to_vec(),
+            items: vec![
+                TopRuRecordItem {
+                    timestamp_sec: 1709646900,
+                    total_ru: 100.5,
+                    exec_count: 10,
+                    exec_duration: 50000000, // 50ms in nanoseconds
+                },
+                TopRuRecordItem {
+                    timestamp_sec: 1709646960,
+                    total_ru: 200.0,
+                    exec_count: 20,
+                    exec_duration: 100000000, // 100ms in nanoseconds
                 },
             ],
         };
 
-        let events = TopSqlSubResponseParser::parse_top_ru_records(top_ru_records);
+        let events = TopSqlSubResponseParser::parse_top_ru_record(ru_record);
         assert_eq!(events.len(), 2);
 
         // Check first event

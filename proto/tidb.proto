@@ -62,10 +62,6 @@ message TopRURecord {
   repeated TopRURecordItem items = 5;
 }
 
-message ReportTopRURecords {
-  repeated TopRURecord records = 1;
-}
-
 // TopRURecordItem represents statistics within a single time bucket.
 message TopRURecordItem {
   uint64 timestamp_sec = 1; // timestamp in second
@@ -117,6 +113,6 @@ message TopSQLSubResponse {
     TopSQLRecord record = 1;
     SQLMeta sql_meta = 2;
     PlanMeta plan_meta = 3;
-    ReportTopRURecords top_ru_records = 4;
+    TopRURecord ru_record = 4;
   }
 }
