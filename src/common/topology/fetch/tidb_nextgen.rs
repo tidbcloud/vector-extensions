@@ -61,11 +61,13 @@ impl TiDBNextGenTopologyFetcher {
                     if pod_ip.is_empty() {
                         continue;
                     }
+                    let pod_name = pod.metadata.name.clone().unwrap_or_default();
                     components.insert(Component {
                         instance_type: InstanceType::TiDB,
                         host: pod_ip,
                         primary_port: 4000,
                         secondary_port: 10080,
+                        instance_name: Some(pod_name),
                     });
                 }
             }

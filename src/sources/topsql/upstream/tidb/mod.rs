@@ -50,9 +50,17 @@ impl Upstream for TiDBUpstream {
     async fn build_stream(
         mut client: Self::Client,
     ) -> Result<Streaming<Self::UpstreamEvent>, Status> {
-        client
-            .subscribe(proto::TopSqlSubRequest {})
-            .await
+        let req = proto::TopSqlSubRequest {
+            collectors: vec![
+                proto::CollectorType::Topsql as i32,
+                proto::CollectorType::Topru as i32,
+            ],
+            topru: Some(proto::TopRuConfig {
+                report_interval_seconds: 60,
+                item_interval_seconds: 60,
+            }),
+        };
+        client.subscribe(req).await
             .map(|r| r.into_inner())
     }
 }

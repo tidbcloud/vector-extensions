@@ -1,9 +1,16 @@
+mod jeprof_native;
+
 use std::process::Stdio;
 use tokio::{io::AsyncWriteExt, process::Command};
 use vector::tls::TlsConfig;
 
+use reqwest::Client;
+
 const JEPROF: &[u8] = include_bytes!("jeprof");
 
+/// Fetches jeprof "symbolized raw" profile via Perl script (same as `jeprof --raw <url>`).
+/// The script GETs the heap URL, parses the profile to get PCs, POSTs to /pprof/symbol,
+/// then outputs symbol header + raw heap body. Result is self-contained for offline analysis.
 pub async fn fetch_raw(url: String, tls: Option<TlsConfig>) -> Result<Vec<u8>, String> {
     let mut jeprof = Command::new("perl");
     if let Some(tls) = tls {
@@ -37,6 +44,12 @@ pub async fn fetch_raw(url: String, tls: Option<TlsConfig>) -> Result<Vec<u8>, S
         return Err(format!("jeprof stderr: {:?}", stderr));
     }
     Ok(output.stdout)
+}
+
+/// Fetches jeprof "symbolized raw" profile natively (same output as Perl `jeprof --raw <url>`).
+/// GET heap -> parse PCs -> POST /pprof/symbol, GET /pprof/cmdline -> build symbol header + raw body.
+pub async fn fetch_raw_native(client: &Client, url: &str) -> Result<Vec<u8>, String> {
+    jeprof_native::fetch_raw_symbolized(client, url).await
 }
 
 #[cfg(test)]

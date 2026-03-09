@@ -1,6 +1,8 @@
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use vector::config::{GenerateConfig, SourceConfig, SourceContext};
+use vector_config::Configurable;
 use vector_lib::{
     config::{DataType, LogNamespace, SourceOutput},
     configurable::configurable_component,
@@ -14,6 +16,44 @@ mod controller;
 mod schema_cache;
 pub mod shutdown;
 pub mod upstream;
+
+/// Configuration for TopRU (Resource Unit) collection.
+#[derive(Debug, Clone, Serialize, Deserialize, Configurable)]
+pub struct TopRUConfig {
+    /// Enable TopRU collection. When true, subscribe to TopRU data from TiDB.
+    #[serde(default = "default_enable_topru")]
+    pub enable: bool,
+
+    /// Report interval in seconds. Allowed values: 15, 30, 60. Server validates and applies default if invalid.
+    #[serde(default = "default_topru_report_interval")]
+    pub report_interval_seconds: u32,
+
+    /// Item interval in seconds. Allowed values: 15, 30, 60. Server validates and applies default if invalid.
+    #[serde(default = "default_topru_item_interval")]
+    pub item_interval_seconds: u32,
+}
+
+fn default_enable_topru() -> bool {
+    true
+}
+
+fn default_topru_report_interval() -> u32 {
+    60
+}
+
+fn default_topru_item_interval() -> u32 {
+    60
+}
+
+impl Default for TopRUConfig {
+    fn default() -> Self {
+        Self {
+            enable: default_enable_topru(),
+            report_interval_seconds: default_topru_report_interval(),
+            item_interval_seconds: default_topru_item_interval(),
+        }
+    }
+}
 
 /// PLACEHOLDER
 #[configurable_component(source("topsql_v2"))]
@@ -46,6 +86,10 @@ pub struct TopSQLConfig {
     /// PLACEHOLDER
     #[serde(default = "default_downsampling_interval")]
     pub downsampling_interval: u32,
+
+    /// TopRU (Resource Unit) collection config. Only applies to TiDB upstream.
+    #[serde(default)]
+    pub topru: TopRUConfig,
 }
 
 pub const fn default_init_retry_delay() -> f64 {
@@ -75,6 +119,7 @@ impl GenerateConfig for TopSQLConfig {
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
             top_n: default_top_n(),
             downsampling_interval: default_downsampling_interval(),
+            topru: TopRUConfig::default(),
         })
         .unwrap()
     }
@@ -94,6 +139,7 @@ impl SourceConfig for TopSQLConfig {
         let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
         let top_n = self.top_n;
         let downsampling_interval = self.downsampling_interval;
+        let topru = self.topru.clone();
         let schema_update_interval = Duration::from_secs(60);
 
         Ok(Box::pin(async move {
@@ -108,6 +154,7 @@ impl SourceConfig for TopSQLConfig {
                 &cx.proxy,
                 tidb_group,
                 label_k8s_instance,
+                topru,
                 cx.out,
             )
             .await

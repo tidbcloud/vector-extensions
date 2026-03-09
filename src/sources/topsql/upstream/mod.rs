@@ -100,7 +100,7 @@ impl BaseTopSQLSource {
         match component.topsql_address() {
             Some(address) => Some(BaseTopSQLSource {
                 sharedpool_id,
-                instance: address.clone(),
+                instance: component.instance_id(),
                 instance_type: component.instance_type,
                 uri: if tls.is_some() {
                     format!("https://{}", address)

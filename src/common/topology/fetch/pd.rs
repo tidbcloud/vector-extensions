@@ -63,6 +63,7 @@ impl<'a> PDTopologyFetcher<'a> {
                         host,
                         primary_port: port,
                         secondary_port: port,
+                        instance_name: None,
                     });
                 }
             }

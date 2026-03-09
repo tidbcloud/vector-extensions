@@ -59,11 +59,13 @@ impl TiKVNextGenTopologyFetcher {
                     if pod_ip.is_empty() {
                         continue;
                     }
+                    let pod_name = pod.metadata.name.clone().unwrap_or_default();
                     components.insert(Component {
                         instance_type: InstanceType::TiKV,
                         host: pod_ip,
                         primary_port: 20160,
                         secondary_port: 20180,
+                        instance_name: Some(pod_name),
                     });
                 }
             }

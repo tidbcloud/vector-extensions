@@ -31,6 +31,7 @@ use crate::sources::topsql_v2::{
         tidb::TiDBUpstream,
         tikv::TiKVUpstream,
     },
+    TopRUConfig,
 };
 
 #[async_trait::async_trait]
@@ -47,8 +48,10 @@ pub trait Upstream: Send {
 
     fn build_client(channel: Channel) -> Self::Client;
 
+    /// Build the subscribe stream. `topru_config` is only used by TiDB upstream for TopRU collection.
     async fn build_stream(
         client: Self::Client,
+        topru_config: Option<&TopRUConfig>,
     ) -> Result<tonic::codec::Streaming<Self::UpstreamEvent>, tonic::Status>;
 }
 
@@ -73,6 +76,7 @@ struct BaseTopSQLSource {
     retry_delay: Duration,
     top_n: usize,
     downsampling_interval: u32,
+    topru: TopRUConfig,
     schema_cache: Arc<SchemaCache>,
 }
 
@@ -84,6 +88,7 @@ impl BaseTopSQLSource {
         init_retry_delay: Duration,
         top_n: usize,
         downsampling_interval: u32,
+        topru: TopRUConfig,
         schema_cache: Arc<SchemaCache>,
     ) -> Option<Self> {
         let protocal = if tls.is_none() {
@@ -93,7 +98,7 @@ impl BaseTopSQLSource {
         };
         match component.topsql_address() {
             Some(address) => Some(BaseTopSQLSource {
-                instance: address.clone(),
+                instance: component.instance_id(),
                 instance_type: component.instance_type,
                 uri: if tls.is_some() {
                     format!("https://{}", address)
@@ -108,6 +113,7 @@ impl BaseTopSQLSource {
                 retry_delay: init_retry_delay,
                 top_n,
                 downsampling_interval,
+                topru,
                 schema_cache,
             }),
             None => None,
@@ -218,7 +224,7 @@ impl BaseTopSQLSource {
         };
 
         let client = U::build_client(channel);
-        let response_stream = match U::build_stream(client).await {
+        let response_stream = match U::build_stream(client, Some(&self.topru)).await {
             Ok(stream) => stream,
             Err(error) => {
                 error!(message = "Failed to set up subscription.", error = %error);
@@ -279,6 +285,7 @@ impl TopSQLSource {
         init_retry_delay: Duration,
         top_n: usize,
         downsampling_interval: u32,
+        topru: TopRUConfig,
         schema_cache: Arc<SchemaCache>,
     ) -> Option<Self> {
         let base = BaseTopSQLSource::new(
@@ -288,6 +295,7 @@ impl TopSQLSource {
             init_retry_delay,
             top_n,
             downsampling_interval,
+            topru,
             schema_cache,
         )?;
         Some(TopSQLSource {

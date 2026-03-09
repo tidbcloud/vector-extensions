@@ -8,10 +8,11 @@ use crate::sources::topsql_v2::schema_cache::SchemaCache;
 use crate::sources::topsql_v2::upstream::consts::{
     LABEL_DATE, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_INSTANCE_KEY,
     LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST,
-    LABEL_SQL_DIGEST, LABEL_SOURCE_TABLE, LABEL_TIMESTAMPS, LABEL_KEYSPACE,
+    LABEL_SQL_DIGEST, LABEL_SOURCE_TABLE, LABEL_TIMESTAMPS, LABEL_KEYSPACE, LABEL_USER,
     METRIC_NAME_CPU_TIME_MS, METRIC_NAME_NETWORK_IN_BYTES, METRIC_NAME_NETWORK_OUT_BYTES,
     METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT,
-    SOURCE_TABLE_TIDB_TOPSQL, SOURCE_TABLE_TOPSQL_PLAN_META, SOURCE_TABLE_TOPSQL_SQL_META,
+    METRIC_NAME_TOTAL_RU, METRIC_NAME_EXEC_COUNT, METRIC_NAME_EXEC_DURATION,
+    SOURCE_TABLE_TIDB_TOPSQL, SOURCE_TABLE_TOPSQL_PLAN_META, SOURCE_TABLE_TOPSQL_SQL_META, SOURCE_TABLE_TOPRU,
 };
 use crate::sources::topsql_v2::upstream::parser::UpstreamEventParser;
 use crate::sources::topsql_v2::upstream::tidb::proto::top_sql_sub_response::RespOneof;
@@ -35,6 +36,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             }
             Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
             Some(RespOneof::PlanMeta(plan_meta)) => Self::parse_tidb_plan_meta(plan_meta),
+            Some(RespOneof::TopRuRecords(top_ru_records)) => Self::parse_top_ru_records(top_ru_records),
             None => vec![],
         }
     }
@@ -317,12 +319,62 @@ impl TopSqlSubResponseParser {
         events.push(event.into_log());
         events
     }
+
+    fn parse_top_ru_records(top_ru_records: crate::sources::topsql_v2::upstream::tidb::proto::ReportTopRuRecords) -> Vec<LogEvent> {
+        let mut events = vec![];
+        let mut date = String::new();
+        
+        for record in top_ru_records.records {
+            let mut keyspace_name_str = "".to_string();
+            if !record.keyspace_name.is_empty() {
+                if let Ok(ks) = String::from_utf8(record.keyspace_name.clone()) {
+                    keyspace_name_str = ks;
+                }
+            }
+            
+            for item in record.items {
+                let mut event = Event::Log(LogEvent::default());
+                let log = event.as_mut_log();
+
+                // Add metadata with Vector prefix
+                log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPRU);
+                log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec));
+                
+                if date.is_empty() {
+                    date = chrono::DateTime::from_timestamp(item.timestamp_sec as i64, 0)
+                        .map(|dt| dt.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "1970-01-01".to_string());
+                }
+                log.insert(LABEL_DATE, LogValue::from(date.clone()));
+                
+                // Note: TopRU doesn't use instance_key - all instances write to same table
+                if !keyspace_name_str.is_empty() {
+                    log.insert(LABEL_KEYSPACE, keyspace_name_str.clone());
+                }
+                log.insert(LABEL_USER, record.user.clone());
+                log.insert(
+                    LABEL_SQL_DIGEST,
+                    hex::encode_upper(record.sql_digest.clone()),
+                );
+                log.insert(
+                    LABEL_PLAN_DIGEST,
+                    hex::encode_upper(record.plan_digest.clone()),
+                );
+                log.insert(METRIC_NAME_TOTAL_RU, LogValue::from(item.total_ru));
+                log.insert(METRIC_NAME_EXEC_COUNT, LogValue::from(item.exec_count));
+                log.insert(METRIC_NAME_EXEC_DURATION, LogValue::from(item.exec_duration));
+                
+                events.push(event.into_log());
+            }
+        }
+        events
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::topsql_v2::upstream::tidb::proto::TopSqlRecordItem;
+    use crate::sources::topsql_v2::upstream::tidb::proto::{TopSqlRecordItem, TopRuRecord, TopRuRecordItem, ReportTopRuRecords};
 
     const MOCK_RECORDS: &'static str = include_str!("testdata/mock-records.json");
 
@@ -830,5 +882,60 @@ mod tests {
         assert_eq!(sum_old.stmt_duration_sum_ns, sum_new.stmt_duration_sum_ns);
         assert_eq!(sum_old.stmt_network_in_bytes, sum_new.stmt_network_in_bytes);
         assert_eq!(sum_old.stmt_network_out_bytes, sum_new.stmt_network_out_bytes);
+    }
+
+    #[test]
+    fn test_parse_top_ru_records() {
+        let top_ru_records = ReportTopRuRecords {
+            records: vec![
+                TopRuRecord {
+                    keyspace_name: b"test_keyspace".to_vec(),
+                    user: "test_user".to_string(),
+                    sql_digest: b"sql_digest_123".to_vec(),
+                    plan_digest: b"plan_digest_456".to_vec(),
+                    items: vec![
+                        TopRuRecordItem {
+                            timestamp_sec: 1709646900,
+                            total_ru: 100.5,
+                            exec_count: 10,
+                            exec_duration: 50000000, // 50ms in nanoseconds
+                        },
+                        TopRuRecordItem {
+                            timestamp_sec: 1709646960,
+                            total_ru: 200.0,
+                            exec_count: 20,
+                            exec_duration: 100000000, // 100ms in nanoseconds
+                        },
+                    ],
+                },
+            ],
+        };
+
+        let events = TopSqlSubResponseParser::parse_top_ru_records(top_ru_records);
+        assert_eq!(events.len(), 2);
+
+        // Check first event
+        let event1 = &events[0];
+        let log1 = event1;
+        assert_eq!(log1.get(LABEL_SOURCE_TABLE), Some(&LogValue::from(SOURCE_TABLE_TOPRU)));
+        assert_eq!(log1.get(LABEL_TIMESTAMPS), Some(&LogValue::from(1709646900)));
+        assert_eq!(log1.get(LABEL_DATE), Some(&LogValue::from("2024-03-05")));
+        assert_eq!(log1.get(LABEL_KEYSPACE), Some(&LogValue::from("test_keyspace")));
+        assert_eq!(log1.get(LABEL_USER), Some(&LogValue::from("test_user")));
+        assert_eq!(log1.get(LABEL_SQL_DIGEST), Some(&LogValue::from("73716C5F6469676573745F313233")));
+        assert_eq!(log1.get(LABEL_PLAN_DIGEST), Some(&LogValue::from("706C616E5F6469676573745F343536")));
+        assert_eq!(log1.get(METRIC_NAME_TOTAL_RU), Some(&LogValue::from(100.5)));
+        assert_eq!(log1.get(METRIC_NAME_EXEC_COUNT), Some(&LogValue::from(10)));
+        assert_eq!(log1.get(METRIC_NAME_EXEC_DURATION), Some(&LogValue::from(50000000)));
+
+        // Check second event
+        let event2 = &events[1];
+        let log2 = event2;
+        assert_eq!(log2.get(LABEL_SOURCE_TABLE), Some(&LogValue::from(SOURCE_TABLE_TOPRU)));
+        assert_eq!(log2.get(LABEL_TIMESTAMPS), Some(&LogValue::from(1709646960)));
+        assert_eq!(log2.get(LABEL_DATE), Some(&LogValue::from("2024-03-05")));
+        assert_eq!(log2.get(METRIC_NAME_TOTAL_RU), Some(&LogValue::from(200.0)));
+        assert_eq!(log2.get(METRIC_NAME_EXEC_COUNT), Some(&LogValue::from(20)));
+        assert_eq!(log2.get(METRIC_NAME_EXEC_DURATION), Some(&LogValue::from(100000000)));
     }
 }

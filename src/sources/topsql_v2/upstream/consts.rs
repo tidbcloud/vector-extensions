@@ -25,6 +25,12 @@ pub const METRIC_NAME_STMT_EXEC_COUNT: &str = "topsql_stmt_exec_count";
 pub const METRIC_NAME_STMT_DURATION_SUM_NS: &str = "topsql_stmt_duration_sum_ns";
 pub const METRIC_NAME_STMT_DURATION_COUNT: &str = "topsql_stmt_duration_count";
 
+// TopRU related constants
+pub const LABEL_USER: &str = "user";
+pub const METRIC_NAME_TOTAL_RU: &str = "topru_total_ru";
+pub const METRIC_NAME_EXEC_COUNT: &str = "topru_exec_count";
+pub const METRIC_NAME_EXEC_DURATION: &str = "topru_exec_duration";
+
 pub const KV_TAG_LABEL_ROW: &str = "row";
 pub const KV_TAG_LABEL_INDEX: &str = "index";
 pub const KV_TAG_LABEL_UNKNOWN: &str = "unknown";
@@ -35,3 +41,4 @@ pub const SOURCE_TABLE_TIKV_TOPREGION: &str = "tikv_topregion";
 pub const SOURCE_TABLE_TIDB_TOPSQL: &str = "tidb_topsql";
 pub const SOURCE_TABLE_TOPSQL_SQL_META: &str = "topsql_sql_meta";
 pub const SOURCE_TABLE_TOPSQL_PLAN_META: &str = "topsql_plan_meta";
+pub const SOURCE_TABLE_TOPRU: &str = "topsql_topru";

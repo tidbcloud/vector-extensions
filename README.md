@@ -81,19 +81,27 @@ make build-release
 ```
 
 ### Cross Build Release
+
+#### x86_64 (AMD64) Builds
 ```bash
 # Build a release binary for the x86_64-unknown-linux-gnu triple.
 make build-x86_64-unknown-linux-gnu
 
+# Build a release binary for the x86_64-unknown-linux-musl triple.
+make build-x86_64-unknown-linux-musl
+```
+
+#### ARM64 (aarch64) Builds
+```bash
 # Build a release binary for the aarch64-unknown-linux-gnu triple.
 make build-aarch64-unknown-linux-gnu
 
-# Build a release binary for the x86_64-unknown-linux-musl triple.
-make build-x86_64-unknown-linux-musl
-
 # Build a release binary for the aarch64-unknown-linux-musl triple.
 make build-aarch64-unknown-linux-musl
+```
 
+#### ARMv7 Builds
+```bash
 # Build a release binary for the armv7-unknown-linux-gnueabihf triple.
 make build-armv7-unknown-linux-gnueabihf
 
@@ -101,18 +109,30 @@ make build-armv7-unknown-linux-gnueabihf
 make build-armv7-unknown-linux-musleabihf
 ```
 
+**Note:** All ARM architectures (ARM64 and ARMv7) are fully supported. The Docker images are built as multi-arch images supporting `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+
 ### Release Docker Image
 
+The Docker images are built as multi-arch images supporting:
+- `linux/amd64` (x86_64)
+- `linux/arm64` (aarch64)
+- `linux/arm/v7` (armv7)
+
 ```bash
+# Build all required binaries first
 make target/x86_64-unknown-linux-gnu/release/vector
 JEMALLOC_SYS_WITH_LG_PAGE=16 make target/aarch64-unknown-linux-gnu/release/vector
-# JEMALLOC_SYS_WITH_LG_PAGE=16 make target/armv7-unknown-linux-gnueabihf/release/vector
-# if you are using macOS with apple Silicon, you need to set DOCKER_DEFAULT_PLATFORM=linux/amd64 make release-docker
+JEMALLOC_SYS_WITH_LG_PAGE=16 make target/armv7-unknown-linux-gnueabihf/release/vector
+
+# Build and push multi-arch Docker image
+# Note: if you are using macOS with Apple Silicon, you may need to set:
+# DOCKER_DEFAULT_PLATFORM=linux/amd64 make release-docker
 make release-docker
 
-# build with given version and repo
+# Build with given version and repo
 REPO=tidbcloud/vector VERSION=0.23.3 make release-docker
 
+# Example: Build for a specific repository
 make clean
 REPO=mornyx/vector VERSION=0.37.1-9cee53 make release-docker
 ```

@@ -54,6 +54,26 @@ message PlanMeta {
   bytes keyspace_name = 4;
 }
 
+message TopRURecord {
+  bytes keyspace_name = 1;
+  string user = 2;
+  bytes sql_digest = 3;
+  bytes plan_digest = 4;
+  repeated TopRURecordItem items = 5;
+}
+
+message ReportTopRURecords {
+  repeated TopRURecord records = 1;
+}
+
+// TopRURecordItem represents statistics within a single time bucket.
+message TopRURecordItem {
+  uint64 timestamp_sec = 1; // timestamp in second
+  double total_ru = 2; // cumulative RU consumption (RRU + WRU)
+  uint64 exec_count = 3; // execution count
+  uint64 exec_duration = 4; // cumulative execution time (nanoseconds)
+}
+
 message EmptyResponse {}
 
 // TiDB implements TopSQLPubSub service for clients to subscribe to TopSQL data.
@@ -63,12 +83,40 @@ service TopSQLPubSub {
   rpc Subscribe(TopSQLSubRequest) returns (stream TopSQLSubResponse) {}
 }
 
-message TopSQLSubRequest {}
+// CollectorType specifies which data to subscribe.
+enum CollectorType {
+  COLLECTOR_TYPE_UNSPECIFIED = 0;
+  COLLECTOR_TYPE_TOPSQL = 1;
+  COLLECTOR_TYPE_TOPRU = 2;
+}
+
+// TopRUConfig configures TopRU collection.
+// report_interval_seconds and item_interval_seconds: allowed 15/30/60; server validates and applies default if 0.
+message TopRUConfig {
+  uint32 report_interval_seconds = 1;
+  uint32 item_interval_seconds = 2;
+}
+
+// TopSQLSubRequest is the subscription request.
+// Semantics:
+// - collectors empty => default enable TOPSQL
+// - collectors non-empty => authoritative (only those enabled)
+// Examples:
+// - TOPSQL only: collectors=[TOPSQL] (or empty)
+// - TOPRU only: collectors=[TOPRU]
+// - both:        collectors=[TOPSQL, TOPRU]
+message TopSQLSubRequest {
+  repeated CollectorType collectors = 1;
+
+  // Only used when COLLECTOR_TYPE_TOPRU is present in collectors.
+  TopRUConfig topru = 2;
+}
 
 message TopSQLSubResponse {
   oneof resp_oneof {
     TopSQLRecord record = 1;
     SQLMeta sql_meta = 2;
     PlanMeta plan_meta = 3;
+    ReportTopRURecords top_ru_records = 4;
   }
 }

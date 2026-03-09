@@ -6,13 +6,14 @@ use vector::{shutdown::ShutdownSignal, SourceSender};
 use vector_lib::{config::proxy::ProxyConfig, tls::TlsConfig};
 
 use crate::sources::conprof::shutdown::{pair, ShutdownNotifier, ShutdownSubscriber};
-use crate::sources::conprof::topology::fetch::{TopologyFetcher, TopologyFetcherTrait};
+use crate::sources::conprof::topology::fetch::{TopologyFetcher, TopologyFetcherKind, TopologyFetcherTrait};
 use crate::sources::conprof::topology::{Component, FetchError};
 use crate::sources::conprof::upstream::ConprofSource;
+use crate::sources::conprof::{ComponentsProfileTypes, JeprofFetchMode};
 
 pub struct Controller {
     topo_fetch_interval: Duration,
-    topo_fetcher: TopologyFetcher,
+    topo_fetcher: TopologyFetcherKind,
 
     components: HashSet<Component>,
     running_components: HashMap<Component, ShutdownNotifier>,
@@ -24,21 +25,43 @@ pub struct Controller {
     // init_retry_delay: Duration,
     out: SourceSender,
 
-    enable_tikv_heap_profile: bool,
+    components_profile_types: ComponentsProfileTypes,
+    jeprof_fetch_mode: JeprofFetchMode,
 }
 
 impl Controller {
+    /// Used by tests and by callers that build Pd topology fetcher from pd_address. Production build uses `new_with_topo_fetcher` from source config.
+    #[allow(dead_code)]
     pub async fn new(
         pd_address: String,
         topo_fetch_interval: Duration,
-        enable_tikv_heap_profile: bool,
-        // init_retry_delay: Duration,
+        components_profile_types: ComponentsProfileTypes,
+        jeprof_fetch_mode: JeprofFetchMode,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         out: SourceSender,
     ) -> vector::Result<Self> {
         let topo_fetcher =
             TopologyFetcher::new(pd_address, tls_config.clone(), proxy_config).await?;
+        Self::new_with_topo_fetcher(
+            TopologyFetcherKind::Pd(topo_fetcher),
+            topo_fetch_interval,
+            components_profile_types,
+            jeprof_fetch_mode,
+            tls_config,
+            out,
+        )
+    }
+
+    /// Construct controller with a pre-built topology fetcher (Pd or K8s). Used by source build when topology_mode is set.
+    pub fn new_with_topo_fetcher(
+        topo_fetcher: TopologyFetcherKind,
+        topo_fetch_interval: Duration,
+        components_profile_types: ComponentsProfileTypes,
+        jeprof_fetch_mode: JeprofFetchMode,
+        tls_config: Option<TlsConfig>,
+        out: SourceSender,
+    ) -> vector::Result<Self> {
         let (shutdown_notifier, shutdown_subscriber) = pair();
         Ok(Self {
             topo_fetch_interval,
@@ -48,9 +71,9 @@ impl Controller {
             shutdown_notifier,
             shutdown_subscriber,
             tls: tls_config,
-            // init_retry_delay,
             out,
-            enable_tikv_heap_profile,
+            components_profile_types,
+            jeprof_fetch_mode,
         })
     }
 
@@ -58,29 +81,26 @@ impl Controller {
     pub(crate) fn new_for_test(
         topo_fetcher: TopologyFetcher,
         topo_fetch_interval: Duration,
-        enable_tikv_heap_profile: bool,
+        components_profile_types: ComponentsProfileTypes,
         tls_config: Option<TlsConfig>,
         out: SourceSender,
     ) -> Self {
-        let (shutdown_notifier, shutdown_subscriber) = pair();
-        Self {
+        Self::new_with_topo_fetcher(
+            TopologyFetcherKind::Pd(topo_fetcher),
             topo_fetch_interval,
-            topo_fetcher,
-            components: HashSet::new(),
-            running_components: HashMap::new(),
-            shutdown_notifier,
-            shutdown_subscriber,
-            tls: tls_config,
+            components_profile_types,
+            JeprofFetchMode::Perl,
+            tls_config,
             out,
-            enable_tikv_heap_profile,
-        }
+        )
+        .expect("new_for_test")
     }
 
     #[cfg(test)]
     pub(crate) async fn new_with_mock_topo_fetcher(
         pd_address: String,
         topo_fetch_interval: Duration,
-        enable_tikv_heap_profile: bool,
+        components_profile_types: ComponentsProfileTypes,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         out: SourceSender,
@@ -102,37 +122,16 @@ impl Controller {
         let (shutdown_notifier, shutdown_subscriber) = pair();
         Ok(Self {
             topo_fetch_interval,
-            topo_fetcher,
+            topo_fetcher: TopologyFetcherKind::Pd(topo_fetcher),
             components: HashSet::new(),
             running_components: HashMap::new(),
             shutdown_notifier,
             shutdown_subscriber,
             tls: tls_config,
             out,
-            enable_tikv_heap_profile,
+            components_profile_types,
+            jeprof_fetch_mode: JeprofFetchMode::Perl,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_with_topo_fetcher(
-        topo_fetcher: TopologyFetcher,
-        topo_fetch_interval: Duration,
-        enable_tikv_heap_profile: bool,
-        tls_config: Option<TlsConfig>,
-        out: SourceSender,
-    ) -> Self {
-        let (shutdown_notifier, shutdown_subscriber) = pair();
-        Self {
-            topo_fetch_interval,
-            topo_fetcher,
-            components: HashSet::new(),
-            running_components: HashMap::new(),
-            shutdown_notifier,
-            shutdown_subscriber,
-            tls: tls_config,
-            out,
-            enable_tikv_heap_profile,
-        }
     }
 
     pub async fn run(mut self, mut shutdown: ShutdownSignal) {
@@ -207,7 +206,7 @@ impl Controller {
     async fn fetch_and_update_impl(&mut self) -> Result<bool, FetchError> {
         let mut has_change = false;
         let mut latest_components = HashSet::new();
-        <TopologyFetcher as TopologyFetcherTrait>::get_up_components(
+        TopologyFetcherTrait::get_up_components(
             &mut self.topo_fetcher,
             &mut latest_components,
         )
@@ -249,13 +248,16 @@ impl Controller {
             component.clone(),
             self.tls.clone(),
             self.out.clone(),
-            // self.init_retry_delay,
-            self.enable_tikv_heap_profile,
+            self.components_profile_types,
+            self.jeprof_fetch_mode,
         )
         .await;
         let source = match source {
             Some(source) => source,
-            None => return false,
+            None => {
+                warn!(message = "Could not start conprof source (no address or client build failed)", conprof_source = %component);
+                return false;
+            }
         };
 
         let (shutdown_notifier, shutdown_subscriber) = self.shutdown_subscriber.extend();
@@ -333,7 +335,7 @@ mod tests {
         let _topo_fetch_interval = Duration::from_secs(30);
         let _components: HashSet<Component> = HashSet::new();
         let _running_components: HashMap<Component, ShutdownNotifier> = HashMap::new();
-        let _enable_tikv_heap_profile = false;
+        let _components_profile_types = crate::sources::conprof::default_components_profile_types();
     }
 
     #[test]
@@ -388,6 +390,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Simulate start_component returning true
@@ -417,6 +420,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
 
         // TiFlash has conprof address, so it should work
@@ -431,6 +435,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let mut running_components: HashMap<Component, ShutdownNotifier> = HashMap::new();
@@ -556,7 +561,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         let topo_fetch_interval = Duration::from_secs(30);
-        let enable_tikv_heap_profile = false;
+        let components_profile_types = crate::sources::conprof::default_components_profile_types();
         let tls_config = None;
         let proxy_config = ProxyConfig::from_env();
         let out = create_test_source_sender();
@@ -566,7 +571,8 @@ mod tests {
         let result = Controller::new(
             pd_address,
             topo_fetch_interval,
-            enable_tikv_heap_profile,
+            components_profile_types,
+            JeprofFetchMode::Perl,
             tls_config,
             &proxy_config,
             out,
@@ -590,6 +596,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let component2 = Component {
@@ -597,6 +604,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
 
         prev_components.insert(component1.clone());
@@ -621,6 +629,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Test that component has conprof address
@@ -628,7 +637,14 @@ mod tests {
 
         // Test that ConprofSource::new would work with this component
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component.clone(), None, out.clone(), false).await;
+        let result = ConprofSource::new(
+            component.clone(),
+            None,
+            out.clone(),
+            crate::sources::conprof::default_components_profile_types(),
+            JeprofFetchMode::Perl,
+        )
+        .await;
         assert!(result.is_some());
 
         // Test start_component_impl logic by manually calling the steps
@@ -654,6 +670,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Test that component can be used in HashMap
@@ -698,12 +715,14 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component2 = Component {
             instance_type: InstanceType::TiKV,
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
 
         let (notifier1, _subscriber1) = pair();
@@ -731,6 +750,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
 
         // Test that component has conprof address
@@ -738,7 +758,14 @@ mod tests {
 
         // Test that ConprofSource::new would work with this component
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            JeprofFetchMode::Perl,
+        )
+        .await;
         assert!(result.is_some());
     }
 
@@ -750,10 +777,18 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
 
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, true).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            JeprofFetchMode::Perl,
+        )
+        .await;
         assert!(result.is_some());
     }
 
@@ -765,6 +800,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let mut running_components: HashMap<Component, ShutdownNotifier> = HashMap::new();
@@ -797,6 +833,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Simulate starting a component
@@ -820,6 +857,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         components.insert(component1.clone());
 
@@ -834,6 +872,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         components.insert(component2.clone());
         prev_components.insert(component2.clone());
@@ -843,6 +882,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 2379,
             secondary_port: 2379,
+            instance_name: None,
         };
         prev_components.insert(component3.clone());
 
@@ -860,6 +900,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Verify component has conprof address
@@ -874,6 +915,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Test that component can be used in HashMap
@@ -899,12 +941,14 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component2 = Component {
             instance_type: InstanceType::TiKV,
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
 
         let (notifier1, _subscriber1) = pair();
@@ -966,6 +1010,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Simulate start_component returning true
@@ -1005,6 +1050,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let removed = running_components.remove(&component);
@@ -1026,18 +1072,20 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let out = create_test_source_sender();
         let tls = None;
-        let enable_tikv_heap_profile = false;
+        let components_profile_types = crate::sources::conprof::default_components_profile_types();
 
         // Execute the exact code from start_component_impl
         let source = ConprofSource::new(
             component.clone(),
             tls.clone(),
             out.clone(),
-            enable_tikv_heap_profile,
+            components_profile_types,
+            JeprofFetchMode::Perl,
         )
         .await;
 
@@ -1090,14 +1138,15 @@ mod tests {
         // If TopologyFetcher creation succeeds, create Controller and test methods
         let mut controller = match topo_fetcher_result {
             Ok(topo_fetcher) => {
-                // Successfully created TopologyFetcher, create Controller using new_with_topo_fetcher
                 Controller::new_with_topo_fetcher(
-                    topo_fetcher,
+                    TopologyFetcherKind::Pd(topo_fetcher),
                     Duration::from_secs(30),
-                    false,
+                    crate::sources::conprof::default_components_profile_types(),
+                    JeprofFetchMode::Perl,
                     None,
                     out.clone(),
                 )
+                .expect("new_with_topo_fetcher")
             }
             Err(_) => {
                 // TopologyFetcher creation failed, test the logic directly
@@ -1107,10 +1156,18 @@ mod tests {
                     host: "127.0.0.1".to_string(),
                     primary_port: 4000,
                     secondary_port: 10080,
+                    instance_name: None,
                 };
 
                 // Execute the exact code from start_component_impl
-                let source = ConprofSource::new(component.clone(), None, out, false).await;
+                let source = ConprofSource::new(
+                    component.clone(),
+                    None,
+                    out,
+                    crate::sources::conprof::default_components_profile_types(),
+                    JeprofFetchMode::Perl,
+                )
+                .await;
                 let source = match source {
                     Some(source) => source,
                     None => return,
@@ -1134,6 +1191,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // This actually calls start_component_impl
@@ -1155,6 +1213,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the code from stop_component_impl
@@ -1189,6 +1248,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the logic from fetch_and_update_impl
@@ -1207,7 +1267,14 @@ mod tests {
         for newcomer in newcomers {
             // Execute start_component_impl logic
             let out = create_test_source_sender();
-            let source = ConprofSource::new(newcomer.clone(), None, out, false).await;
+            let source = ConprofSource::new(
+                newcomer.clone(),
+                None,
+                out,
+                crate::sources::conprof::default_components_profile_types(),
+                JeprofFetchMode::Perl,
+            )
+            .await;
             if let Some(source) = source {
                 // Execute the spawn and insert logic
                 let (shutdown_notifier, shutdown_subscriber) = pair();
@@ -1237,6 +1304,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the logic from fetch_and_update_impl
@@ -1287,6 +1355,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the logic from fetch_and_update_impl
@@ -1329,7 +1398,8 @@ mod tests {
         let result = Controller::new(
             pd_address,
             Duration::from_secs(30),
-            false,
+            crate::sources::conprof::default_components_profile_types(),
+            JeprofFetchMode::Perl,
             None,
             &proxy_config,
             out.clone(),
@@ -1345,6 +1415,7 @@ mod tests {
                     host: "127.0.0.1".to_string(),
                     primary_port: 4000,
                     secondary_port: 10080,
+                    instance_name: None,
                 };
 
                 let mut running_components = HashMap::new();
@@ -1373,6 +1444,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let started = controller.start_component(&component).await;
@@ -1395,10 +1467,18 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         let out = create_test_source_sender();
-        let source = ConprofSource::new(component.clone(), None, out, false).await;
+        let source = ConprofSource::new(
+            component.clone(),
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            JeprofFetchMode::Perl,
+        )
+        .await;
 
         // Execute the match logic from start_component_impl
         match source {
@@ -1422,6 +1502,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
 
         // Execute the logic from stop_component_impl
