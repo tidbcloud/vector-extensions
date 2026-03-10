@@ -37,19 +37,19 @@ struct ActiveTiDBAddress {
 
 pub struct TiDBManagerTopologyFetcher<'a> {
     manager_server_address: &'a str,
-    manager_server_namespace: Option<&'a str>,
+    tidb_namespace: Option<&'a str>,
     http_client: &'a HttpClient<hyper::Body>,
 }
 
 impl<'a> TiDBManagerTopologyFetcher<'a> {
     pub fn new(
         manager_server_address: &'a str,
-        manager_server_namespace: Option<&'a str>,
+        tidb_namespace: Option<&'a str>,
         http_client: &'a HttpClient<hyper::Body>,
     ) -> Self {
         Self {
             manager_server_address,
-            manager_server_namespace,
+            tidb_namespace,
             http_client,
         }
     }
@@ -98,7 +98,7 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
     }
 
     fn active_tidb_endpoint_url(&self) -> Option<String> {
-        let namespaces = Self::normalize_namespaces(self.manager_server_namespace)?;
+        let namespaces = Self::normalize_namespaces(self.tidb_namespace)?;
         Some(Self::build_active_tidb_endpoint_url(
             self.manager_server_address,
             &namespaces,

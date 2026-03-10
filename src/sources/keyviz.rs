@@ -93,7 +93,7 @@ impl SourceConfig for KeyvizConfig {
             let topo = TopologyFetcher::new(
                 Some(pd_address.clone()),
                 None, // manager_server_address
-                None, // manager_server_namespace
+                None, // tidb_namespace
                 tls.clone(),
                 &cx.proxy,
                 None, // tidb_group

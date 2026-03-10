@@ -60,7 +60,7 @@ pub enum FetchError {
 pub struct LegacyTopologyFetcher {
     pd_address: String,
     manager_server_address: Option<String>,
-    manager_server_namespace: Option<String>,
+    tidb_namespace: Option<String>,
     http_client: HttpClient<hyper::Body>,
     pub etcd_client: etcd_client::Client,
 }
@@ -69,7 +69,7 @@ impl LegacyTopologyFetcher {
     pub async fn new(
         pd_address: String,
         manager_server_address: Option<String>,
-        manager_server_namespace: Option<String>,
+        tidb_namespace: Option<String>,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
     ) -> Result<Self, FetchError> {
@@ -83,7 +83,7 @@ impl LegacyTopologyFetcher {
         Ok(Self {
             pd_address,
             manager_server_address,
-            manager_server_namespace,
+            tidb_namespace,
             http_client,
             etcd_client,
         })
@@ -100,7 +100,7 @@ impl LegacyTopologyFetcher {
         if let Some(manager_server_address) = self.manager_server_address.as_deref() {
             tidb_manager::TiDBManagerTopologyFetcher::new(
                 manager_server_address,
-                self.manager_server_namespace.as_deref(),
+                self.tidb_namespace.as_deref(),
                 &self.http_client,
             )
             .get_up_tidbs(components)
@@ -269,7 +269,7 @@ impl TopologyFetcher {
     pub async fn new(
         pd_address: Option<String>,
         manager_server_address: Option<String>,
-        manager_server_namespace: Option<String>,
+        tidb_namespace: Option<String>,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         tidb_group: Option<String>,
@@ -291,7 +291,7 @@ impl TopologyFetcher {
             let fetcher = LegacyTopologyFetcher::new(
                 pd_address,
                 manager_server_address,
-                manager_server_namespace,
+                tidb_namespace,
                 tls_config,
                 proxy_config,
             )
