@@ -56,6 +56,8 @@ impl Controller {
     ) -> vector::Result<Self> {
         let topo_fetcher = TopologyFetcher::new(
             pd_address,
+            None, // manager_server_address
+            None, // tidb_namespace
             tls_config.clone(),
             proxy_config,
             tidb_group,
