@@ -43,6 +43,8 @@ struct ActiveSchemaManager {
 impl Controller {
     pub async fn new(
         pd_address: Option<String>,
+        manager_server_address: Option<String>,
+        tidb_namespace: Option<String>,
         topo_fetch_interval: Duration,
         init_retry_delay: Duration,
         top_n: usize,
@@ -56,8 +58,8 @@ impl Controller {
     ) -> vector::Result<Self> {
         let topo_fetcher = TopologyFetcher::new(
             pd_address,
-            None, // manager_server_address
-            None, // tidb_namespace
+            manager_server_address,
+            tidb_namespace,
             tls_config.clone(),
             proxy_config,
             tidb_group,

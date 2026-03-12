@@ -98,6 +98,18 @@ impl LegacyTopologyFetcher {
             .await
             .context(FetchPDTopologySnafu)?;
         if let Some(manager_server_address) = self.manager_server_address.as_deref() {
+            if self
+                .tidb_namespace
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(str::is_empty)
+            {
+                info!(
+                    message =
+                        "Skipping manager-based TiDB discovery because tidb namespace is empty",
+                    manager_server_address
+                );
+            }
             tidb_manager::TiDBManagerTopologyFetcher::new(
                 manager_server_address,
                 self.tidb_namespace.as_deref(),

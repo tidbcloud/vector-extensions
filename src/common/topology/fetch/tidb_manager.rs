@@ -59,6 +59,14 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         components: &mut HashSet<Component>,
     ) -> Result<(), FetchError> {
         let active_tidb_addresses = self.fetch_active_tidb_addresses().await?;
+        if !active_tidb_addresses.is_empty() {
+            info!(
+                message = "Fetched active TiDB instances from manager server",
+                manager_server_address = self.manager_server_address,
+                tidb_namespace = ?self.tidb_namespace,
+                tidb_count = active_tidb_addresses.len()
+            );
+        }
 
         for active_tidb in active_tidb_addresses {
             let (host, primary_port) =
