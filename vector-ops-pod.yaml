@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vector-ops
+  namespace: monitoring
+  labels:
+    app: vector-ops
+spec:
+  nodeName: ap-southeast-1.10.0.145.229
+  containers:
+  - name: ops
+    image: busybox:latest
+    command: ["/bin/sh"]
+    args: ["-c", "sleep 3600"]
+    volumeMounts:
+    - name: data
+      mountPath: /vector-data-dir
+      readOnly: false
+  volumes:
+  - name: data
+    hostPath:
+      path: /var/lib/vector/01
+      type: DirectoryOrCreate
+  restartPolicy: Never
+
+k exec -it o11y-vector-tn7wg -c vector -n monitoring -- ls -l /vector-data-dir

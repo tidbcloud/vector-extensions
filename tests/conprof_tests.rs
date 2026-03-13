@@ -24,6 +24,7 @@ mod topology_tests {
             host: "127.0.0.1".to_string(),
             primary_port: 2379,
             secondary_port: 2380,
+            instance_name: None,
         };
         assert_eq!(
             pd_component.conprof_address(),
@@ -36,6 +37,7 @@ mod topology_tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         assert_eq!(
             tidb_component.conprof_address(),
@@ -48,6 +50,7 @@ mod topology_tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         assert_eq!(
             tikv_component.conprof_address(),
@@ -60,6 +63,7 @@ mod topology_tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
         assert_eq!(
             tiflash_component.conprof_address(),
@@ -72,6 +76,7 @@ mod topology_tests {
             host: "127.0.0.1".to_string(),
             primary_port: 6000,
             secondary_port: 6001,
+            instance_name: None,
         };
         assert_eq!(
             tiproxy_component.conprof_address(),
@@ -84,6 +89,7 @@ mod topology_tests {
             host: "127.0.0.1".to_string(),
             primary_port: 8287,
             secondary_port: 8286,
+            instance_name: None,
         };
         assert_eq!(
             lightning_component.conprof_address(),
@@ -98,6 +104,7 @@ mod topology_tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         assert_eq!(
             component.to_string(),
@@ -112,18 +119,21 @@ mod topology_tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component2 = Component {
             instance_type: InstanceType::TiDB,
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component3 = Component {
             instance_type: InstanceType::TiDB,
             host: "127.0.0.1".to_string(),
             primary_port: 4001,
             secondary_port: 10080,
+            instance_name: None,
         };
         assert_eq!(component1, component2);
         assert_ne!(component1, component3);
@@ -137,12 +147,14 @@ mod topology_tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let component2 = Component {
             instance_type: InstanceType::TiDB,
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let mut set = HashSet::new();
         set.insert(component1.clone());

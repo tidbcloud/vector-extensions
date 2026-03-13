@@ -12,10 +12,12 @@ use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteCo
 use crate::sources::topsql_v2::upstream::consts::{
     LABEL_PLAN_DIGEST, LABEL_REGION_ID, LABEL_INSTANCE_KEY, LABEL_SQL_DIGEST, LABEL_TIMESTAMPS,
     LABEL_DATE, LABEL_KEYSPACE, LABEL_TAG_LABEL, LABEL_DB_NAME, LABEL_TABLE_NAME, LABEL_TABLE_ID,
+    LABEL_SOURCE_TABLE, LABEL_USER, SOURCE_TABLE_TOPRU,
     METRIC_NAME_CPU_TIME_MS, METRIC_NAME_LOGICAL_READ_BYTES, METRIC_NAME_LOGICAL_WRITE_BYTES,
     METRIC_NAME_NETWORK_IN_BYTES, METRIC_NAME_NETWORK_OUT_BYTES, METRIC_NAME_READ_KEYS,
     METRIC_NAME_STMT_EXEC_COUNT, METRIC_NAME_WRITE_KEYS,
     METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS,
+    METRIC_NAME_TOTAL_RU, METRIC_NAME_EXEC_COUNT, METRIC_NAME_EXEC_DURATION,
 };
 
 use lazy_static::lazy_static;
@@ -171,6 +173,78 @@ lazy_static! {
         );
         schema_info
     };
+
+    static ref TOPRU_SCHEMA: serde_json::Map<String, serde_json::Value> = {
+        let mut schema_info = serde_json::Map::new();
+        schema_info.insert(
+            LABEL_TIMESTAMPS.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_DATE.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            LABEL_KEYSPACE.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            LABEL_USER.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            LABEL_SQL_DIGEST.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            LABEL_PLAN_DIGEST.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_TOTAL_RU.into(),
+            serde_json::json!({
+                "mysql_type": "double",
+                "is_nullable": false
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_EXEC_COUNT.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_EXEC_DURATION.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            "_partition_by".into(),
+            serde_json::json!(vec![LABEL_DATE.to_string()]),
+        );
+        schema_info
+    };
 }
 
 /// Delta Lake sink processor
@@ -291,30 +365,35 @@ impl TopSQLDeltaLakeSink {
         if events_vec.is_empty() {
             return Ok(());
         }
-        // Group events by source_table
+        // Group events by table_name (instance_key for topsql/tikv, source_table for topru)
         let mut table_events: HashMap<String, Vec<Event>> = HashMap::new();
         for events in events_vec {
             for event in events {
                 if let Event::Log(log_event) = event {
-                    let table_name: String;
-                    {
-                        let table_name_ref = log_event.get(LABEL_INSTANCE_KEY).and_then(|v| v.as_str());
-                        if let Some(table_name_v2) = table_name_ref {
-                            table_name = table_name_v2.to_string();
-                        } else {
-                            continue;
-                        }
+                    let table_name: Option<String> = log_event
+                        .get(LABEL_INSTANCE_KEY)
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            // TopRU events lack instance_key; use source_table as grouping key
+                            log_event
+                                .get(LABEL_SOURCE_TABLE)
+                                .and_then(|v| v.as_str())
+                                .filter(|s| *s == SOURCE_TABLE_TOPRU)
+                                .map(|s| s.to_string())
+                        });
+                    if let Some(name) = table_name {
+                        table_events
+                            .entry(name)
+                            .or_insert_with(Vec::new)
+                            .push(Event::Log(log_event));
                     }
-                    table_events
-                        .entry(table_name)
-                        .or_insert_with(Vec::new)
-                        .push(Event::Log(log_event));
                 }
             }
         }
         // Write table's events
         for (table_name, mut events) in table_events {
-            self.add_schema_info(&mut events);
+            self.add_schema_info(&mut events, &table_name);
             if let Err(e) = self.write_table_events(&table_name, events).await {
                 let error_msg = e.to_string();
                 if error_msg.contains("log segment")
@@ -336,16 +415,18 @@ impl TopSQLDeltaLakeSink {
     }
 
     /// Write events to a specific table
-    fn add_schema_info(&self, events: &mut Vec<Event>) {
+    fn add_schema_info(&self, events: &mut Vec<Event>, table_name: &str) {
         if events.is_empty() {
             return;
         }
+        let schema = if table_name == SOURCE_TABLE_TOPRU {
+            TOPRU_SCHEMA.clone()
+        } else {
+            TOPSQL_SCHEMA.clone()
+        };
         let first_event = &mut events[0];
         let log = first_event.as_mut_log();
-        log.insert(
-       "_schema_metadata",
-            serde_json::Value::Object(TOPSQL_SCHEMA.clone()),
-        );
+        log.insert("_schema_metadata", serde_json::Value::Object(schema));
     }
 
     /// Write events to a specific table
@@ -357,17 +438,21 @@ impl TopSQLDeltaLakeSink {
         // Get or create writer for this table
         let mut writers = self.writers.lock().await;
         let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
-            let (table_type, table_instance) = match table_name
-                .strip_prefix("topsql_")
-                .and_then(|rest| rest.split_once('_'))
-            {
-                Some((t, inst)) if !t.is_empty() && !inst.is_empty() => (t, inst),
-                _ => {
-                    error!(
-                        "Unexpected table_name format (expected `topsql_{{type}}_{{instance}}`): {}",
-                        table_name
-                    );
-                    ("unknown", "unknown")
+            let (table_type, table_instance) = if table_name == SOURCE_TABLE_TOPRU {
+                ("topru", "default")
+            } else {
+                match table_name
+                    .strip_prefix("topsql_")
+                    .and_then(|rest| rest.split_once('_'))
+                {
+                    Some((t, inst)) if !t.is_empty() && !inst.is_empty() => (t, inst),
+                    _ => {
+                        error!(
+                            "Unexpected table_name format (expected `topsql_{{type}}_{{instance}}` or `topsql_topru`): {}",
+                            table_name
+                        );
+                        ("unknown", "unknown")
+                    }
                 }
             };
 

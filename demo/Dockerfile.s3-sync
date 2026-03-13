@@ -1,0 +1,12 @@
+# Lightweight image for S3-to-S3 backup from Vector-style config (no Vector runtime).
+# Parses [sources.file_list] endpoint and [sinks.to_s3] bucket/key_prefix, runs aws s3 sync.
+# Use latest; specific tags like 2.15 may not exist on Docker Hub. Or: public.ecr.aws/aws-cli/aws-cli:latest
+FROM amazon/aws-cli:latest
+
+COPY s3-sync-from-vector-config.sh /s3-sync-from-vector-config.sh
+RUN sed -i 's/\r$//' /s3-sync-from-vector-config.sh 2>/dev/null || true && chmod +x /s3-sync-from-vector-config.sh
+
+# Mount config at /config (e.g. vector.toml or vector-config.yaml with vector.toml in ConfigMap)
+ENV CONFIG_FILE=/config/vector.toml
+
+ENTRYPOINT ["/s3-sync-from-vector-config.sh"]

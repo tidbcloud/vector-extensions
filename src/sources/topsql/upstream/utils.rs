@@ -7,8 +7,9 @@ use vector::event::{
     Event, KeyString, LogEvent, Metric, MetricKind, MetricTags, MetricValue, Value,
 };
 
+use crate::common::features::is_nextgen_mode;
 use crate::sources::topsql::upstream::consts::{
-    LABEL_INSTANCE, LABEL_INSTANCE_TYPE, METRIC_NAME_INSTANCE,
+    LABEL_INSTANCE, LABEL_INSTANCE_TYPE, LABEL_NAME, METRIC_NAME_INSTANCE,
 };
 
 #[allow(dead_code)]
@@ -43,20 +44,35 @@ pub fn instance_event(
     instance_type: String,
     sharedpool_id: Option<String>,
 ) -> Event {
-    let mut tags = BTreeMap::new();
-    tags.insert(LABEL_INSTANCE.to_owned(), instance);
-    tags.insert(LABEL_INSTANCE_TYPE.to_owned(), instance_type);
-    if let Some(sharedpool_id) = sharedpool_id {
-        tags.insert("sharedpool_id".to_owned(), sharedpool_id);
+    if is_nextgen_mode() {
+        // Nextgen mode: return Metric event
+        let mut tags = BTreeMap::new();
+        tags.insert(LABEL_INSTANCE.to_owned(), instance);
+        tags.insert(LABEL_INSTANCE_TYPE.to_owned(), instance_type);
+        if let Some(sharedpool_id) = sharedpool_id {
+            tags.insert("sharedpool_id".to_owned(), sharedpool_id);
+        }
+        let metric = Metric::new(
+            METRIC_NAME_INSTANCE,
+            MetricKind::Absolute,
+            MetricValue::Gauge { value: 1.0 },
+        )
+        .with_timestamp(Some(Utc::now()))
+        .with_tags(Some(MetricTags::from(tags)));
+        Event::Metric(metric)
+    } else {
+        // Legacy mode: return LogEvent (compatible with vm_import sink)
+        // Note: Legacy mode does not include sharedpool_id, matching 0.37 behavior
+        Event::Log(make_metric_like_log_event(
+            &[
+                (LABEL_NAME, METRIC_NAME_INSTANCE.to_owned()),
+                (LABEL_INSTANCE, instance),
+                (LABEL_INSTANCE_TYPE, instance_type),
+            ],
+            &[Utc::now()],
+            &[1.0],
+        ))
     }
-    let metric = Metric::new(
-        METRIC_NAME_INSTANCE,
-        MetricKind::Absolute,
-        MetricValue::Gauge { value: 1.0 },
-    )
-    .with_timestamp(Some(Utc::now()))
-    .with_tags(Some(MetricTags::from(tags)));
-    Event::Metric(metric)
 }
 
 pub fn instance_event_with_tags(

@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vector-s3-migration
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: vector
+        image: slggamer/vector:nightly-b7b8f66
+        args: ["--config", "/etc/vector/vector.toml"]
+        env:
+        - name: AWS_REGION
+          value: "us-west-2"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/vector
+          readOnly: true
+        - name: duckdb-temp
+          mountPath: /tmp
+      volumes:
+      - name: config
+        configMap:
+          name: vector-s3-sync-config
+      - name: duckdb-temp
+        persistentVolumeClaim:
+          claimName: vector-data
+      restartPolicy: Never
+  backoffLimit: 0

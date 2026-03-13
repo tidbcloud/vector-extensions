@@ -1,0 +1,19 @@
+# Optional: create PVC first so that after Job delete/recreate the new Job can resume from checkpoint.
+# Usage: kubectl apply -f vector-pvc.yaml, then in vector-job.yaml set volumes.data to:
+#   - name: data
+#     persistentVolumeClaim:
+#       claimName: vector-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vector-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  # storageClassName: set per cluster; omit to use default
+  # storageClassName: standard

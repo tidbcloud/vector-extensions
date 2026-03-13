@@ -1,0 +1,12 @@
+{
+  "source_bucket": "o11y-prod-shared-us-east-1",
+  "source_prefix": "diagnosis/data/10324983984131567830/merged-logs/",
+  "dest_bucket": "my-backup-bucket",
+  "dest_prefix": "backup/2026-01-08/",
+  "pattern": "{YYYYMMDDHH}/*.log",
+  "time_range": {
+    "start": "2026-01-08T00:00:00Z",
+    "end": "2026-01-08T23:59:59Z"
+  },
+  "max_keys": 10000
+}

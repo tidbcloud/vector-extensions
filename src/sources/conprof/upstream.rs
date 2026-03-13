@@ -8,9 +8,11 @@ use vector_lib::{event::LogEvent, internal_event::InternalEvent, tls::TlsConfig}
 
 use crate::sources::conprof::{
     shutdown::ShutdownSubscriber,
-    tools::fetch_raw,
     topology::{Component, InstanceType},
+    ComponentsProfileTypes,
+    JeprofFetchMode,
 };
+use crate::sources::conprof::tools::{fetch_raw, fetch_raw_native};
 use crate::utils::http::build_reqwest_client;
 
 pub struct ConprofSource {
@@ -22,9 +24,8 @@ pub struct ConprofSource {
 
     tls: Option<TlsConfig>,
     out: SourceSender,
-    // init_retry_delay: Duration,
-    // retry_delay: Duration,
-    enable_tikv_heap_profile: bool,
+    components_profile_types: ComponentsProfileTypes,
+    jeprof_fetch_mode: JeprofFetchMode,
 }
 
 impl ConprofSource {
@@ -32,8 +33,8 @@ impl ConprofSource {
         component: Component,
         tls: Option<TlsConfig>,
         out: SourceSender,
-        // init_retry_delay: Duration,
-        enable_tikv_heap_profile: bool,
+        components_profile_types: ComponentsProfileTypes,
+        jeprof_fetch_mode: JeprofFetchMode,
     ) -> Option<Self> {
         let client = match build_reqwest_client(tls.clone(), None, None).await {
             Ok(client) => client,
@@ -46,8 +47,8 @@ impl ConprofSource {
         match component.conprof_address() {
             Some(address) => Some(ConprofSource {
                 client,
-                // instance: address.clone(),
-                instance_b64: BASE64_URL_SAFE_NO_PAD.encode(&address),
+                // instance: use instance_name (e.g. K8s pod name) when set, else address
+                instance_b64: BASE64_URL_SAFE_NO_PAD.encode(&component.instance_id()),
                 instance_type: component.instance_type,
                 uri: if tls.is_some() {
                     format!("https://{}", address)
@@ -57,9 +58,8 @@ impl ConprofSource {
 
                 tls,
                 out,
-                // init_retry_delay,
-                // retry_delay: init_retry_delay,
-                enable_tikv_heap_profile,
+                components_profile_types,
+                jeprof_fetch_mode,
             }),
             None => None,
         }
@@ -74,57 +74,64 @@ impl ConprofSource {
     }
 
     async fn run_loop(&mut self, mut shutdown: ShutdownSubscriber) {
+        let profile = self
+            .components_profile_types
+            .for_instance(&self.instance_type);
         loop {
             let mut ts = Utc::now().timestamp();
             ts -= ts % 60;
             let next_minute_ts = ts + 60;
-            match self.instance_type {
-                InstanceType::TiDB
-                | InstanceType::PD
-                | InstanceType::TiProxy
-                | InstanceType::Lightning => {
-                    self.fetch_goroutine_impl(
-                        format!(
-                            "{}-{}-goroutine-{}",
-                            ts, self.instance_type, self.instance_b64
-                        ),
-                        shutdown.clone(),
-                    )
-                    .await;
-                    self.fetch_mutex_impl(
-                        format!("{}-{}-mutex-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
-                    self.fetch_heap_impl(
-                        format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
-                    self.fetch_cpu_impl(
-                        format!("{}-{}-cpu-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
-                }
-                InstanceType::TiKV => {
-                    self.fetch_cpu_impl(
-                        format!("{}-{}-cpu-{}", ts, self.instance_type, self.instance_b64),
-                        shutdown.clone(),
-                    )
-                    .await;
-                    if self.enable_tikv_heap_profile {
-                        self.fetch_heap_with_jeprof_impl(
-                            format!("{}-{}-heap-{}", ts, self.instance_type, self.instance_b64),
-                            shutdown.clone(),
-                        )
-                        .await;
-                    }
-                }
-                InstanceType::TiFlash => {
-                    // do nothing.
-                }
-            };
+            // Fully driven by components_profile_types; no hardcoded instance_type branches
+            if profile.goroutine {
+                self.fetch_goroutine_impl(
+                    format!(
+                        "{}-{}-goroutine-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
+            if profile.mutex {
+                self.fetch_mutex_impl(
+                    format!(
+                        "{}-{}-mutex-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
+            if profile.heap {
+                self.fetch_heap_impl(
+                    format!(
+                        "{}-{}-heap-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
+            if profile.jeheap {
+                self.fetch_heap_with_jeprof_impl(
+                    format!(
+                        "{}-{}-heap-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
+            if profile.cpu {
+                self.fetch_cpu_impl(
+                    format!(
+                        "{}-{}-cpu-{}",
+                        ts, self.instance_type, self.instance_b64
+                    ),
+                    shutdown.clone(),
+                )
+                .await;
+            }
             let now = Utc::now().timestamp();
             if now < next_minute_ts {
                 tokio::select! {
@@ -150,13 +157,13 @@ impl ConprofSource {
                         Ok(resp) => {
                             let status = resp.status();
                             if !status.is_success() {
-                                error!(message = "Failed to fetch cpu", status = status.as_u16());
+                                error!(message = "Failed to fetch cpu", instance_type = %self.instance_type, status = status.as_u16());
                                 return;
                             }
                             let body = match resp.bytes().await {
                                 Ok(body) => body,
                                 Err(err) => {
-                                    error!(message = "Failed to read body bytes", %err);
+                                    error!(message = "Failed to read body bytes for cpu", instance_type = %self.instance_type, %err);
                                     return;
                                 }
                             };
@@ -167,7 +174,7 @@ impl ConprofSource {
                             }
                         }
                         Err(err) => {
-                            error!(message = "Failed to fetch cpu", %err);
+                            error!(message = "Failed to fetch cpu", instance_type = %self.instance_type, %err);
                         }
                     }
             }
@@ -187,13 +194,13 @@ impl ConprofSource {
                     Ok(resp) => {
                         let status = resp.status();
                         if !status.is_success() {
-                            error!(message = "Failed to fetch heap", status = status.as_u16());
+                            error!(message = "Failed to fetch heap", instance_type = %self.instance_type, status = status.as_u16());
                             return;
                         }
                         let body = match resp.bytes().await {
                             Ok(body) => body,
                             Err(err) => {
-                                error!(message = "Failed to read body bytes", %err);
+                                error!(message = "Failed to read body bytes for heap", instance_type = %self.instance_type, %err);
                                 return;
                             }
                         };
@@ -204,7 +211,7 @@ impl ConprofSource {
                         }
                     }
                     Err(err) => {
-                        error!(message = "Failed to fetch heap", %err);
+                        error!(message = "Failed to fetch heap", instance_type = %self.instance_type, %err);
                     }
                 }
             }
@@ -224,13 +231,13 @@ impl ConprofSource {
                     Ok(resp) => {
                         let status = resp.status();
                         if !status.is_success() {
-                            error!(message = "Failed to fetch mutex", status = status.as_u16());
+                            error!(message = "Failed to fetch mutex", instance_type = %self.instance_type, status = status.as_u16());
                             return;
                         }
                         let body = match resp.bytes().await {
                             Ok(body) => body,
                             Err(err) => {
-                                error!(message = "Failed to read body bytes", %err);
+                                error!(message = "Failed to read body bytes for mutex", instance_type = %self.instance_type, %err);
                                 return;
                             }
                         };
@@ -241,7 +248,7 @@ impl ConprofSource {
                         }
                     }
                     Err(err) => {
-                        error!(message = "Failed to fetch mutex", %err);
+                        error!(message = "Failed to fetch mutex", instance_type = %self.instance_type, %err);
                     }
                 }
             }
@@ -265,13 +272,13 @@ impl ConprofSource {
                     Ok(resp) => {
                         let status = resp.status();
                         if !status.is_success() {
-                            error!(message = "Failed to fetch goroutine", status = status.as_u16());
+                            error!(message = "Failed to fetch goroutine", instance_type = %self.instance_type, status = status.as_u16());
                             return;
                         }
                         let body = match resp.bytes().await {
                             Ok(body) => body,
                             Err(err) => {
-                                error!(message = "Failed to read body bytes", %err);
+                                error!(message = "Failed to read body bytes for goroutine", instance_type = %self.instance_type, %err);
                                 return;
                             }
                         };
@@ -282,7 +289,7 @@ impl ConprofSource {
                         }
                     }
                     Err(err) => {
-                        error!(message = "Failed to fetch goroutine", %err);
+                        error!(message = "Failed to fetch goroutine", instance_type = %self.instance_type, %err);
                     }
                 }
             }
@@ -303,21 +310,35 @@ impl ConprofSource {
         filename: String,
         mut shutdown: ShutdownSubscriber,
     ) {
-        tokio::select! {
-            _ = shutdown.done() => {}
-            resp = fetch_raw(format!("{}/debug/pprof/heap", self.uri), self.tls.clone()) => {
-                match resp {
-                    Ok(resp) => {
-                        let mut event = LogEvent::from_str_legacy(BASE64_STANDARD.encode(&resp));
-                        event.insert("filename", filename);
-                        if self.out.send_event(event).await.is_err() {
-                            StreamClosedError { count: 1 }.emit();
-                        }
-                    }
-                    Err(err) => {
-                        error!("Failed to fetch heap with jeprof: {}", err);
-                    }
+        // Use ?debug=1 so TiKV/Go pprof returns text format; required for jeprof native to parse PCs and symbolize.
+        let url = format!("{}/debug/pprof/heap?debug=1", self.uri);
+        info!(message = "Fetching jeheap (jeprof)", instance_type = %self.instance_type, %url);
+        let resp = match self.jeprof_fetch_mode {
+            JeprofFetchMode::Perl => {
+                tokio::select! {
+                    _ = shutdown.done() => return,
+                    r = fetch_raw(url, self.tls.clone()) => r,
                 }
+            }
+            JeprofFetchMode::Rust => {
+                tokio::select! {
+                    _ = shutdown.done() => return,
+                    r = fetch_raw_native(&self.client, &url) => r,
+                }
+            }
+        };
+        match resp {
+            Ok(body) => {
+                let mut event = LogEvent::from_str_legacy(BASE64_STANDARD.encode(&body));
+                event.insert("filename", filename.clone());
+                if self.out.send_event(event).await.is_err() {
+                    StreamClosedError { count: 1 }.emit();
+                } else {
+                    info!(message = "jeheap (jeprof) fetched and emitted", instance_type = %self.instance_type, filename = %filename, size_bytes = body.len());
+                }
+            }
+            Err(err) => {
+                error!(message = "Failed to fetch jeheap (heap with jeprof)", instance_type = %self.instance_type, mode = ?self.jeprof_fetch_mode, %err);
             }
         }
     }
@@ -418,9 +439,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        ).await;
         // Should succeed
         assert!(result.is_some());
     }
@@ -434,9 +462,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        ).await;
         // TiFlash has conprof address, so it should succeed
         assert!(result.is_some());
         let source = result.unwrap();
@@ -452,9 +487,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -482,9 +524,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -510,9 +559,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -538,9 +594,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -566,9 +629,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -590,9 +660,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -618,9 +695,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -646,9 +730,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -674,9 +765,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -702,9 +800,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 2379,
             secondary_port: 2379,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        ).await;
         assert!(result.is_some());
     }
 
@@ -716,9 +821,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 6000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        ).await;
         assert!(result.is_some());
     }
 
@@ -730,9 +842,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 8287,
             secondary_port: 8286,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, false).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        ).await;
         assert!(result.is_some());
     }
 
@@ -744,13 +863,20 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let result = ConprofSource::new(component, None, out, true).await;
+        let result = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        ).await;
         assert!(result.is_some());
         let source = result.unwrap();
         assert_eq!(source.instance_type, InstanceType::TiKV);
-        assert!(source.enable_tikv_heap_profile);
+        assert!(source.components_profile_types.tikv.heap);
     }
 
     #[tokio::test]
@@ -761,9 +887,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, true)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -793,9 +926,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 2379,
             secondary_port: 2379,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -832,9 +972,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 6000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -865,9 +1012,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 8287,
             secondary_port: 8286,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -898,9 +1052,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -931,9 +1092,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 20160,
             secondary_port: 20180,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, true)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -964,9 +1132,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 9000,
             secondary_port: 8123,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -990,9 +1165,16 @@ mod tests {
             host: "127.0.0.1".to_string(),
             primary_port: 4000,
             secondary_port: 10080,
+            instance_name: None,
         };
         let out = create_test_source_sender();
-        let mut source = ConprofSource::new(component, None, out, false)
+        let mut source = ConprofSource::new(
+            component,
+            None,
+            out,
+            crate::sources::conprof::default_components_profile_types(),
+            crate::sources::conprof::JeprofFetchMode::Perl,
+        )
             .await
             .unwrap();
 
@@ -1034,6 +1216,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 primary_port: 4000,
                 secondary_port: 10080,
+                instance_name: None,
             };
             // Test that conprof_address works for all types
             let _ = component.conprof_address();
@@ -1058,26 +1241,33 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 primary_port: 4000,
                 secondary_port: 10080,
+                instance_name: None,
             };
 
             // Verify component structure
             assert!(
-                component.conprof_address().is_some() || instance_type == InstanceType::TiFlash
+                component.conprof_address().is_some()
+                    || matches!(&component.instance_type, InstanceType::TiFlash)
             );
 
             // Test that we can determine which branch to take
-            match instance_type {
+            match &component.instance_type {
                 InstanceType::TiDB
                 | InstanceType::PD
                 | InstanceType::TiProxy
                 | InstanceType::Lightning => {
                     assert!(should_fetch_multiple);
                 }
-                InstanceType::TiKV => {
+                InstanceType::TiKV
+                | InstanceType::TikvWorker
+                | InstanceType::CoprocessorWorker => {
                     assert!(!should_fetch_multiple);
                 }
                 InstanceType::TiFlash => {
                     // Do nothing
+                }
+                InstanceType::Other(_) => {
+                    // Unknown types use default profile (e.g. like TiDB)
                 }
             }
         }
@@ -1196,20 +1386,21 @@ mod tests {
 
     #[test]
     fn test_tikv_heap_profile_conditional() {
-        // Test TiKV heap profile conditional logic
-        let enable_tikv_heap_profile_true = true;
-        let enable_tikv_heap_profile_false = false;
+        // Test TiKV heap profile conditional logic (driven by components_profile_types.tikv.heap)
+        let profile_types = crate::sources::conprof::default_components_profile_types();
+        assert!(profile_types.tikv.heap, "default has TiKV heap enabled");
 
-        if enable_tikv_heap_profile_true {
-            // Should fetch heap with jeprof
-            assert!(true, "Should fetch when enabled");
-        }
-
-        if enable_tikv_heap_profile_false {
-            assert!(false, "Should not fetch when disabled");
-        } else {
-            assert!(true, "Should skip when disabled");
-        }
+        let profile_types_no_heap = crate::sources::conprof::ComponentsProfileTypes {
+            tikv: crate::sources::conprof::ProfileTypes {
+                cpu: false,
+                heap: false,
+                jeheap: false,
+                mutex: false,
+                goroutine: false,
+            },
+            ..profile_types
+        };
+        assert!(!profile_types_no_heap.tikv.heap, "can disable TiKV heap via config");
     }
 
     #[test]
@@ -1414,20 +1605,11 @@ mod tests {
     }
 
     #[test]
-    fn test_enable_tikv_heap_profile_flag() {
-        // Test enable_tikv_heap_profile flag logic
-        let enable_true = true;
-        let enable_false = false;
-
-        // Test conditional logic
-        if enable_true {
-            // Should fetch heap with jeprof
-            assert!(enable_true);
-        }
-
-        if !enable_false {
-            // Should not fetch heap with jeprof
-            assert!(!enable_false);
-        }
+    fn test_tikv_heap_profile_driven_by_components_profile_types() {
+        // Default TiKV: heap=true (HTTP), jeheap=false. For jeprof use heap: false, jeheap: true.
+        let types = crate::sources::conprof::default_components_profile_types();
+        assert!(types.tikv.heap);
+        assert!(!types.tikv.jeheap);
+        assert!(!types.tikv.cpu);
     }
 }

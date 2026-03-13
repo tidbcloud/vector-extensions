@@ -12,6 +12,7 @@ use crate::common::topology::{Component, FetchError, InstanceType, TopologyFetch
 use crate::sources::topsql_v2::schema_cache::{SchemaCache, SchemaManager};
 use crate::sources::topsql_v2::shutdown::{pair, ShutdownNotifier, ShutdownSubscriber};
 use crate::sources::topsql_v2::upstream::TopSQLSource;
+use crate::sources::topsql_v2::TopRUConfig;
 
 pub struct Controller {
     topo_fetch_interval: Duration,
@@ -27,6 +28,7 @@ pub struct Controller {
     init_retry_delay: Duration,
     top_n: usize,
     downsampling_interval: u32,
+    topru: TopRUConfig,
 
     schema_cache: Arc<SchemaCache>,
     schema_update_interval: Duration,
@@ -54,6 +56,7 @@ impl Controller {
         proxy_config: &ProxyConfig,
         tidb_group: Option<String>,
         label_k8s_instance: Option<String>,
+        topru: TopRUConfig,
         out: SourceSender,
     ) -> vector::Result<Self> {
         let topo_fetcher = TopologyFetcher::new(
@@ -82,6 +85,7 @@ impl Controller {
             init_retry_delay,
             top_n,
             downsampling_interval,
+            topru,
             schema_cache,
             schema_update_interval,
             active_schema_manager: None,
@@ -268,6 +272,7 @@ impl Controller {
             self.init_retry_delay,
             self.top_n,
             self.downsampling_interval,
+            self.topru.clone(),
             self.schema_cache.clone(),
         );
         let source = match source {
