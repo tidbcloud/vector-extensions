@@ -25,8 +25,9 @@ use tracing::{error, info, warn};
 mod processor;
 
 // Import default functions from common module
-use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
 use crate::common::deltalake_s3;
+use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
+use crate::common::meta_store::MetaStoreResolver;
 
 pub const fn default_max_delay_secs() -> u64 {
     180
@@ -54,6 +55,9 @@ pub struct DeltaLakeConfig {
     /// Maximum delay in seconds before forcing a batch flush
     #[serde(default = "default_max_delay_secs")]
     pub max_delay_secs: u64,
+
+    /// Meta-store address used to resolve keyspace to org/cluster path segments
+    pub meta_store_addr: Option<String>,
 
     /// Storage options for cloud storage
     pub storage_options: Option<HashMap<String, String>>,
@@ -100,6 +104,7 @@ impl GenerateConfig for DeltaLakeConfig {
             batch_size: default_batch_size(),
             timeout_secs: default_timeout_secs(),
             max_delay_secs: default_max_delay_secs(),
+            meta_store_addr: None,
             storage_options: None,
             bucket: None,
             options: None,
@@ -219,12 +224,25 @@ impl DeltaLakeConfig {
             info!("No S3 service available - using default storage options only");
         }
 
+        let meta_store_resolver = self
+            .meta_store_addr
+            .as_deref()
+            .map(MetaStoreResolver::new)
+            .transpose()
+            .map_err(|error| {
+                vector::Error::from(format!(
+                    "failed to build meta-store resolver from meta_store_addr: {}",
+                    error
+                ))
+            })?;
+
         let sink = TopSQLDeltaLakeSink::new(
             base_path,
             table_configs,
             write_config,
             self.max_delay_secs,
             Some(storage_options),
+            meta_store_resolver,
         );
 
         Ok(VectorSink::from_event_streamsink(sink))
