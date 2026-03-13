@@ -66,6 +66,7 @@ impl TiDBNextGenTopologyFetcher {
                         host: pod_ip,
                         primary_port: 4000,
                         secondary_port: 10080,
+                        instance_name: pod.metadata.name.clone(),
                     });
                 }
             }

@@ -33,6 +33,7 @@ struct ActiveTiDBAddress {
     host: String,
     port: Option<u16>,
     status_port: Option<u16>,
+    hostname: Option<String>,
 }
 
 pub struct TiDBManagerTopologyFetcher<'a> {
@@ -78,6 +79,7 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
                 host,
                 primary_port,
                 secondary_port,
+                instance_name: active_tidb.hostname.filter(|name| !name.trim().is_empty()),
             });
         }
 
@@ -182,6 +184,7 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
                 host: host.clone(),
                 port: None,
                 status_port: None,
+                hostname: None,
             }]),
             Value::Array(items) => {
                 let mut addresses = Vec::new();
@@ -231,11 +234,13 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         )?;
         let port = Self::extract_u16_field(obj, &["port", "primary_port"]);
         let status_port = Self::extract_u16_field(obj, &["status_port", "secondary_port"]);
+        let hostname = Self::extract_string_field(obj, &["hostname", "pod_name", "instance_name"]);
 
         Some(ActiveTiDBAddress {
             host,
             port,
             status_port,
+            hostname,
         })
     }
 
@@ -260,8 +265,8 @@ mod tests {
     #[test]
     fn parse_response_new_schema() {
         let bytes = br#"[
-            {"host":"10.0.0.1","port":4000,"status_port":10080},
-            {"host":"10.0.0.2","port":4000,"status_port":10080}
+            {"host":"10.0.0.1","port":4000,"status_port":10080,"hostname":"tidb-0"},
+            {"host":"10.0.0.2","port":4000,"status_port":10080,"hostname":"tidb-1"}
         ]"#;
         let addresses =
             TiDBManagerTopologyFetcher::parse_active_tidb_addresses_response(bytes).unwrap();
@@ -273,11 +278,13 @@ mod tests {
                     host: "10.0.0.1".to_owned(),
                     port: Some(4000),
                     status_port: Some(10080),
+                    hostname: Some("tidb-0".to_owned()),
                 },
                 ActiveTiDBAddress {
                     host: "10.0.0.2".to_owned(),
                     port: Some(4000),
                     status_port: Some(10080),
+                    hostname: Some("tidb-1".to_owned()),
                 }
             ]
         );

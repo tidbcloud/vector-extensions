@@ -64,6 +64,7 @@ impl TiKVNextGenTopologyFetcher {
                         host: pod_ip,
                         primary_port: 20160,
                         secondary_port: 20180,
+                        instance_name: pod.metadata.name.clone(),
                     });
                 }
             }

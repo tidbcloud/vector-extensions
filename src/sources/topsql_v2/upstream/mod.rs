@@ -5,8 +5,8 @@ pub mod tikv;
 pub mod consts;
 mod tls_proxy;
 
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::StreamExt;
 use tokio::time;
@@ -26,11 +26,7 @@ use crate::common::topology::{Component, InstanceType};
 use crate::sources::topsql_v2::{
     schema_cache::SchemaCache,
     shutdown::ShutdownSubscriber,
-    upstream::{
-        parser::UpstreamEventParser,
-        tidb::TiDBUpstream,
-        tikv::TiKVUpstream,
-    },
+    upstream::{parser::UpstreamEventParser, tidb::TiDBUpstream, tikv::TiKVUpstream},
 };
 
 #[async_trait::async_trait]
@@ -93,7 +89,7 @@ impl BaseTopSQLSource {
         };
         match component.topsql_address() {
             Some(address) => Some(BaseTopSQLSource {
-                instance: address.clone(),
+                instance: component.instance_id(),
                 instance_type: component.instance_type,
                 uri: if tls.is_some() {
                     format!("https://{}", address)
@@ -114,21 +110,12 @@ impl BaseTopSQLSource {
         }
     }
 
-    async fn run_loop(
-        &mut self,
-        shutdown_subscriber: ShutdownSubscriber,
-    ) {
+    async fn run_loop(&mut self, shutdown_subscriber: ShutdownSubscriber) {
         loop {
             let shutdown_subscriber = shutdown_subscriber.clone();
             let state = match self.instance_type {
-                InstanceType::TiDB => {
-                    self.run_once::<TiDBUpstream>(shutdown_subscriber)
-                        .await
-                }
-                InstanceType::TiKV => {
-                    self.run_once::<TiKVUpstream>(shutdown_subscriber)
-                        .await
-                }
+                InstanceType::TiDB => self.run_once::<TiDBUpstream>(shutdown_subscriber).await,
+                InstanceType::TiKV => self.run_once::<TiKVUpstream>(shutdown_subscriber).await,
                 _ => unreachable!(),
             };
 
@@ -149,10 +136,7 @@ impl BaseTopSQLSource {
         }
     }
 
-    async fn run_once<U: Upstream>(
-        &mut self,
-        shutdown_subscriber: ShutdownSubscriber,
-    ) -> State {
+    async fn run_once<U: Upstream>(&mut self, shutdown_subscriber: ShutdownSubscriber) -> State {
         let response_stream = self.build_stream::<U>(shutdown_subscriber).await;
         let mut response_stream = match response_stream {
             Ok(stream) => stream,
@@ -239,7 +223,7 @@ impl BaseTopSQLSource {
             U::UpstreamEventParser::keep_top_n(responses, self.top_n)
         } else {
             responses
-        };        
+        };
         // parse
         let mut batch: Vec<vector::event::Event> = vec![];
         for response in responses {
@@ -249,7 +233,10 @@ impl BaseTopSQLSource {
                 self.schema_cache.clone(),
             );
             // Convert Vec<LogEvent> to Vec<Event>
-            let mut events: Vec<vector::event::Event> = log_events.into_iter().map(vector::event::Event::Log).collect();
+            let mut events: Vec<vector::event::Event> = log_events
+                .into_iter()
+                .map(vector::event::Event::Log)
+                .collect();
             batch.append(&mut events);
         }
         // send
@@ -290,9 +277,7 @@ impl TopSQLSource {
             downsampling_interval,
             schema_cache,
         )?;
-        Some(TopSQLSource {
-            base,
-        })
+        Some(TopSQLSource { base })
     }
 
     pub async fn run(mut self, mut shutdown: ShutdownSubscriber) {
