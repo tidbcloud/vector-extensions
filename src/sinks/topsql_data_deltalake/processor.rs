@@ -456,12 +456,12 @@ impl TopSQLDeltaLakeSink {
                 }
             };
 
-            let type_dir = format!("type=topsql_{}", table_type);
+            let type_dir = format!("component={}", table_type);
             let instance_dir = format!("instance={}", table_instance);
 
             let table_path = if self.base_path.to_string_lossy().starts_with("s3://") {
                 // For S3 paths, build a partition-like directory structure
-                // <base>/topsql/data/type=.../instance=.../<table_name>
+                // <base>/topsql/data/component=.../instance=.../<table_name>
                 let base = self.base_path.to_string_lossy();
                 let base = base.trim_end_matches('/');
                 PathBuf::from(format!(
