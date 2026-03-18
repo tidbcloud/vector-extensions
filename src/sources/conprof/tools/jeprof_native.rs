@@ -187,14 +187,16 @@ fn build_symbolized_output(
     out.extend_from_slice(program_name.as_bytes());
     out.push(b'\n');
     for pc in pcs {
-        let sym = symbol_map
-            .get(pc)
-            .map(|s| s.as_str())
-            .unwrap_or("0x");
         out.extend_from_slice(b"0x");
         out.extend_from_slice(pc.as_bytes());
         out.push(b' ');
-        out.extend_from_slice(sym.as_bytes());
+        if let Some(s) = symbol_map.get(pc) {
+            out.extend_from_slice(s.as_bytes());
+        } else {
+            // Match Perl: when symbol is missing, use address as the symbol (0x<pc>)
+            out.extend_from_slice(b"0x");
+            out.extend_from_slice(pc.as_bytes());
+        }
         out.push(b'\n');
     }
     out.extend_from_slice(b"---\n");
@@ -205,12 +207,15 @@ fn build_symbolized_output(
 
 /// Full native jeprof --raw flow: GET heap -> parse PCs -> fetch symbols + cmdline -> build output.
 /// If profile is binary or parsing yields no PCs, returns raw body only (no symbol header).
+/// Requesting Accept: text/plain ensures the server returns pprof text format (e.g. "heap profile: ... @ 0x...")
+/// so we can parse PCs and add the symbol header; otherwise some servers return jemalloc heap_v2 and we skip symbolization.
 pub async fn fetch_raw_symbolized(
     client: &Client,
     heap_url: &str,
 ) -> Result<Vec<u8>, String> {
     let body = client
         .get(heap_url)
+        .header("Accept", "text/plain")
         .send()
         .await
         .map_err(|e| format!("http request failed: {}", e))?;
