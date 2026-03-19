@@ -112,20 +112,20 @@ jobs:
           find target/aarch64-unknown-linux-gnu/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
           find target/aarch64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
-      - name: Build armv7 binary (standard)
-        timeout-minutes: 90
-        env:
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
-          CARGO_PROFILE_RELEASE_LTO: "thin"
-          CARGO_BUILD_JOBS: 4
-          CARGO_INCREMENTAL: 0
-        run: |
-          echo "Starting armv7 build at $(date)"
-          make build-armv7-unknown-linux-gnueabihf
-          echo "Finished armv7 build at $(date)"
-          # Clean up intermediate files to save disk space
-          find target/armv7-unknown-linux-gnueabihf/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
-          find target/armv7-unknown-linux-gnueabihf/release/build -type f -name "*.o" -delete 2>/dev/null || true
+      # - name: Build armv7 binary (standard)
+      #   timeout-minutes: 90
+      #   env:
+      #     CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+      #     CARGO_PROFILE_RELEASE_LTO: "thin"
+      #     CARGO_BUILD_JOBS: 4
+      #     CARGO_INCREMENTAL: 0
+      #   run: |
+      #     echo "Starting armv7 build at $(date)"
+      #     make build-armv7-unknown-linux-gnueabihf
+      #     echo "Finished armv7 build at $(date)"
+      #     # Clean up intermediate files to save disk space
+      #     find target/armv7-unknown-linux-gnueabihf/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
+      #     find target/armv7-unknown-linux-gnueabihf/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
       - name: Build and push standard image
         env:
@@ -177,20 +177,20 @@ jobs:
           find target/aarch64-unknown-linux-gnu/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
           find target/aarch64-unknown-linux-gnu/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
-      - name: Build armv7 binary (nextgen)
-        timeout-minutes: 90
-        env:
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
-          CARGO_PROFILE_RELEASE_LTO: "thin"
-          CARGO_BUILD_JOBS: 4
-          CARGO_INCREMENTAL: 0
-        run: |
-          echo "Starting armv7 nextgen build at $(date)"
-          make build-armv7-unknown-linux-gnueabihf-nextgen
-          echo "Finished armv7 nextgen build at $(date)"
-          # Clean up intermediate files to save disk space
-          find target/armv7-unknown-linux-gnueabihf/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
-          find target/armv7-unknown-linux-gnueabihf/release/build -type f -name "*.o" -delete 2>/dev/null || true
+      # - name: Build armv7 binary (nextgen)
+      #   timeout-minutes: 90
+      #   env:
+      #     CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+      #     CARGO_PROFILE_RELEASE_LTO: "thin"
+      #     CARGO_BUILD_JOBS: 4
+      #     CARGO_INCREMENTAL: 0
+      #   run: |
+      #     echo "Starting armv7 nextgen build at $(date)"
+      #     make build-armv7-unknown-linux-gnueabihf-nextgen
+      #     echo "Finished armv7 nextgen build at $(date)"
+      #     # Clean up intermediate files to save disk space
+      #     find target/armv7-unknown-linux-gnueabihf/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
+      #     find target/armv7-unknown-linux-gnueabihf/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
       - name: Check nextgen binaries before building image
         run: |
@@ -211,18 +211,18 @@ jobs:
           else
             echo "  ❌ NOT FOUND"
           fi
-          echo ""
-          echo "armv7 binary:"
-          if [ -f target/armv7-unknown-linux-gnueabihf/release/vector-nextgen ]; then
-            ls -lh target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
-            echo "  ✅ EXISTS"
-          else
-            echo "  ❌ NOT FOUND"
-          fi
+          # echo ""
+          # echo "armv7 binary:"
+          # if [ -f target/armv7-unknown-linux-gnueabihf/release/vector-nextgen ]; then
+          #   ls -lh target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
+          #   echo "  ✅ EXISTS"
+          # else
+          #   echo "  ❌ NOT FOUND"
+          # fi
           echo ""
           if [ -f target/x86_64-unknown-linux-gnu/release/vector-nextgen ] && \
-             [ -f target/aarch64-unknown-linux-gnu/release/vector-nextgen ] && \
-             [ -f target/armv7-unknown-linux-gnueabihf/release/vector-nextgen ]; then
+             [ -f target/aarch64-unknown-linux-gnu/release/vector-nextgen ]; then
+             # [ -f target/armv7-unknown-linux-gnueabihf/release/vector-nextgen ]; then
             echo "✅ All nextgen binaries exist - Makefile should skip rebuild"
           else
             echo "⚠️ Some binaries missing - Makefile will trigger rebuild"
