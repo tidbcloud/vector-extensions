@@ -14,8 +14,19 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-const ORG_ID_KEYS: &[&str] = &["tenant_id", "TenantID", "org_id", "organization_id"];
-const CLUSTER_ID_KEYS: &[&str] = &["cluster_id", "ClusterId", "tidb_cluster_id"];
+const ORG_ID_KEYS: &[&str] = &[
+    "tenant_id",
+    "TenantID",
+    "org_id",
+    "organization_id",
+    "serverless_tenant_id",
+];
+const CLUSTER_ID_KEYS: &[&str] = &[
+    "cluster_id",
+    "ClusterId",
+    "tidb_cluster_id",
+    "serverless_cluster_id",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyspaceRoute {
@@ -212,6 +223,21 @@ mod tests {
             Some(KeyspaceRoute {
                 org_id: "30018".to_string(),
                 cluster_id: "10762701230946915645".to_string(),
+            })
+        );
+
+        let mut serverless_config = HashMap::new();
+        serverless_config.insert("serverless_tenant_id".to_string(), "30018".to_string());
+        serverless_config.insert(
+            "serverless_cluster_id".to_string(),
+            "10155668891296301432".to_string(),
+        );
+
+        assert_eq!(
+            extract_route_from_config(&serverless_config),
+            Some(KeyspaceRoute {
+                org_id: "30018".to_string(),
+                cluster_id: "10155668891296301432".to_string(),
             })
         );
     }
