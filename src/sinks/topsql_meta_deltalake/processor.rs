@@ -12,7 +12,7 @@ use vector_lib::event::Event;
 use vector_lib::sink::StreamSink;
 
 use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
-use crate::common::meta_store::{KeyspaceRoute, MetaStoreResolver};
+use crate::common::keyspace_cluster::{KeyspaceRoute, PdKeyspaceResolver};
 use crate::sources::topsql_v2::upstream::consts::{
     LABEL_DATE, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_KEYSPACE, LABEL_NORMALIZED_PLAN,
     LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_SOURCE_TABLE, LABEL_SQL_DIGEST,
@@ -106,6 +106,7 @@ lazy_static! {
 
 /// When buffer size exceeds this value, events will be flushed
 const EVENT_BUFFER_MAX_SIZE: usize = 1000;
+const ROUTE_RESOLUTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 struct BufferedEvent {
@@ -126,7 +127,7 @@ pub struct TopSQLDeltaLakeSink {
     write_config: WriteConfig,
     max_delay_secs: u64,
     storage_options: Option<HashMap<String, String>>,
-    meta_store_resolver: Option<MetaStoreResolver>,
+    keyspace_route_resolver: Option<PdKeyspaceResolver>,
     writers: Arc<Mutex<HashMap<WriterKey, DeltaLakeWriter>>>,
     tx: Arc<mpsc::Sender<Vec<Vec<Event>>>>,
     // LRU cache for SQL meta deduplication: key -> ()
@@ -147,7 +148,7 @@ impl TopSQLDeltaLakeSink {
         write_config: WriteConfig,
         max_delay_secs: u64,
         storage_options: Option<HashMap<String, String>>,
-        meta_store_resolver: Option<MetaStoreResolver>,
+        keyspace_route_resolver: Option<PdKeyspaceResolver>,
         meta_cache_capacity: usize,
     ) -> Self {
         // Create a channel with capacity 1
@@ -161,7 +162,7 @@ impl TopSQLDeltaLakeSink {
             write_config,
             max_delay_secs,
             storage_options,
-            meta_store_resolver,
+            keyspace_route_resolver,
             writers: Arc::new(Mutex::new(HashMap::new())),
             tx: Arc::clone(&tx),
             seen_keys_sql_meta: Arc::new(Mutex::new(LruCache::new(
@@ -198,7 +199,7 @@ impl TopSQLDeltaLakeSink {
                 write_config: inner_ref.write_config.clone(),
                 max_delay_secs: inner_ref.max_delay_secs,
                 storage_options: inner_ref.storage_options.clone(),
-                meta_store_resolver: inner_ref.meta_store_resolver.clone(),
+                keyspace_route_resolver: inner_ref.keyspace_route_resolver.clone(),
                 writers: Arc::clone(&inner_ref.writers),
                 tx: Arc::clone(&inner_ref.tx),
                 seen_keys_sql_meta: Arc::clone(&inner_ref.seen_keys_sql_meta),
@@ -222,7 +223,7 @@ impl TopSQLDeltaLakeSink {
         write_config: WriteConfig,
         max_delay_secs: u64,
         storage_options: Option<HashMap<String, String>>,
-        meta_store_resolver: Option<MetaStoreResolver>,
+        keyspace_route_resolver: Option<PdKeyspaceResolver>,
         meta_cache_capacity: usize,
     ) -> (Self, mpsc::Receiver<Vec<Vec<Event>>>) {
         // Create a channel with capacity 1
@@ -239,7 +240,7 @@ impl TopSQLDeltaLakeSink {
             write_config,
             max_delay_secs,
             storage_options,
-            meta_store_resolver,
+            keyspace_route_resolver,
             writers: Arc::new(Mutex::new(HashMap::new())),
             tx,
             seen_keys_sql_meta: Arc::new(Mutex::new(LruCache::new(
@@ -259,8 +260,22 @@ impl TopSQLDeltaLakeSink {
     /// Process events from channel and write to Delta Lake
     async fn process_events_loop(&self, mut rx: mpsc::Receiver<Vec<Vec<Event>>>) {
         while let Some(events_vec) = rx.recv().await {
-            if let Err(e) = self.process_events(events_vec).await {
-                error!("Failed to process events: {}", e);
+            let retry_on_failure = self.keyspace_route_resolver.is_some();
+            let mut pending_events = events_vec;
+
+            loop {
+                let retry_snapshot = retry_on_failure.then(|| pending_events.clone());
+                match self.process_events(pending_events).await {
+                    Ok(()) => break,
+                    Err(error) => {
+                        error!("Failed to process events: {}", error);
+                        let Some(events) = retry_snapshot else {
+                            break;
+                        };
+                        tokio::time::sleep(ROUTE_RESOLUTION_RETRY_DELAY).await;
+                        pending_events = events;
+                    }
+                }
             }
         }
     }
@@ -292,47 +307,55 @@ impl TopSQLDeltaLakeSink {
         &self,
         log_event: &vector_lib::event::LogEvent,
         resolved_routes: &mut HashMap<String, Option<KeyspaceRoute>>,
-    ) -> Option<WriterKey> {
-        let table_name = log_event
+    ) -> Result<Option<WriterKey>, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(table_name) = log_event
             .get(LABEL_SOURCE_TABLE)
-            .and_then(|value| value.as_str())?
-            .to_string();
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
+        else {
+            return Ok(None);
+        };
         let route = self
             .resolve_keyspace_route(log_event, resolved_routes)
-            .await;
-        Some(WriterKey {
+            .await?;
+        if self.keyspace_route_resolver.is_some() && route.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(WriterKey {
             table_name: table_name.clone(),
             table_path: self.build_table_path(&table_name, route.as_ref()),
-        })
+        }))
     }
 
     async fn resolve_keyspace_route(
         &self,
         log_event: &vector_lib::event::LogEvent,
         resolved_routes: &mut HashMap<String, Option<KeyspaceRoute>>,
-    ) -> Option<KeyspaceRoute> {
-        let resolver = self.meta_store_resolver.as_ref()?;
-        let keyspace = log_event
+    ) -> Result<Option<KeyspaceRoute>, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(resolver) = self.keyspace_route_resolver.as_ref() else {
+            return Ok(None);
+        };
+        let Some(keyspace) = log_event
             .get(LABEL_KEYSPACE)
-            .and_then(|value| value.as_str())?;
+            .and_then(|value| value.as_str())
+        else {
+            return Ok(None);
+        };
         let keyspace_ref = keyspace.as_ref();
 
         if let Some(route) = resolved_routes.get(keyspace_ref) {
-            return route.clone();
+            return Ok(route.clone());
         }
 
-        let route = match resolver.resolve_keyspace(keyspace_ref).await {
-            Ok(route) => route,
-            Err(error) => {
-                warn!(
-                    "Failed to resolve keyspace {} from meta-store for meta sink, falling back to base_path: {}",
-                    keyspace_ref, error
-                );
-                None
-            }
-        };
+        let route = resolver.resolve_keyspace(keyspace_ref).await?;
         resolved_routes.insert(keyspace_ref.to_string(), route.clone());
-        route
+        if route.is_none() {
+            warn!(
+                "No cluster route found for keyspace {}, skipping TopSQL meta event",
+                keyspace_ref
+            );
+        }
+        Ok(route)
     }
 
     fn build_table_path(&self, table_name: &str, route: Option<&KeyspaceRoute>) -> PathBuf {
@@ -435,7 +458,7 @@ impl TopSQLDeltaLakeSink {
                 if let Event::Log(log_event) = event {
                     let Some(writer_key) = self
                         .resolve_writer_key(&log_event, &mut resolved_routes)
-                        .await
+                        .await?
                     else {
                         continue;
                     };

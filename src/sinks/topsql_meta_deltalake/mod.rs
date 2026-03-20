@@ -27,7 +27,11 @@ mod processor;
 // Import default functions from common module
 use crate::common::deltalake_s3;
 use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
-use crate::common::meta_store::MetaStoreResolver;
+use crate::common::keyspace_cluster::PdKeyspaceResolver;
+
+pub const fn default_enable_keyspace_cluster_mapping() -> bool {
+    false
+}
 
 pub const fn default_max_delay_secs() -> u64 {
     180
@@ -64,8 +68,15 @@ pub struct DeltaLakeConfig {
     #[serde(default = "default_meta_cache_capacity")]
     pub meta_cache_capacity: usize,
 
-    /// Meta-store address used to resolve keyspace to org/cluster path segments
-    pub meta_store_addr: Option<String>,
+    /// Whether to resolve keyspace to org/cluster path segments through PD.
+    #[serde(default = "default_enable_keyspace_cluster_mapping")]
+    pub enable_keyspace_cluster_mapping: bool,
+
+    /// PD address used to resolve keyspace to org/cluster path segments.
+    pub pd_address: Option<String>,
+
+    /// TLS configuration for PD keyspace lookup.
+    pub pd_tls: Option<TlsConfig>,
 
     /// Storage options for cloud storage
     pub storage_options: Option<HashMap<String, String>>,
@@ -113,7 +124,9 @@ impl GenerateConfig for DeltaLakeConfig {
             timeout_secs: default_timeout_secs(),
             max_delay_secs: default_max_delay_secs(),
             meta_cache_capacity: default_meta_cache_capacity(),
-            meta_store_addr: None,
+            enable_keyspace_cluster_mapping: default_enable_keyspace_cluster_mapping(),
+            pd_address: None,
+            pd_tls: None,
             storage_options: None,
             bucket: None,
             options: None,
@@ -233,17 +246,23 @@ impl DeltaLakeConfig {
             info!("No S3 service available - using default storage options only");
         }
 
-        let meta_store_resolver = self
-            .meta_store_addr
-            .as_deref()
-            .map(MetaStoreResolver::new)
-            .transpose()
-            .map_err(|error| {
-                vector::Error::from(format!(
-                    "failed to build meta-store resolver from meta_store_addr: {}",
-                    error
-                ))
+        let keyspace_route_resolver = if self.enable_keyspace_cluster_mapping {
+            let pd_address = self.pd_address.as_deref().ok_or_else(|| {
+                vector::Error::from(
+                    "pd_address is required when enable_keyspace_cluster_mapping is true",
+                )
             })?;
+            Some(
+                PdKeyspaceResolver::new(pd_address, self.pd_tls.clone()).map_err(|error| {
+                    vector::Error::from(format!(
+                        "failed to build PD keyspace resolver from pd_address: {}",
+                        error
+                    ))
+                })?,
+            )
+        } else {
+            None
+        };
 
         let sink = TopSQLDeltaLakeSink::new(
             base_path,
@@ -251,7 +270,7 @@ impl DeltaLakeConfig {
             write_config,
             self.max_delay_secs,
             Some(storage_options),
-            meta_store_resolver,
+            keyspace_route_resolver,
             self.meta_cache_capacity,
         );
 
