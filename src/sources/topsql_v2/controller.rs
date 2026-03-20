@@ -28,6 +28,7 @@ pub struct Controller {
     init_retry_delay: Duration,
     top_n: usize,
     downsampling_interval: u32,
+    enable_tikv_topsql: bool,
     topru: TopRUConfig,
 
     schema_cache: Arc<SchemaCache>,
@@ -51,6 +52,7 @@ impl Controller {
         init_retry_delay: Duration,
         top_n: usize,
         downsampling_interval: u32,
+        enable_tikv_topsql: bool,
         schema_update_interval: Duration,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
@@ -85,6 +87,7 @@ impl Controller {
             init_retry_delay,
             top_n,
             downsampling_interval,
+            enable_tikv_topsql,
             topru,
             schema_cache,
             schema_update_interval,
@@ -126,6 +129,8 @@ impl Controller {
         self.topo_fetcher
             .get_up_components(&mut latest_components)
             .await?;
+        latest_components =
+            Self::filter_topsql_components(latest_components, self.enable_tikv_topsql);
 
         let prev_components = self.components.clone();
         let newcomers = latest_components.difference(&prev_components);
@@ -156,6 +161,20 @@ impl Controller {
         }
 
         Ok(has_change)
+    }
+
+    fn filter_topsql_components(
+        components: HashSet<Component>,
+        enable_tikv_topsql: bool,
+    ) -> HashSet<Component> {
+        if enable_tikv_topsql {
+            return components;
+        }
+
+        components
+            .into_iter()
+            .filter(|component| component.instance_type != InstanceType::TiKV)
+            .collect()
     }
 
     async fn update_schema_manager(&mut self, available_components: &HashSet<Component>) {
@@ -345,5 +364,52 @@ impl Controller {
         self.shutdown_notifier.shutdown();
         self.shutdown_notifier.wait_for_exit().await;
         info!(message = "All TopSQL sources have been shut down.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Controller;
+    use crate::common::topology::{Component, InstanceType};
+    use std::collections::HashSet;
+
+    #[test]
+    fn filter_topsql_components_keeps_tikv_when_enabled() {
+        let components = sample_components();
+        let filtered = Controller::filter_topsql_components(components.clone(), true);
+        assert_eq!(filtered.len(), components.len());
+        assert!(filtered
+            .iter()
+            .any(|c| c.instance_type == InstanceType::TiKV));
+    }
+
+    #[test]
+    fn filter_topsql_components_removes_tikv_when_disabled() {
+        let filtered = Controller::filter_topsql_components(sample_components(), false);
+        assert!(filtered
+            .iter()
+            .all(|c| c.instance_type != InstanceType::TiKV));
+        assert!(filtered
+            .iter()
+            .any(|c| c.instance_type == InstanceType::TiDB));
+    }
+
+    fn sample_components() -> HashSet<Component> {
+        HashSet::from([
+            Component {
+                instance_type: InstanceType::TiDB,
+                host: "tidb.example".to_owned(),
+                primary_port: 4000,
+                secondary_port: 10080,
+                instance_name: Some("tidb-0".to_owned()),
+            },
+            Component {
+                instance_type: InstanceType::TiKV,
+                host: "tikv.example".to_owned(),
+                primary_port: 20160,
+                secondary_port: 20180,
+                instance_name: Some("tikv-0".to_owned()),
+            },
+        ])
     }
 }

@@ -93,6 +93,10 @@ pub struct TopSQLConfig {
     #[serde(default = "default_downsampling_interval")]
     pub downsampling_interval: u32,
 
+    /// Whether to collect TopSQL data from TiKV components.
+    #[serde(default = "default_enable_tikv_topsql")]
+    pub enable_tikv_topsql: bool,
+
     /// TopRU (Resource Unit) collection config. Only applies to TiDB upstream.
     #[serde(default)]
     pub topru: TopRUConfig,
@@ -114,6 +118,10 @@ pub const fn default_downsampling_interval() -> u32 {
     60
 }
 
+pub const fn default_enable_tikv_topsql() -> bool {
+    true
+}
+
 impl GenerateConfig for TopSQLConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
@@ -127,6 +135,7 @@ impl GenerateConfig for TopSQLConfig {
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
             top_n: default_top_n(),
             downsampling_interval: default_downsampling_interval(),
+            enable_tikv_topsql: default_enable_tikv_topsql(),
             topru: TopRUConfig::default(),
         })
         .unwrap()
@@ -149,6 +158,7 @@ impl SourceConfig for TopSQLConfig {
         let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
         let top_n = self.top_n;
         let downsampling_interval = self.downsampling_interval;
+        let enable_tikv_topsql = self.enable_tikv_topsql;
         let topru = self.topru.clone();
         let schema_update_interval = Duration::from_secs(60);
 
@@ -161,6 +171,7 @@ impl SourceConfig for TopSQLConfig {
                 init_retry_delay,
                 top_n,
                 downsampling_interval,
+                enable_tikv_topsql,
                 schema_update_interval,
                 tls,
                 &cx.proxy,

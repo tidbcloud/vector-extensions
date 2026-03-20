@@ -45,6 +45,11 @@ pub struct TopSQLV2Config {
 }
 ```
 
+Notable source-specific options:
+
+- `manager_server_address` + `tidb_namespace`: discover active TiDB instances from manager.
+- `enable_tikv_topsql`: when `false`, only TiDB TopSQL is collected; TiKV TopSQL subscriptions are skipped.
+
 ## Data Flow
 
 Same as TopSQL v1 but with improved reliability and performance.
