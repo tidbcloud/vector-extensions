@@ -14,19 +14,8 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-const ORG_ID_KEYS: &[&str] = &[
-    "tenant_id",
-    "TenantID",
-    "org_id",
-    "organization_id",
-    "serverless_tenant_id",
-];
-const CLUSTER_ID_KEYS: &[&str] = &[
-    "cluster_id",
-    "ClusterId",
-    "tidb_cluster_id",
-    "serverless_cluster_id",
-];
+const ORG_ID_KEYS: &[&str] = &["serverless_tenant_id"];
+const CLUSTER_ID_KEYS: &[&str] = &["serverless_cluster_id"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyspaceRoute {
@@ -210,22 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_route_from_config_supports_expected_aliases() {
-        let mut config = HashMap::new();
-        config.insert("tenant_id".to_string(), "30018".to_string());
-        config.insert(
-            "tidb_cluster_id".to_string(),
-            "10762701230946915645".to_string(),
-        );
-
-        assert_eq!(
-            extract_route_from_config(&config),
-            Some(KeyspaceRoute {
-                org_id: "30018".to_string(),
-                cluster_id: "10762701230946915645".to_string(),
-            })
-        );
-
+    fn extract_route_from_config_uses_serverless_route_keys() {
         let mut serverless_config = HashMap::new();
         serverless_config.insert("serverless_tenant_id".to_string(), "30018".to_string());
         serverless_config.insert(
@@ -240,6 +214,18 @@ mod tests {
                 cluster_id: "10155668891296301432".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn extract_route_from_config_ignores_legacy_route_keys() {
+        let mut legacy_config = HashMap::new();
+        legacy_config.insert("tenant_id".to_string(), "30018".to_string());
+        legacy_config.insert(
+            "tidb_cluster_id".to_string(),
+            "10762701230946915645".to_string(),
+        );
+
+        assert_eq!(extract_route_from_config(&legacy_config), None);
     }
 
     #[tokio::test]
@@ -260,7 +246,7 @@ mod tests {
                             counter.fetch_add(1, Ordering::SeqCst);
                             assert_eq!(request.uri().path(), "/pd/api/v2/keyspaces/test_keyspace");
                             Ok::<_, Infallible>(Response::new(Body::from(
-                                r#"{"config":{"tenant_id":"30018","cluster_id":"10762701230946915645"}}"#,
+                                r#"{"config":{"serverless_tenant_id":"30018","serverless_cluster_id":"10762701230946915645"}}"#,
                             )))
                         }
                     }))
