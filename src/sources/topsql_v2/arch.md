@@ -33,6 +33,7 @@ TopSQL v2 Source
 2. **Improved Error Recovery**: More robust error handling and recovery
 3. **Better Performance**: Optimized data collection and processing
 4. **Next-gen Features**: Support for new TiDB/TiKV features
+5. **Manager-based TiDB Discovery**: In legacy mode, active TiDB instances can be discovered from a manager service via `manager_server_address` and `tidb_namespace`
 
 ## Configuration
 
@@ -44,6 +45,12 @@ pub struct TopSQLV2Config {
     // Additional next-gen specific options
 }
 ```
+
+Legacy mode discovery options:
+
+- `pd_address`: used for PD/store discovery and schema management
+- `manager_server_address`: optional manager endpoint used to fetch active TiDB instances
+- `tidb_namespace`: manager namespace list used when calling `/api/tidb/get_active_tidb`
 
 ## Data Flow
 
