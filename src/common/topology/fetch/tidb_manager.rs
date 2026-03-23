@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, env};
 
 use serde_json::{Map, Value};
 use snafu::{ResultExt, Snafu};
@@ -11,6 +11,10 @@ const GET_ACTIVE_TIDB_PATH: &str = "/api/tidb/get_active_tidb";
 const DEFAULT_TIDB_PRIMARY_PORT: u16 = 4000;
 const DEFAULT_TIDB_STATUS_PORT: u16 = 10080;
 const MAX_RESPONSE_DEPTH: usize = 8;
+const VECTOR_STS_REPLICA_COUNT_ENV: &str = "VECTOR_STS_REPLICA_COUNT";
+const VECTOR_STS_ID_ENV: &str = "VECTOR_STS_ID";
+const FNV1A_64_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV1A_64_PRIME: u64 = 0x100000001b3;
 
 #[derive(Debug, Snafu)]
 pub enum FetchError {
@@ -24,6 +28,8 @@ pub enum FetchError {
     ActiveTiDBJsonFromStr { source: serde_json::Error },
     #[snafu(display("Invalid manager server response: {}", message))]
     InvalidManagerResponse { message: String },
+    #[snafu(display("Invalid manager keyspace shard config: {}", message))]
+    InvalidShardConfig { message: String },
     #[snafu(display("Failed to parse tidb host from manager response: {}", source))]
     ParseTiDBHost { source: utils::ParseError },
 }
@@ -34,6 +40,13 @@ struct ActiveTiDBAddress {
     port: Option<u16>,
     status_port: Option<u16>,
     hostname: Option<String>,
+    keyspace_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct ManagerShardConfig {
+    replica_count: u64,
+    sts_id: u64,
 }
 
 pub struct TiDBManagerTopologyFetcher<'a> {
@@ -59,7 +72,11 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         &self,
         components: &mut HashSet<Component>,
     ) -> Result<(), FetchError> {
-        let active_tidb_addresses = self.fetch_active_tidb_addresses().await?;
+        let shard_config = Self::read_manager_shard_config_from_env()?;
+        let active_tidb_addresses = Self::filter_active_tidb_addresses(
+            self.fetch_active_tidb_addresses().await?,
+            shard_config,
+        )?;
         if !active_tidb_addresses.is_empty() {
             info!(
                 message = "Fetched active TiDB instances from manager server",
@@ -185,6 +202,7 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
                 port: None,
                 status_port: None,
                 hostname: None,
+                keyspace_name: None,
             }]),
             Value::Array(items) => {
                 let mut addresses = Vec::new();
@@ -235,12 +253,15 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         let port = Self::extract_u16_field(obj, &["port", "primary_port"]);
         let status_port = Self::extract_u16_field(obj, &["status_port", "secondary_port"]);
         let hostname = Self::extract_string_field(obj, &["hostname", "pod_name", "instance_name"]);
+        let keyspace_name =
+            Self::extract_string_field(obj, &["keyspace_name", "keyspaceName", "keyspace"]);
 
         Some(ActiveTiDBAddress {
             host,
             port,
             status_port,
             hostname,
+            keyspace_name,
         })
     }
 
@@ -256,6 +277,130 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
                 .and_then(|raw| u16::try_from(raw).ok())
         })
     }
+
+    fn read_manager_shard_config_from_env() -> Result<Option<ManagerShardConfig>, FetchError> {
+        ManagerShardConfig::from_env_values(
+            env::var(VECTOR_STS_REPLICA_COUNT_ENV).ok().as_deref(),
+            env::var(VECTOR_STS_ID_ENV).ok().as_deref(),
+        )
+    }
+
+    fn filter_active_tidb_addresses(
+        active_tidb_addresses: Vec<ActiveTiDBAddress>,
+        shard_config: Option<ManagerShardConfig>,
+    ) -> Result<Vec<ActiveTiDBAddress>, FetchError> {
+        let Some(shard_config) = shard_config else {
+            return Ok(active_tidb_addresses);
+        };
+
+        let total_tidb_count = active_tidb_addresses.len();
+        let mut filtered_tidbs = Vec::new();
+        let mut skipped_missing_keyspace_count = 0usize;
+
+        for active_tidb in active_tidb_addresses {
+            let Some(keyspace_name) = active_tidb
+                .keyspace_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            else {
+                skipped_missing_keyspace_count += 1;
+                warn!(
+                    message = "Skipping manager active TiDB without keyspace_name while keyspace sharding is enabled",
+                    host = active_tidb.host,
+                    port = ?active_tidb.port,
+                    status_port = ?active_tidb.status_port,
+                    hostname = ?active_tidb.hostname,
+                    replica_count = shard_config.replica_count,
+                    sts_id = shard_config.sts_id
+                );
+                continue;
+            };
+
+            let shard = Self::hash_keyspace_name(keyspace_name) % shard_config.replica_count;
+            if shard == shard_config.sts_id {
+                filtered_tidbs.push(active_tidb);
+            }
+        }
+
+        info!(
+            message = "Applied manager keyspace sharding to active TiDB instances",
+            replica_count = shard_config.replica_count,
+            sts_id = shard_config.sts_id,
+            total_tidb_count,
+            selected_tidb_count = filtered_tidbs.len(),
+            skipped_missing_keyspace_count
+        );
+
+        Ok(filtered_tidbs)
+    }
+
+    fn hash_keyspace_name(keyspace_name: &str) -> u64 {
+        let mut hash = FNV1A_64_OFFSET_BASIS;
+        for byte in keyspace_name.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV1A_64_PRIME);
+        }
+        hash
+    }
+}
+
+impl ManagerShardConfig {
+    fn from_env_values(
+        replica_count: Option<&str>,
+        sts_id: Option<&str>,
+    ) -> Result<Option<Self>, FetchError> {
+        let replica_count = replica_count
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let sts_id = sts_id.map(str::trim).filter(|value| !value.is_empty());
+
+        match (replica_count, sts_id) {
+            (None, None) => Ok(None),
+            (Some(_), None) => Err(FetchError::InvalidShardConfig {
+                message: format!(
+                    "{VECTOR_STS_REPLICA_COUNT_ENV} is set but {VECTOR_STS_ID_ENV} is missing"
+                ),
+            }),
+            (None, Some(_)) => Err(FetchError::InvalidShardConfig {
+                message: format!(
+                    "{VECTOR_STS_ID_ENV} is set but {VECTOR_STS_REPLICA_COUNT_ENV} is missing"
+                ),
+            }),
+            (Some(replica_count), Some(sts_id)) => {
+                let replica_count =
+                    Self::parse_u64_env(VECTOR_STS_REPLICA_COUNT_ENV, replica_count)?;
+                let sts_id = Self::parse_u64_env(VECTOR_STS_ID_ENV, sts_id)?;
+
+                if replica_count == 0 {
+                    return Err(FetchError::InvalidShardConfig {
+                        message: format!("{VECTOR_STS_REPLICA_COUNT_ENV} must be greater than 0"),
+                    });
+                }
+
+                if sts_id >= replica_count {
+                    return Err(FetchError::InvalidShardConfig {
+                        message: format!(
+                            "{VECTOR_STS_ID_ENV} ({sts_id}) must be smaller than {VECTOR_STS_REPLICA_COUNT_ENV} ({replica_count})"
+                        ),
+                    });
+                }
+
+                Ok(Some(Self {
+                    replica_count,
+                    sts_id,
+                }))
+            }
+        }
+    }
+
+    fn parse_u64_env(env_name: &str, raw_value: &str) -> Result<u64, FetchError> {
+        raw_value
+            .parse::<u64>()
+            .map_err(|_| FetchError::InvalidShardConfig {
+                message: format!("{env_name} must be a non-negative integer, got {raw_value}"),
+            })
+    }
 }
 
 #[cfg(test)]
@@ -265,8 +410,8 @@ mod tests {
     #[test]
     fn parse_response_new_schema() {
         let bytes = br#"[
-            {"host":"10.0.0.1","port":4000,"status_port":10080,"hostname":"tidb-0"},
-            {"host":"10.0.0.2","port":4000,"status_port":10080,"hostname":"tidb-1"}
+            {"host":"10.0.0.1","port":4000,"status_port":10080,"hostname":"tidb-0","keyspace_name":"tenant-a"},
+            {"host":"10.0.0.2","port":4000,"status_port":10080,"hostname":"tidb-1","keyspace_name":"tenant-b"}
         ]"#;
         let addresses =
             TiDBManagerTopologyFetcher::parse_active_tidb_addresses_response(bytes).unwrap();
@@ -279,15 +424,30 @@ mod tests {
                     port: Some(4000),
                     status_port: Some(10080),
                     hostname: Some("tidb-0".to_owned()),
+                    keyspace_name: Some("tenant-a".to_owned()),
                 },
                 ActiveTiDBAddress {
                     host: "10.0.0.2".to_owned(),
                     port: Some(4000),
                     status_port: Some(10080),
                     hostname: Some("tidb-1".to_owned()),
+                    keyspace_name: Some("tenant-b".to_owned()),
                 }
             ]
         );
+    }
+
+    #[test]
+    fn parse_response_supports_keyspace_aliases() {
+        let bytes = br#"[
+            {"host":"10.0.0.1","keyspace":"tenant-a"},
+            {"host":"10.0.0.2","keyspaceName":"tenant-b"}
+        ]"#;
+        let addresses =
+            TiDBManagerTopologyFetcher::parse_active_tidb_addresses_response(bytes).unwrap();
+
+        assert_eq!(addresses[0].keyspace_name.as_deref(), Some("tenant-a"));
+        assert_eq!(addresses[1].keyspace_name.as_deref(), Some("tenant-b"));
     }
 
     #[test]
@@ -368,6 +528,99 @@ mod tests {
         assert_eq!(
             normalized.as_deref(),
             Some("super-vip-tidb-pool,canary-super-vip-tidb-pool")
+        );
+    }
+
+    #[test]
+    fn manager_shard_config_is_disabled_when_envs_are_missing() {
+        assert_eq!(
+            ManagerShardConfig::from_env_values(None, None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn manager_shard_config_requires_both_envs() {
+        let err = ManagerShardConfig::from_env_values(Some("3"), None)
+            .expect_err("expected missing sts id to fail");
+        assert!(matches!(err, FetchError::InvalidShardConfig { .. }));
+
+        let err = ManagerShardConfig::from_env_values(None, Some("1"))
+            .expect_err("expected missing replica count to fail");
+        assert!(matches!(err, FetchError::InvalidShardConfig { .. }));
+    }
+
+    #[test]
+    fn manager_shard_config_validates_values() {
+        let err = ManagerShardConfig::from_env_values(Some("0"), Some("0"))
+            .expect_err("expected zero replica count to fail");
+        assert!(matches!(err, FetchError::InvalidShardConfig { .. }));
+
+        let err = ManagerShardConfig::from_env_values(Some("2"), Some("2"))
+            .expect_err("expected sts id overflow to fail");
+        assert!(matches!(err, FetchError::InvalidShardConfig { .. }));
+
+        let err = ManagerShardConfig::from_env_values(Some("abc"), Some("1"))
+            .expect_err("expected invalid replica count to fail");
+        assert!(matches!(err, FetchError::InvalidShardConfig { .. }));
+    }
+
+    #[test]
+    fn hash_keyspace_name_is_stable() {
+        assert_eq!(
+            TiDBManagerTopologyFetcher::hash_keyspace_name("tenant-a"),
+            14046587775414411003
+        );
+        assert_eq!(
+            TiDBManagerTopologyFetcher::hash_keyspace_name("tenant-b"),
+            14046588874926039214
+        );
+    }
+
+    #[test]
+    fn filter_active_tidb_addresses_by_keyspace_shard() {
+        let addresses = vec![
+            ActiveTiDBAddress {
+                host: "10.0.0.1".to_owned(),
+                port: Some(4000),
+                status_port: Some(10080),
+                hostname: Some("tidb-0".to_owned()),
+                keyspace_name: Some("tenant-a".to_owned()),
+            },
+            ActiveTiDBAddress {
+                host: "10.0.0.2".to_owned(),
+                port: Some(4000),
+                status_port: Some(10080),
+                hostname: Some("tidb-1".to_owned()),
+                keyspace_name: Some("tenant-b".to_owned()),
+            },
+            ActiveTiDBAddress {
+                host: "10.0.0.3".to_owned(),
+                port: Some(4000),
+                status_port: Some(10080),
+                hostname: Some("tidb-2".to_owned()),
+                keyspace_name: None,
+            },
+        ];
+
+        let filtered = TiDBManagerTopologyFetcher::filter_active_tidb_addresses(
+            addresses,
+            Some(ManagerShardConfig {
+                replica_count: 4,
+                sts_id: 2,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            filtered,
+            vec![ActiveTiDBAddress {
+                host: "10.0.0.2".to_owned(),
+                port: Some(4000),
+                status_port: Some(10080),
+                hostname: Some("tidb-1".to_owned()),
+                keyspace_name: Some("tenant-b".to_owned()),
+            }]
         );
     }
 }
