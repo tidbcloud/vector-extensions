@@ -51,6 +51,7 @@ Legacy mode discovery options:
 - `pd_address`: used for PD/store discovery and schema management
 - `manager_server_address`: optional manager endpoint used to fetch active TiDB instances
 - `tidb_namespace`: manager namespace list used when calling `/api/tidb/get_active_tidb`
+- `enable_tikv_topsql`: whether to collect `tikv_topsql` and `tikv_topregion`; defaults to `true`
 
 ## Data Flow
 
