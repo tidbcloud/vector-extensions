@@ -1,5 +1,6 @@
 use std::{collections::HashSet, env};
 
+use hyper::body::HttpBody;
 use serde_json::{Map, Value};
 use snafu::{ResultExt, Snafu};
 use vector::http::HttpClient;
@@ -11,6 +12,7 @@ const GET_ACTIVE_TIDB_PATH: &str = "/api/tidb/get_active_tidb";
 const DEFAULT_TIDB_PRIMARY_PORT: u16 = 4000;
 const DEFAULT_TIDB_STATUS_PORT: u16 = 10080;
 const MAX_RESPONSE_DEPTH: usize = 8;
+const MAX_MANAGER_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const VECTOR_STS_REPLICA_COUNT_ENV: &str = "VECTOR_STS_REPLICA_COUNT";
 const VECTOR_STS_ID_ENV: &str = "VECTOR_STS_ID";
 const FNV1A_64_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
@@ -24,6 +26,8 @@ pub enum FetchError {
     GetActiveTiDBs { source: vector::http::HttpError },
     #[snafu(display("Failed to read active tidb response bytes: {}", source))]
     GetActiveTiDBsBytes { source: hyper::Error },
+    #[snafu(display("Manager active tidb response exceeds limit of {} bytes", limit_bytes))]
+    ActiveTiDBResponseTooLarge { limit_bytes: usize },
     #[snafu(display("Failed to parse active tidb response JSON text: {}", source))]
     ActiveTiDBJsonFromStr { source: serde_json::Error },
     #[snafu(display("Invalid manager server response: {}", message))]
@@ -77,14 +81,23 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
             self.fetch_active_tidb_addresses().await?,
             shard_config,
         )?;
-        if !active_tidb_addresses.is_empty() {
+        if active_tidb_addresses.is_empty() {
             info!(
-                message = "Fetched active TiDB instances from manager server",
+                message = "No active TiDB instances selected from manager server",
                 manager_server_address = self.manager_server_address,
                 tidb_namespace = ?self.tidb_namespace,
-                tidb_count = active_tidb_addresses.len()
+                tidb_count = 0,
+                shard_config = ?shard_config
             );
+            return Ok(());
         }
+
+        info!(
+            message = "Fetched active TiDB instances from manager server",
+            manager_server_address = self.manager_server_address,
+            tidb_namespace = ?self.tidb_namespace,
+            tidb_count = active_tidb_addresses.len()
+        );
 
         for active_tidb in active_tidb_addresses {
             let (host, primary_port) =
@@ -117,9 +130,7 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
             .send(req)
             .await
             .context(GetActiveTiDBsSnafu)?;
-        let bytes = hyper::body::to_bytes(res.into_body())
-            .await
-            .context(GetActiveTiDBsBytesSnafu)?;
+        let bytes = Self::read_response_body_with_limit(res.into_body()).await?;
 
         Self::parse_active_tidb_addresses_response(&bytes)
     }
@@ -343,6 +354,31 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         }
         hash
     }
+
+    async fn read_response_body_with_limit(mut body: hyper::Body) -> Result<Vec<u8>, FetchError> {
+        if body
+            .size_hint()
+            .upper()
+            .is_some_and(|upper| upper > MAX_MANAGER_RESPONSE_BYTES as u64)
+        {
+            return Err(FetchError::ActiveTiDBResponseTooLarge {
+                limit_bytes: MAX_MANAGER_RESPONSE_BYTES,
+            });
+        }
+
+        let mut bytes = Vec::new();
+        while let Some(chunk) = body.data().await {
+            let chunk = chunk.context(GetActiveTiDBsBytesSnafu)?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_MANAGER_RESPONSE_BYTES {
+                return Err(FetchError::ActiveTiDBResponseTooLarge {
+                    limit_bytes: MAX_MANAGER_RESPONSE_BYTES,
+                });
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+
+        Ok(bytes)
+    }
 }
 
 impl ManagerShardConfig {
@@ -405,6 +441,8 @@ impl ManagerShardConfig {
 
 #[cfg(test)]
 mod tests {
+    use hyper::Body;
+
     use super::*;
 
     #[test]
@@ -622,5 +660,15 @@ mod tests {
                 keyspace_name: Some("tenant-b".to_owned()),
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn read_response_body_with_limit_rejects_oversized_response() {
+        let body = Body::from(vec![b'x'; MAX_MANAGER_RESPONSE_BYTES + 1]);
+        let err = TiDBManagerTopologyFetcher::read_response_body_with_limit(body)
+            .await
+            .expect_err("expected oversized response to fail");
+
+        assert!(matches!(err, FetchError::ActiveTiDBResponseTooLarge { .. }));
     }
 }

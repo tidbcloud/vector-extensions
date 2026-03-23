@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
+use lru::LruCache;
 use reqwest::{Certificate, Client, Identity, StatusCode};
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -13,6 +15,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const DEFAULT_KEYSPACE_ROUTE_CACHE_CAPACITY: usize = 10_000;
 
 const ORG_ID_KEYS: &[&str] = &["serverless_tenant_id"];
 const CLUSTER_ID_KEYS: &[&str] = &["serverless_cluster_id"];
@@ -27,7 +30,7 @@ pub struct KeyspaceRoute {
 pub struct PdKeyspaceResolver {
     base_url: String,
     client: Client,
-    cache: Arc<Mutex<HashMap<String, KeyspaceRoute>>>,
+    cache: Arc<Mutex<LruCache<String, KeyspaceRoute>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,10 +49,26 @@ impl PdKeyspaceResolver {
         pd_tls: Option<&TlsConfig>,
         client: Client,
     ) -> Self {
+        Self::new_with_client_and_capacity(
+            pd_address,
+            pd_tls,
+            client,
+            DEFAULT_KEYSPACE_ROUTE_CACHE_CAPACITY,
+        )
+    }
+
+    fn new_with_client_and_capacity(
+        pd_address: impl Into<String>,
+        pd_tls: Option<&TlsConfig>,
+        client: Client,
+        cache_capacity: usize,
+    ) -> Self {
         Self {
             base_url: normalize_pd_address(&pd_address.into(), pd_tls.is_some()),
             client,
-            cache: Arc::new(Mutex::new(HashMap::new())),
+            cache: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(cache_capacity.max(1)).unwrap(),
+            ))),
         }
     }
 
@@ -61,9 +80,11 @@ impl PdKeyspaceResolver {
             return Ok(None);
         }
 
-        if let Some(cached) = self.cache.lock().await.get(keyspace_name).cloned() {
+        let mut cache = self.cache.lock().await;
+        if let Some(cached) = cache.get(keyspace_name).cloned() {
             return Ok(Some(cached));
         }
+        drop(cache);
 
         let encoded_keyspace = byte_serialize(keyspace_name.as_bytes()).collect::<String>();
         let response = self
@@ -98,8 +119,10 @@ impl PdKeyspaceResolver {
             self.cache
                 .lock()
                 .await
-                .insert(keyspace_name.to_string(), route);
+                .put(keyspace_name.to_string(), route);
         }
+        // Intentionally do not cache misses or transient failures so a later retry can recover
+        // once PD metadata becomes visible.
 
         Ok(route)
     }
@@ -325,6 +348,44 @@ mod tests {
         let route = resolver.resolve_keyspace("missing_keyspace").await.unwrap();
 
         assert_eq!(route, None);
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn resolve_keyspace_cache_is_bounded() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = Server::from_tcp(listener)
+            .unwrap()
+            .serve(make_service_fn(move |_| async move {
+                Ok::<_, Infallible>(service_fn(move |request: Request<Body>| async move {
+                    let keyspace_name = request
+                        .uri()
+                        .path()
+                        .trim_start_matches("/pd/api/v2/keyspaces/");
+                    let body = format!(
+                        r#"{{"config":{{"serverless_tenant_id":"30018","serverless_cluster_id":"{}"}}}}"#,
+                        keyspace_name
+                    );
+                    Ok::<_, Infallible>(Response::new(Body::from(body)))
+                }))
+            }));
+        let server_handle = tokio::spawn(server);
+
+        let client = Client::builder().no_proxy().build().unwrap();
+        let resolver = PdKeyspaceResolver::new_with_client_and_capacity(
+            format!("http://{}", address),
+            None,
+            client,
+            2,
+        );
+
+        let _ = resolver.resolve_keyspace("ks-1").await.unwrap();
+        let _ = resolver.resolve_keyspace("ks-2").await.unwrap();
+        let _ = resolver.resolve_keyspace("ks-3").await.unwrap();
+
+        assert_eq!(resolver.cache.lock().await.len(), 2);
 
         server_handle.abort();
     }

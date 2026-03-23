@@ -75,7 +75,7 @@ pub struct TopologyFetcher {
 Legacy manager-based TiDB discovery also supports keyspace-aware sharding:
 
 - `manager_server_address`: fetch active TiDB instances from manager instead of etcd
-- `tidb_namespace`: namespace list sent to `/api/tidb/get_active_tidb?namespace=...`
+- `tidb_namespace`: namespace list sent to `/api/tidb/get_active_tidb?namespace=...`; required when `manager_server_address` is set
 - `VECTOR_STS_REPLICA_COUNT`: total number of Vector StatefulSet replicas
 - `VECTOR_STS_ID`: current Vector StatefulSet ordinal
 

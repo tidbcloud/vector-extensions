@@ -77,6 +77,8 @@ impl LegacyTopologyFetcher {
         let manager_server_address = manager_server_address
             .map(Self::polish_manager_server_address)
             .transpose()?;
+        let tidb_namespace =
+            Self::normalize_tidb_namespace(manager_server_address.as_deref(), tidb_namespace)?;
         let http_client = Self::build_http_client(tls_config.as_ref(), proxy_config)?;
         let etcd_client = Self::build_etcd_client(&pd_address, &tls_config).await?;
 
@@ -135,6 +137,33 @@ impl LegacyTopologyFetcher {
             address.pop();
         }
         Ok(address)
+    }
+
+    fn normalize_tidb_namespace(
+        manager_server_address: Option<&str>,
+        tidb_namespace: Option<String>,
+    ) -> Result<Option<String>, FetchError> {
+        let tidb_namespace = tidb_namespace.and_then(|namespaces| {
+            let normalized = namespaces
+                .split(',')
+                .map(str::trim)
+                .filter(|namespace| !namespace.is_empty())
+                .collect::<Vec<_>>();
+            if normalized.is_empty() {
+                None
+            } else {
+                Some(normalized.join(","))
+            }
+        });
+
+        if manager_server_address.is_some() && tidb_namespace.is_none() {
+            return Err(FetchError::ConfigurationError {
+                message: "tidb_namespace is required when manager_server_address is configured"
+                    .to_string(),
+            });
+        }
+
+        Ok(tidb_namespace)
     }
 
     fn polish_manager_server_address(mut address: String) -> Result<String, FetchError> {
@@ -356,3 +385,34 @@ impl TopologyFetcher {
 //         println!("{:?}", components);
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::LegacyTopologyFetcher;
+
+    #[test]
+    fn normalize_tidb_namespace_requires_value_when_manager_is_configured() {
+        let err =
+            LegacyTopologyFetcher::normalize_tidb_namespace(Some("http://manager:8080"), None)
+                .expect_err("expected missing namespace to fail");
+
+        assert!(matches!(err, super::FetchError::ConfigurationError { .. }));
+    }
+
+    #[test]
+    fn normalize_tidb_namespace_trims_and_joins_values() {
+        let normalized = LegacyTopologyFetcher::normalize_tidb_namespace(
+            Some("http://manager:8080"),
+            Some(" ns-a, ns-b , ".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(normalized.as_deref(), Some("ns-a,ns-b"));
+    }
+
+    #[test]
+    fn normalize_tidb_namespace_allows_missing_value_without_manager() {
+        let normalized = LegacyTopologyFetcher::normalize_tidb_namespace(None, None).unwrap();
+        assert_eq!(normalized, None);
+    }
+}
