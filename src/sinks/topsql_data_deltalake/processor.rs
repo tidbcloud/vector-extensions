@@ -519,24 +519,23 @@ impl TopSQLDeltaLakeSink {
     }
 
     fn build_table_path(&self, table_name: &str, route: Option<&KeyspaceRoute>) -> PathBuf {
+        let (table_type, table_instance) = Self::table_partition_values(table_name);
+
         let mut segments = Vec::new();
         if let Some(route) = route {
             segments.push(format!("org={}", route.org_id));
             segments.push(format!("cluster={}", route.cluster_id));
         }
-        segments.extend(Self::table_partition_segments(table_name));
+        segments.push(format!("type=topsql_{}", table_type));
+        segments.push(format!("instance={}", table_instance));
 
         let segment_refs: Vec<&str> = segments.iter().map(|segment| segment.as_str()).collect();
         Self::join_path(&self.base_path, &segment_refs)
     }
 
-    fn table_partition_segments(table_name: &str) -> Vec<String> {
+    fn table_partition_values(table_name: &str) -> (&str, &str) {
         if table_name == SOURCE_TABLE_TOPRU {
-            vec![
-                "type=topsql".to_string(),
-                "component=topru".to_string(),
-                "instance=default".to_string(),
-            ]
+            ("topru", "default")
         } else {
             match table_name
                 .strip_prefix("topsql_")
@@ -545,20 +544,14 @@ impl TopSQLDeltaLakeSink {
                 Some((table_type, table_instance))
                     if !table_type.is_empty() && !table_instance.is_empty() =>
                 {
-                    vec![
-                        format!("type=topsql_{}", table_type),
-                        format!("instance={}", table_instance),
-                    ]
+                    (table_type, table_instance)
                 }
                 _ => {
                     error!(
                         "Unexpected table_name format (expected `topsql_{{type}}_{{instance}}` or `topsql_topru`): {}",
                         table_name
                     );
-                    vec![
-                        "type=topsql_unknown".to_string(),
-                        "instance=unknown".to_string(),
-                    ]
+                    ("unknown", "unknown")
                 }
             }
         }
@@ -784,37 +777,7 @@ mod tests {
 
         assert_eq!(
             table_path,
-            PathBuf::from("/tmp/deltalake/type=topsql/component=topru/instance=default")
-        );
-    }
-
-    #[test]
-    fn test_build_topru_table_path_with_meta_route_uses_component_partition() {
-        let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
-            PathBuf::from("s3://o11y-prod-shared-us-west-2-premium/deltalake"),
-            vec![],
-            WriteConfig {
-                batch_size: 1,
-                timeout_secs: 0,
-            },
-            180,
-            None,
-            None,
-        );
-
-        let table_path = sink.build_table_path(
-            "topsql_topru",
-            Some(&KeyspaceRoute {
-                org_id: "1369847559692509642".to_string(),
-                cluster_id: "10110362358366286743".to_string(),
-            }),
-        );
-
-        assert_eq!(
-            table_path,
-            PathBuf::from(
-                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=1369847559692509642/cluster=10110362358366286743/type=topsql/component=topru/instance=default"
-            )
+            PathBuf::from("/tmp/deltalake/type=topsql_topru/instance=default")
         );
     }
 

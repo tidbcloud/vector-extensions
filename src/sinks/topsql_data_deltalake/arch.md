@@ -57,7 +57,6 @@ pub struct TopSQLDataDeltaLakeConfig {
 - **Time Partitioning**: Partition by execution time
 - **Schema Optimization**: Optimized schema for TopSQL data
 - **Keyspace-based Routing**: Optional PD keyspace lookup can prepend `org=<id>/cluster=<id>` path segments before the table layout, which is especially useful for `topru` data written to shared S3 prefixes
-- **TopRU Path Layout**: `topsql_topru` is written under `type=topsql/component=topru/instance=default` so shared prefixes can keep a stable `type=topsql` partition while separating the TopRU payload by component
 
 ## Dependencies
 
