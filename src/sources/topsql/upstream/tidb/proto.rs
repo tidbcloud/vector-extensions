@@ -24,9 +24,7 @@ impl ByteSizeOf for RespOneof {
             RespOneof::PlanMeta(plan_meta) => {
                 plan_meta.plan_digest.len() + plan_meta.normalized_plan.len()
             }
-            RespOneof::TopRuRecords(top_ru_records) => {
-                top_ru_records.records.size_of()
-            }
+            RespOneof::RuRecord(ru_record) => ru_record.size_of(),
         }
     }
 }

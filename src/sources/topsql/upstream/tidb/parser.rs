@@ -37,7 +37,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             }
             Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
             Some(RespOneof::PlanMeta(plan_meta)) => Self::parse_tidb_plan_meta(plan_meta),
-            Some(RespOneof::TopRuRecords(_)) => vec![], // TODO: implement TopRURecords parsing
+            Some(RespOneof::RuRecord(_)) => vec![], // TODO: implement TopRU record parsing
             None => vec![],
         }
     }

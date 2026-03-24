@@ -41,10 +41,16 @@ fn address_sub_one(hex_addr: &str) -> Option<String> {
     Some(format!("{:0width$x}", r, width = ADDRESS_LENGTH))
 }
 
-/// Parse pprof heap profile text format and collect unique PCs (call sites).
-/// Lines: optional % commands, then header "heap profile: ...", then
-///   "\s*(\d+):\s*(\d+)\s*\[\s*(\d+):\s*(\d+)\]\s*@\s*(.*)" with addresses after @.
-/// FixCallerAddresses: subtract 1 from each address except the first.
+/// Parse pprof heap text format and collect unique PCs (call sites).
+///
+/// Supports both:
+/// 1) Heap profile entries:
+///    "\s*(\d+):\s*(\d+)\s*\[\s*(\d+):\s*(\d+)\]\s*@\s*(addr1 addr2 ...)"
+/// 2) Remote threaded heap v2 ("heap_v2/<rate>"):
+///    - first section header: "heap_v2/<rate>"
+///    - stack is provided on separate lines starting with "@ addr1 addr2 ..."
+///
+/// FixCallerAddresses (jeprof): subtract 1 from each address except the first.
 /// Returns sorted unique PCs as 0-padded hex strings (no 0x prefix, for consistent ordering).
 fn parse_heap_profile_for_pcs(body: &[u8]) -> Option<Vec<String>> {
     let text = str::from_utf8(body).ok()?;
@@ -60,7 +66,10 @@ fn parse_heap_profile_for_pcs(body: &[u8]) -> Option<Vec<String>> {
             continue;
         }
         if !past_header {
-            if line.starts_with("heap profile:") || line.starts_with("heap ") {
+            if line.starts_with("heap profile:")
+                || line.starts_with("heap ")
+                || line.starts_with("heap_v2/")
+            {
                 past_header = true;
             }
             continue;
@@ -68,25 +77,52 @@ fn parse_heap_profile_for_pcs(body: &[u8]) -> Option<Vec<String>> {
         if line.starts_with("MAPPED_LIBRARIES:") || line.starts_with("--- Memory map:") {
             break;
         }
-        // Match: optional whitespace, count1: bytes1 [ count2: bytes2 ] @ addr1 addr2 ...
+
         let rest = line.trim_start();
-        let at_pos = rest.find(" @ ")?;
-        let stack_part = rest.get(at_pos + 3..)?.trim();
-        if stack_part.is_empty() {
+
+        // heap_v2 threaded format:
+        // "@ addr1 addr2 ..." (stack for the following t*: lines)
+        if rest.starts_with('@') {
+            let stack_part = rest.trim_start_matches('@').trim();
+            if stack_part.is_empty() {
+                continue;
+            }
+            let addrs: Vec<&str> = stack_part.split_whitespace().collect();
+            if addrs.is_empty() {
+                continue;
+            }
+            for (i, addr) in addrs.iter().enumerate() {
+                let extended = hex_extend(addr)?;
+                let fixed = if i == 0 {
+                    extended
+                } else {
+                    address_sub_one(&extended).unwrap_or(extended)
+                };
+                pcs.insert(fixed);
+            }
             continue;
         }
-        let addrs: Vec<&str> = stack_part.split_whitespace().collect();
-        if addrs.is_empty() {
-            continue;
-        }
-        for (i, addr) in addrs.iter().enumerate() {
-            let extended = hex_extend(addr)?;
-            let fixed = if i == 0 {
-                extended
-            } else {
-                address_sub_one(&extended).unwrap_or(extended)
-            };
-            pcs.insert(fixed);
+
+        // heap profile entry format:
+        // optional whitespace, count1: bytes1 [ count2: bytes2 ] @ addr1 addr2 ...
+        if let Some(at_pos) = rest.find(" @ ") {
+            let stack_part = rest.get(at_pos + 3..)?.trim();
+            if stack_part.is_empty() {
+                continue;
+            }
+            let addrs: Vec<&str> = stack_part.split_whitespace().collect();
+            if addrs.is_empty() {
+                continue;
+            }
+            for (i, addr) in addrs.iter().enumerate() {
+                let extended = hex_extend(addr)?;
+                let fixed = if i == 0 {
+                    extended
+                } else {
+                    address_sub_one(&extended).unwrap_or(extended)
+                };
+                pcs.insert(fixed);
+            }
         }
     }
 
@@ -187,14 +223,16 @@ fn build_symbolized_output(
     out.extend_from_slice(program_name.as_bytes());
     out.push(b'\n');
     for pc in pcs {
-        let sym = symbol_map
-            .get(pc)
-            .map(|s| s.as_str())
-            .unwrap_or("0x");
         out.extend_from_slice(b"0x");
         out.extend_from_slice(pc.as_bytes());
         out.push(b' ');
-        out.extend_from_slice(sym.as_bytes());
+        if let Some(s) = symbol_map.get(pc) {
+            out.extend_from_slice(s.as_bytes());
+        } else {
+            // Match Perl: when symbol is missing, use address as the symbol (0x<pc>)
+            out.extend_from_slice(b"0x");
+            out.extend_from_slice(pc.as_bytes());
+        }
         out.push(b'\n');
     }
     out.extend_from_slice(b"---\n");
@@ -205,12 +243,15 @@ fn build_symbolized_output(
 
 /// Full native jeprof --raw flow: GET heap -> parse PCs -> fetch symbols + cmdline -> build output.
 /// If profile is binary or parsing yields no PCs, returns raw body only (no symbol header).
+/// Requesting Accept: text/plain ensures the server returns pprof text format (e.g. "heap profile: ... @ 0x...")
+/// so we can parse PCs and add the symbol header; otherwise some servers return jemalloc heap_v2 and we skip symbolization.
 pub async fn fetch_raw_symbolized(
     client: &Client,
     heap_url: &str,
 ) -> Result<Vec<u8>, String> {
     let body = client
         .get(heap_url)
+        .header("Accept", "text/plain")
         .send()
         .await
         .map_err(|e| format!("http request failed: {}", e))?;
@@ -273,6 +314,20 @@ mod tests {
         let pcs = parse_heap_profile_for_pcs(body).unwrap();
         assert!(!pcs.is_empty());
         assert!(pcs.iter().any(|s| s.contains("12345") || s.ends_with("12345")));
+    }
+
+    #[test]
+    fn test_parse_heap_v2_at_lines() {
+        let body = b"heap_v2/524288
+  t*: 1: 2 [ 0: 0]
+@ 0x12345 0x67890 0xabc
+";
+        let pcs = parse_heap_profile_for_pcs(body).unwrap();
+        assert!(pcs.len() >= 2);
+        // First addr is not FixCallerAddresses-adjusted.
+        assert!(pcs.iter().any(|s| s.ends_with("12345")));
+        // Second+ are adjusted (subtract 1), so 0x67890 -> 0x6788f
+        assert!(pcs.iter().any(|s| s.ends_with("6788f")));
     }
 
     #[test]
