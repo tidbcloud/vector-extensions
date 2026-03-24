@@ -249,6 +249,8 @@ lazy_static! {
 }
 
 const ROUTE_RESOLUTION_RETRY_DELAY: Duration = Duration::from_secs(5);
+const MAX_ROUTE_RESOLUTION_RETRIES: usize = 5;
+const MAX_ROUTE_RESOLUTION_RETRY_DELAY: Duration = Duration::from_secs(60);
 
 /// Delta Lake sink processor
 #[derive(Clone)]
@@ -337,17 +339,33 @@ impl TopSQLDeltaLakeSink {
         while let Some(events_vec) = rx.recv().await {
             let retry_on_failure = self.keyspace_route_resolver.is_some();
             let mut pending_events = events_vec;
+            let mut retry_count = 0usize;
 
             loop {
-                let retry_snapshot = retry_on_failure.then(|| pending_events.clone());
+                let can_retry = retry_on_failure && retry_count < MAX_ROUTE_RESOLUTION_RETRIES;
+                let retry_snapshot = can_retry.then(|| pending_events.clone());
                 match self.process_events(pending_events).await {
                     Ok(()) => break,
                     Err(error) => {
                         error!("Failed to process events: {}", error);
                         let Some(events) = retry_snapshot else {
+                            if retry_on_failure {
+                                error!(
+                                    "Dropping event batch after {} route-resolution retries",
+                                    retry_count
+                                );
+                            }
                             break;
                         };
-                        tokio::time::sleep(ROUTE_RESOLUTION_RETRY_DELAY).await;
+                        retry_count += 1;
+                        let retry_delay = route_resolution_retry_delay(retry_count);
+                        warn!(
+                            "Retrying event batch after route-resolution failure (attempt {}/{}, delay {:?})",
+                            retry_count,
+                            MAX_ROUTE_RESOLUTION_RETRIES,
+                            retry_delay
+                        );
+                        tokio::time::sleep(retry_delay).await;
                         pending_events = events;
                     }
                 }
@@ -579,6 +597,15 @@ impl TopSQLDeltaLakeSink {
     }
 }
 
+fn route_resolution_retry_delay(retry_count: usize) -> Duration {
+    let multiplier = 1u64 << retry_count.saturating_sub(1).min(6);
+    let delay_secs = ROUTE_RESOLUTION_RETRY_DELAY
+        .as_secs()
+        .saturating_mul(multiplier)
+        .min(MAX_ROUTE_RESOLUTION_RETRY_DELAY.as_secs());
+    Duration::from_secs(delay_secs)
+}
+
 #[async_trait::async_trait]
 impl StreamSink<Event> for TopSQLDeltaLakeSink {
     async fn run(self: Box<Self>, input: BoxStream<'_, Event>) -> Result<(), ()> {
@@ -696,6 +723,14 @@ mod tests {
             None,
             None,
         )
+    }
+
+    #[test]
+    fn test_route_resolution_retry_delay_caps_at_maximum() {
+        assert_eq!(route_resolution_retry_delay(1), Duration::from_secs(5));
+        assert_eq!(route_resolution_retry_delay(2), Duration::from_secs(10));
+        assert_eq!(route_resolution_retry_delay(5), Duration::from_secs(60));
+        assert_eq!(route_resolution_retry_delay(8), Duration::from_secs(60));
     }
 
     #[test]

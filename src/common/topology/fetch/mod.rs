@@ -22,6 +22,20 @@ use vector::config::ProxyConfig;
 use vector::http::HttpClient;
 use vector::tls::{MaybeTlsSettings, TlsConfig};
 
+pub(super) fn normalize_namespace_list(namespaces: Option<&str>) -> Option<String> {
+    let namespaces = namespaces?;
+    let normalized = namespaces
+        .split(',')
+        .map(str::trim)
+        .filter(|namespace| !namespace.is_empty())
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.join(","))
+    }
+}
+
 #[derive(Debug, Snafu)]
 pub enum FetchError {
     #[snafu(display("Failed to build TLS settings: {}", source))]
@@ -155,18 +169,7 @@ impl LegacyTopologyFetcher {
         manager_server_address: Option<&str>,
         tidb_namespace: Option<String>,
     ) -> Result<Option<String>, FetchError> {
-        let tidb_namespace = tidb_namespace.and_then(|namespaces| {
-            let normalized = namespaces
-                .split(',')
-                .map(str::trim)
-                .filter(|namespace| !namespace.is_empty())
-                .collect::<Vec<_>>();
-            if normalized.is_empty() {
-                None
-            } else {
-                Some(normalized.join(","))
-            }
-        });
+        let tidb_namespace = normalize_namespace_list(tidb_namespace.as_deref());
 
         if manager_server_address.is_some() && tidb_namespace.is_none() {
             return Err(FetchError::ConfigurationError {

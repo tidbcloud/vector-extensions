@@ -7,6 +7,7 @@ use std::time::Duration;
 use lru::LruCache;
 use reqwest::{Certificate, Client, Identity, StatusCode};
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::sync::Mutex;
 use url::form_urlencoded::byte_serialize;
 use vector_lib::tls::TlsConfig;
@@ -174,8 +175,30 @@ fn normalize_pd_address(pd_address: &str, use_tls: bool) -> String {
 }
 
 fn is_not_found_body(body: &str) -> bool {
-    let lower = body.to_ascii_lowercase();
-    lower.contains("not found")
+    if body.to_ascii_lowercase().contains("keyspace not found") {
+        return true;
+    }
+
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return false;
+    };
+
+    extract_error_message(&value)
+        .map(|message| message.to_ascii_lowercase().contains("keyspace not found"))
+        .unwrap_or(false)
+}
+
+fn extract_error_message(value: &Value) -> Option<&str> {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("error").and_then(Value::as_str))
+        .or_else(|| {
+            value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+        })
 }
 
 fn extract_route_from_config(config: &HashMap<String, String>) -> Option<KeyspaceRoute> {
@@ -249,6 +272,14 @@ mod tests {
         );
 
         assert_eq!(extract_route_from_config(&legacy_config), None);
+    }
+
+    #[test]
+    fn is_not_found_body_only_matches_keyspace_errors() {
+        assert!(is_not_found_body("keyspace not found"));
+        assert!(is_not_found_body(r#"{"message":"keyspace not found"}"#));
+        assert!(!is_not_found_body("certificate not found"));
+        assert!(!is_not_found_body(r#"{"message":"PD server not found"}"#));
     }
 
     #[tokio::test]

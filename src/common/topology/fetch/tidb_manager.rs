@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use snafu::{ResultExt, Snafu};
 use vector::http::HttpClient;
 
+use super::normalize_namespace_list;
 use crate::common::topology::fetch::utils;
 use crate::common::topology::{Component, InstanceType};
 
@@ -138,7 +139,7 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
     }
 
     fn active_tidb_endpoint_url(&self) -> Option<String> {
-        let namespaces = Self::normalize_namespaces(self.tidb_namespace)?;
+        let namespaces = normalize_namespace_list(self.tidb_namespace)?;
         Some(Self::build_active_tidb_endpoint_url(
             self.manager_server_address,
             &namespaces,
@@ -146,17 +147,7 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
     }
 
     fn normalize_namespaces(namespaces: Option<&str>) -> Option<String> {
-        let namespaces = namespaces?;
-        let normalized = namespaces
-            .split(',')
-            .map(str::trim)
-            .filter(|ns| !ns.is_empty())
-            .collect::<Vec<_>>();
-        if normalized.is_empty() {
-            None
-        } else {
-            Some(normalized.join(","))
-        }
+        normalize_namespace_list(namespaces)
     }
 
     fn build_active_tidb_endpoint_url(manager_server_address: &str, namespaces: &str) -> String {
