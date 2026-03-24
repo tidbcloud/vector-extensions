@@ -48,7 +48,7 @@ struct ActiveTiDBAddress {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-struct ManagerShardConfig {
+pub(super) struct ManagerShardConfig {
     replica_count: u64,
     sts_id: u64,
 }
@@ -57,6 +57,7 @@ pub struct TiDBManagerTopologyFetcher<'a> {
     manager_server_address: &'a str,
     tidb_namespace: Option<&'a str>,
     http_client: &'a HttpClient<hyper::Body>,
+    shard_config: Option<ManagerShardConfig>,
 }
 
 impl<'a> TiDBManagerTopologyFetcher<'a> {
@@ -64,11 +65,13 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         manager_server_address: &'a str,
         tidb_namespace: Option<&'a str>,
         http_client: &'a HttpClient<hyper::Body>,
+        shard_config: Option<ManagerShardConfig>,
     ) -> Self {
         Self {
             manager_server_address,
             tidb_namespace,
             http_client,
+            shard_config,
         }
     }
 
@@ -76,10 +79,9 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         &self,
         components: &mut HashSet<Component>,
     ) -> Result<(), FetchError> {
-        let shard_config = Self::read_manager_shard_config_from_env()?;
         let active_tidb_addresses = Self::filter_active_tidb_addresses(
             self.fetch_active_tidb_addresses().await?,
-            shard_config,
+            self.shard_config,
         )?;
         if active_tidb_addresses.is_empty() {
             info!(
@@ -87,7 +89,7 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
                 manager_server_address = self.manager_server_address,
                 tidb_namespace = ?self.tidb_namespace,
                 tidb_count = 0,
-                shard_config = ?shard_config
+                shard_config = ?self.shard_config
             );
             return Ok(());
         }
@@ -289,13 +291,6 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         })
     }
 
-    fn read_manager_shard_config_from_env() -> Result<Option<ManagerShardConfig>, FetchError> {
-        ManagerShardConfig::from_env_values(
-            env::var(VECTOR_STS_REPLICA_COUNT_ENV).ok().as_deref(),
-            env::var(VECTOR_STS_ID_ENV).ok().as_deref(),
-        )
-    }
-
     fn filter_active_tidb_addresses(
         active_tidb_addresses: Vec<ActiveTiDBAddress>,
         shard_config: Option<ManagerShardConfig>,
@@ -347,6 +342,9 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
     }
 
     fn hash_keyspace_name(keyspace_name: &str) -> u64 {
+        // FNV-1a keeps sharding deterministic across process restarts and languages.
+        // We intentionally avoid std::hash because it is not stable across runs, and
+        // any service that shards keyspaces the same way must reuse this exact contract.
         let mut hash = FNV1A_64_OFFSET_BASIS;
         for byte in keyspace_name.as_bytes() {
             hash ^= u64::from(*byte);
@@ -379,6 +377,14 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
 
         Ok(bytes)
     }
+}
+
+pub(super) fn read_manager_shard_config_from_env() -> Result<Option<ManagerShardConfig>, FetchError>
+{
+    ManagerShardConfig::from_env_values(
+        env::var(VECTOR_STS_REPLICA_COUNT_ENV).ok().as_deref(),
+        env::var(VECTOR_STS_ID_ENV).ok().as_deref(),
+    )
 }
 
 impl ManagerShardConfig {

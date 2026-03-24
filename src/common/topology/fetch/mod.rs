@@ -46,6 +46,8 @@ pub enum FetchError {
     FetchTiDBTopology { source: tidb::FetchError },
     #[snafu(display("Failed to fetch tidb topology from manager server: {}", source))]
     FetchTiDBFromManagerServerTopology { source: tidb_manager::FetchError },
+    #[snafu(display("Failed to read manager shard config: {}", source))]
+    ReadManagerShardConfig { source: tidb_manager::FetchError },
     #[snafu(display("Failed to fetch store topology: {}", source))]
     FetchStoreTopology { source: store::FetchError },
     #[snafu(display("Failed to fetch tidb nextgen topology: {}", source))]
@@ -61,6 +63,7 @@ pub struct LegacyTopologyFetcher {
     pd_address: String,
     manager_server_address: Option<String>,
     tidb_namespace: Option<String>,
+    manager_shard_config: Option<tidb_manager::ManagerShardConfig>,
     http_client: HttpClient<hyper::Body>,
     pub etcd_client: etcd_client::Client,
 }
@@ -79,6 +82,13 @@ impl LegacyTopologyFetcher {
             .transpose()?;
         let tidb_namespace =
             Self::normalize_tidb_namespace(manager_server_address.as_deref(), tidb_namespace)?;
+        let manager_shard_config = if manager_server_address.is_some() {
+            // Shard env vars are process-scoped, so we parse them once during fetcher init.
+            tidb_manager::read_manager_shard_config_from_env()
+                .context(ReadManagerShardConfigSnafu)?
+        } else {
+            None
+        };
         let http_client = Self::build_http_client(tls_config.as_ref(), proxy_config)?;
         let etcd_client = Self::build_etcd_client(&pd_address, &tls_config).await?;
 
@@ -86,6 +96,7 @@ impl LegacyTopologyFetcher {
             pd_address,
             manager_server_address,
             tidb_namespace,
+            manager_shard_config,
             http_client,
             etcd_client,
         })
@@ -104,6 +115,7 @@ impl LegacyTopologyFetcher {
                 manager_server_address,
                 self.tidb_namespace.as_deref(),
                 &self.http_client,
+                self.manager_shard_config,
             )
             .get_up_tidbs(components)
             .await

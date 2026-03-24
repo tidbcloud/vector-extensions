@@ -68,10 +68,10 @@ pub struct TopSQLConfig {
     /// PLACEHOLDER
     pub pd_address: Option<String>,
 
-    /// PLACEHOLDER
+    /// Optional manager endpoint used to fetch active TiDB instances instead of reading TiDB topology from etcd.
     pub manager_server_address: Option<String>,
 
-    /// PLACEHOLDER
+    /// Comma-separated namespace list sent to `/api/tidb/get_active_tidb?namespace=...`; required when `manager_server_address` is set.
     pub tidb_namespace: Option<String>,
 
     /// PLACEHOLDER

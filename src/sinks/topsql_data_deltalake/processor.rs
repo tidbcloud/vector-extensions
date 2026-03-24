@@ -251,6 +251,7 @@ lazy_static! {
 const ROUTE_RESOLUTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 /// Delta Lake sink processor
+#[derive(Clone)]
 pub struct TopSQLDeltaLakeSink {
     base_path: PathBuf,
     tables: Vec<DeltaTableConfig>,
@@ -278,12 +279,8 @@ impl TopSQLDeltaLakeSink {
         storage_options: Option<HashMap<String, String>>,
         keyspace_route_resolver: Option<PdKeyspaceResolver>,
     ) -> Self {
-        // Create a channel with capacity 1
         let (tx, rx) = mpsc::channel(1);
-        let tx = Arc::new(tx);
-
-        // Create sink instance
-        let sink = Arc::new(Self {
+        let sink = Self {
             base_path,
             tables,
             write_config,
@@ -291,41 +288,13 @@ impl TopSQLDeltaLakeSink {
             storage_options,
             keyspace_route_resolver,
             writers: Arc::new(Mutex::new(HashMap::new())),
-            tx: Arc::clone(&tx),
-        });
-
-        // Spawn process_events_loop as a separate tokio task to avoid blocking
-        let sink_clone = Arc::clone(&sink);
+            tx: Arc::new(tx),
+        };
+        let sink_clone = sink.clone();
         tokio::spawn(async move {
             sink_clone.process_events_loop(rx).await;
         });
-
-        // Return the sink (Arc::try_unwrap will fail because tokio task holds a reference,
-        // so we use unsafe to manually get the inner value without decrementing the reference count)
-        // Safety: We know there's exactly one more reference (the tokio task),
-        // but we need to return Self, not Arc<Self>. The tokio task will continue
-        // to hold its reference, which is safe because TopSQLDeltaLakeSink contains
-        // only Arc and atomic types that are safe to share.
-        // We use into_raw to get a raw pointer, then manually reconstruct the value.
-        unsafe {
-            let ptr = Arc::into_raw(sink);
-            // Get a reference to the inner value
-            let inner_ref = &*ptr;
-            // Clone the value (TopSQLDeltaLakeSink contains only Arc and atomic types, so cloning is safe)
-            let inner_value = TopSQLDeltaLakeSink {
-                base_path: inner_ref.base_path.clone(),
-                tables: inner_ref.tables.clone(),
-                write_config: inner_ref.write_config.clone(),
-                max_delay_secs: inner_ref.max_delay_secs,
-                storage_options: inner_ref.storage_options.clone(),
-                keyspace_route_resolver: inner_ref.keyspace_route_resolver.clone(),
-                writers: Arc::clone(&inner_ref.writers),
-                tx: Arc::clone(&inner_ref.tx),
-            };
-            // Reconstruct the Arc (so the tokio task's reference remains valid)
-            let _ = Arc::from_raw(ptr);
-            inner_value
-        }
+        sink
     }
 
     #[cfg(test)]
