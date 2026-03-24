@@ -526,7 +526,7 @@ impl TopSQLDeltaLakeSink {
             segments.push(format!("org={}", route.org_id));
             segments.push(format!("cluster={}", route.cluster_id));
         }
-        segments.push(format!("type=topsql_{}", table_type));
+        segments.push(format!("component={}", table_type));
         segments.push(format!("instance={}", table_instance));
 
         let segment_refs: Vec<&str> = segments.iter().map(|segment| segment.as_str()).collect();
@@ -754,7 +754,7 @@ mod tests {
         assert_eq!(
             table_path,
             PathBuf::from(
-                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=1369847559692509642/cluster=10110362358366286743/type=topsql_tidb/instance=127.0.0.1:10080"
+                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=1369847559692509642/cluster=10110362358366286743/component=tidb/instance=127.0.0.1:10080"
             )
         );
     }
@@ -777,7 +777,7 @@ mod tests {
 
         assert_eq!(
             table_path,
-            PathBuf::from("/tmp/deltalake/type=topsql_topru/instance=default")
+            PathBuf::from("/tmp/deltalake/component=topru/instance=default")
         );
     }
 
