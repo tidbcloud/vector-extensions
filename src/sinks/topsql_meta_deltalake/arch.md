@@ -49,13 +49,15 @@ pub struct TopSQLMetaDeltaLakeConfig {
 2. **Metadata Transformation**: Transform metadata format
 3. **Schema Management**: Handle metadata schema
 4. **Delta Lake Writing**: Write using deltalake_writer
-5. **Partitioning**: Partition by metadata type
+5. **Keyspace Routing**: Optionally resolve `keyspace -> org/cluster` via PD before choosing the output path
+6. **Partitioning**: Partition by metadata type
 
 ## TopSQL Metadata Features
 
 - **Schema Storage**: Store SQL schemas
 - **Query Plan Storage**: Store query execution plans
 - **Metadata Versioning**: Track metadata changes over time
+- **Keyspace-aware Layout**: When `enable_keyspace_cluster_mapping = true`, metadata is written under `org=<id>/cluster=<id>/component=topsql_{sql_meta|plan_meta}`
 
 ## Dependencies
 

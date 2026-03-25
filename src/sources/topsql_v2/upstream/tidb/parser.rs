@@ -1,24 +1,25 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use chrono::Utc;
-use vector::event::Event;
-use vector_lib::event::{LogEvent, Value as LogValue};
 use crate::sources::topsql_v2::schema_cache::SchemaCache;
 use crate::sources::topsql_v2::upstream::consts::{
-    LABEL_DATE, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_INSTANCE_KEY,
-    LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST,
-    LABEL_SQL_DIGEST, LABEL_SOURCE_TABLE, LABEL_TIMESTAMPS, LABEL_KEYSPACE, LABEL_USER,
-    METRIC_NAME_CPU_TIME_MS, METRIC_NAME_NETWORK_IN_BYTES, METRIC_NAME_NETWORK_OUT_BYTES,
-    METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT,
-    METRIC_NAME_TOTAL_RU, METRIC_NAME_EXEC_COUNT, METRIC_NAME_EXEC_DURATION,
-    SOURCE_TABLE_TIDB_TOPSQL, SOURCE_TABLE_TOPSQL_PLAN_META, SOURCE_TABLE_TOPSQL_SQL_META, SOURCE_TABLE_TOPRU,
+    LABEL_DATE, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_INSTANCE_KEY, LABEL_KEYSPACE,
+    LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_SOURCE_TABLE,
+    LABEL_SQL_DIGEST, LABEL_TIMESTAMPS, LABEL_USER, METRIC_NAME_CPU_TIME_MS,
+    METRIC_NAME_EXEC_COUNT, METRIC_NAME_EXEC_DURATION, METRIC_NAME_NETWORK_IN_BYTES,
+    METRIC_NAME_NETWORK_OUT_BYTES, METRIC_NAME_STMT_DURATION_COUNT,
+    METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT, METRIC_NAME_TOTAL_RU,
+    SOURCE_TABLE_TIDB_TOPSQL, SOURCE_TABLE_TOPRU, SOURCE_TABLE_TOPSQL_PLAN_META,
+    SOURCE_TABLE_TOPSQL_SQL_META,
 };
 use crate::sources::topsql_v2::upstream::parser::UpstreamEventParser;
 use crate::sources::topsql_v2::upstream::tidb::proto::top_sql_sub_response::RespOneof;
 use crate::sources::topsql_v2::upstream::tidb::proto::{
     PlanMeta, SqlMeta, TopSqlRecord, TopSqlRecordItem, TopSqlSubResponse,
 };
+use chrono::Utc;
+use vector::event::Event;
+use vector_lib::event::{LogEvent, Value as LogValue};
 
 pub struct TopSqlSubResponseParser;
 
@@ -31,9 +32,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         _schema_cache: Arc<SchemaCache>,
     ) -> Vec<LogEvent> {
         match response.resp_oneof {
-            Some(RespOneof::Record(record)) => {
-                Self::parse_tidb_record(record, instance)
-            }
+            Some(RespOneof::Record(record)) => Self::parse_tidb_record(record, instance),
             Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
             Some(RespOneof::PlanMeta(plan_meta)) => Self::parse_tidb_plan_meta(plan_meta),
             Some(RespOneof::RuRecord(ru_record)) => Self::parse_top_ru_record(ru_record),
@@ -103,14 +102,15 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             let mut cpu_values: Vec<u32> = v.iter().map(|psd| psd.cpu_time_ms).collect();
             cpu_values.select_nth_unstable_by(top_n, |a, b| b.cmp(a));
             let cpu_threshold = cpu_values[top_n];
-            
+
             // Find top_n threshold for network bytes using partial selection
-            let mut network_values: Vec<u64> = v.iter()
+            let mut network_values: Vec<u64> = v
+                .iter()
                 .map(|psd| psd.stmt_network_in_bytes + psd.stmt_network_out_bytes)
                 .collect();
             network_values.select_nth_unstable_by(top_n, |a, b| b.cmp(a));
             let network_threshold = network_values[top_n];
-            
+
             // Keep records that meet either threshold
             let mut kept = Vec::new();
             for psd in v.iter() {
@@ -132,7 +132,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
                     others.stmt_network_out_bytes += psd.stmt_network_out_bytes;
                 }
             }
-            
+
             *v = kept;
         }
 
@@ -215,16 +215,19 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
 }
 
 impl TopSqlSubResponseParser {
-    fn parse_tidb_record(
-        record: TopSqlRecord, 
-        instance: String, 
-    ) -> Vec<LogEvent> {
-        let mut keyspace_name_str = "".to_string();
-        if !record.keyspace_name.is_empty() {
-            if let Ok(ks) = String::from_utf8(record.keyspace_name.clone()) {
-                keyspace_name_str = ks;
-            }
+    fn decode_keyspace_name(keyspace_name: &[u8]) -> Option<String> {
+        if keyspace_name.is_empty() {
+            return None;
         }
+
+        String::from_utf8(keyspace_name.to_vec())
+            .ok()
+            .filter(|value| !value.is_empty())
+    }
+
+    fn parse_tidb_record(record: TopSqlRecord, instance: String) -> Vec<LogEvent> {
+        let keyspace_name_str =
+            Self::decode_keyspace_name(&record.keyspace_name).unwrap_or_default();
         let mut events = vec![];
         let instance_key = format!("topsql_tidb_{}", instance);
         let mut date = String::new();
@@ -237,8 +240,8 @@ impl TopSqlSubResponseParser {
             log.insert(LABEL_TIMESTAMPS, LogValue::from(item.timestamp_sec));
             if date.is_empty() {
                 date = chrono::DateTime::from_timestamp(item.timestamp_sec as i64, 0)
-                .map(|dt| dt.format("%Y-%m-%d").to_string())
-                .unwrap_or_else(|| "1970-01-01".to_string());
+                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| "1970-01-01".to_string());
             }
             log.insert(LABEL_DATE, LogValue::from(date.clone()));
             log.insert(LABEL_INSTANCE_KEY, instance_key.clone());
@@ -282,12 +285,16 @@ impl TopSqlSubResponseParser {
     fn parse_tidb_sql_meta(sql_meta: SqlMeta) -> Vec<LogEvent> {
         let mut events = vec![];
         let sql_digest = hex::encode_upper(sql_meta.sql_digest);
+        let keyspace_name = Self::decode_keyspace_name(&sql_meta.keyspace_name);
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
 
         log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPSQL_SQL_META);
         log.insert(LABEL_SQL_DIGEST, sql_digest);
         log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql);
+        if let Some(keyspace_name) = keyspace_name {
+            log.insert(LABEL_KEYSPACE, keyspace_name);
+        }
         let now = Utc::now();
         log.insert(LABEL_TIMESTAMPS, LogValue::from(now.timestamp()));
         let date_str = now.format("%Y-%m-%d").to_string();
@@ -299,8 +306,8 @@ impl TopSqlSubResponseParser {
     fn parse_tidb_plan_meta(plan_meta: PlanMeta) -> Vec<LogEvent> {
         let mut events = vec![];
         let plan_digest = hex::encode_upper(plan_meta.plan_digest);
-        let encoded_normalized_plan =
-        hex::encode_upper(plan_meta.encoded_normalized_plan);
+        let keyspace_name = Self::decode_keyspace_name(&plan_meta.keyspace_name);
+        let encoded_normalized_plan = hex::encode_upper(plan_meta.encoded_normalized_plan);
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
 
@@ -308,10 +315,10 @@ impl TopSqlSubResponseParser {
         log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPSQL_PLAN_META);
         log.insert(LABEL_PLAN_DIGEST, plan_digest);
         log.insert(LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan);
-        log.insert(
-            LABEL_ENCODED_NORMALIZED_PLAN,
-            encoded_normalized_plan,
-        );
+        log.insert(LABEL_ENCODED_NORMALIZED_PLAN, encoded_normalized_plan);
+        if let Some(keyspace_name) = keyspace_name {
+            log.insert(LABEL_KEYSPACE, keyspace_name);
+        }
         let now = Utc::now();
         log.insert(LABEL_TIMESTAMPS, LogValue::from(now.timestamp()));
         let date_str = now.format("%Y-%m-%d").to_string();
@@ -320,16 +327,14 @@ impl TopSqlSubResponseParser {
         events
     }
 
-    fn parse_top_ru_record(record: crate::sources::topsql_v2::upstream::tidb::proto::TopRuRecord) -> Vec<LogEvent> {
+    fn parse_top_ru_record(
+        record: crate::sources::topsql_v2::upstream::tidb::proto::TopRuRecord,
+    ) -> Vec<LogEvent> {
         let mut events = vec![];
         let mut date = String::new();
 
-        let mut keyspace_name_str = "".to_string();
-        if !record.keyspace_name.is_empty() {
-            if let Ok(ks) = String::from_utf8(record.keyspace_name.clone()) {
-                keyspace_name_str = ks;
-            }
-        }
+        let keyspace_name_str =
+            Self::decode_keyspace_name(&record.keyspace_name).unwrap_or_default();
 
         for item in record.items {
             let mut event = Event::Log(LogEvent::default());
@@ -359,7 +364,10 @@ impl TopSqlSubResponseParser {
             );
             log.insert(METRIC_NAME_TOTAL_RU, LogValue::from(item.total_ru));
             log.insert(METRIC_NAME_EXEC_COUNT, LogValue::from(item.exec_count));
-            log.insert(METRIC_NAME_EXEC_DURATION, LogValue::from(item.exec_duration));
+            log.insert(
+                METRIC_NAME_EXEC_DURATION,
+                LogValue::from(item.exec_duration),
+            );
 
             events.push(event.into_log());
         }
@@ -370,7 +378,9 @@ impl TopSqlSubResponseParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::topsql_v2::upstream::tidb::proto::{TopSqlRecordItem, TopRuRecord, TopRuRecordItem};
+    use crate::sources::topsql_v2::upstream::tidb::proto::{
+        PlanMeta, SqlMeta, TopRuRecord, TopRuRecordItem, TopSqlRecordItem,
+    };
 
     const MOCK_RECORDS: &'static str = include_str!("testdata/mock-records.json");
 
@@ -431,7 +441,7 @@ mod tests {
         let plan_digest = vec![4, 5, 6];
         let timestamp = 1000u64;
         let test_keyspace_name = b"test_keyspace_2".to_vec();
-        
+
         // Create 5 records with same timestamp
         let items: Vec<TopSqlRecordItem> = (0..5)
             .map(|i| TopSqlRecordItem {
@@ -445,7 +455,7 @@ mod tests {
                 stmt_network_out_bytes: 200 + i as u64,
             })
             .collect();
-        
+
         responses.push(TopSqlSubResponse {
             resp_oneof: Some(RespOneof::Record(TopSqlRecord {
                 sql_digest: sql_digest.clone(),
@@ -454,21 +464,24 @@ mod tests {
                 keyspace_name: test_keyspace_name.clone(),
             })),
         });
-        
+
         // top_n = 10, which is greater than 5, so all should be kept
         let result = TopSqlSubResponseParser::keep_top_n(responses.clone(), 10);
-        
+
         // Should have same number of responses (all kept)
         assert_eq!(result.len(), 1);
         if let Some(RespOneof::Record(record)) = &result[0].resp_oneof {
             assert_eq!(record.items.len(), 5);
             assert_eq!(record.sql_digest, sql_digest);
             assert_eq!(record.plan_digest, plan_digest);
-            assert_eq!(record.keyspace_name, test_keyspace_name, "keyspace_name should be preserved");
+            assert_eq!(
+                record.keyspace_name, test_keyspace_name,
+                "keyspace_name should be preserved"
+            );
         } else {
             panic!("Expected Record");
         }
-        
+
         // top_n = 5, which equals 5, so all should be kept
         let result2 = TopSqlSubResponseParser::keep_top_n(responses, 5);
         assert_eq!(result2.len(), 1);
@@ -476,7 +489,10 @@ mod tests {
             assert_eq!(record.items.len(), 5);
             assert_eq!(record.sql_digest, sql_digest);
             assert_eq!(record.plan_digest, plan_digest);
-            assert_eq!(record.keyspace_name, test_keyspace_name, "keyspace_name should be preserved");
+            assert_eq!(
+                record.keyspace_name, test_keyspace_name,
+                "keyspace_name should be preserved"
+            );
         } else {
             panic!("Expected Record");
         }
@@ -491,7 +507,7 @@ mod tests {
         let plan_digest = vec![4, 5, 6];
         let timestamp = 1000u64;
         let test_keyspace_name = b"test_keyspace_3".to_vec();
-        
+
         // Create 10 records with same cpu_time_ms and same network bytes
         let items: Vec<TopSqlRecordItem> = (0..10)
             .map(|_| TopSqlRecordItem {
@@ -501,11 +517,11 @@ mod tests {
                 stmt_kv_exec_count: BTreeMap::new(),
                 stmt_duration_sum_ns: 1000,
                 stmt_duration_count: 1,
-                stmt_network_in_bytes: 100, // All same
+                stmt_network_in_bytes: 100,  // All same
                 stmt_network_out_bytes: 200, // All same, total = 300
             })
             .collect();
-        
+
         responses.push(TopSqlSubResponse {
             resp_oneof: Some(RespOneof::Record(TopSqlRecord {
                 sql_digest: sql_digest.clone(),
@@ -514,44 +530,45 @@ mod tests {
                 keyspace_name: test_keyspace_name.clone(),
             })),
         });
-        
+
         // top_n = 5, all values are same
         // New logic: threshold equals the value (top_n-th largest, which is the same value),
         // so no records satisfy > threshold condition, all should go to others
         let result = TopSqlSubResponseParser::keep_top_n(responses, 5);
-        
+
         // Verify all records go to others
         let mut total_cpu_kept = 0u32;
         let mut total_network_kept = 0u64;
         let mut kept_count = 0;
         let mut total_cpu_others = 0u32;
         let mut total_network_others = 0u64;
-        
+
         for response in result {
             if let Some(RespOneof::Record(record)) = response.resp_oneof {
                 // Verify keyspace_name is preserved
                 assert_eq!(
-                    record.keyspace_name,
-                    test_keyspace_name,
+                    record.keyspace_name, test_keyspace_name,
                     "keyspace_name should be preserved in all records"
                 );
-                
+
                 if record.sql_digest.is_empty() {
                     // This is others
                     for item in record.items {
                         total_cpu_others += item.cpu_time_ms;
-                        total_network_others += item.stmt_network_in_bytes + item.stmt_network_out_bytes;
+                        total_network_others +=
+                            item.stmt_network_in_bytes + item.stmt_network_out_bytes;
                     }
                 } else {
                     kept_count += record.items.len();
                     for item in record.items {
                         total_cpu_kept += item.cpu_time_ms;
-                        total_network_kept += item.stmt_network_in_bytes + item.stmt_network_out_bytes;
+                        total_network_kept +=
+                            item.stmt_network_in_bytes + item.stmt_network_out_bytes;
                     }
                 }
             }
         }
-        
+
         // New behavior: all records go to others (none satisfy > threshold when all values are same)
         assert_eq!(kept_count, 0);
         assert_eq!(total_cpu_kept, 0);
@@ -568,7 +585,7 @@ mod tests {
         let mut responses = vec![];
         let top_n = 3;
         let test_keyspace_name = b"test_keyspace_timestamps".to_vec();
-        
+
         // Timestamp 1000: 8 records mixing high CPU/low network, low CPU/high network, both high, both low
         // Expected: Keep records that meet either CPU threshold (>20) OR network threshold (>40)
         // Top 3 CPU: 100, 90, 80 -> threshold = 20 (4th largest)
@@ -576,16 +593,16 @@ mod tests {
         let timestamp1 = 1000u64;
         let test_cases_ts1 = vec![
             // (sql_id, plan_id, cpu_time_ms, network_in_bytes, network_out_bytes, reason)
-            (1, 1, 100, 10, 10),   // High CPU (100), low network (20) -> keep (CPU > 20)
-            (2, 2, 90, 10, 10),   // High CPU (90), low network (20) -> keep (CPU > 20)
-            (3, 3, 80, 10, 10),   // High CPU (80), low network (20) -> keep (CPU > 20)
+            (1, 1, 100, 10, 10), // High CPU (100), low network (20) -> keep (CPU > 20)
+            (2, 2, 90, 10, 10),  // High CPU (90), low network (20) -> keep (CPU > 20)
+            (3, 3, 80, 10, 10),  // High CPU (80), low network (20) -> keep (CPU > 20)
             (4, 4, 10, 200, 200), // Low CPU (10), high network (400) -> keep (network > 40)
             (5, 5, 10, 175, 175), // Low CPU (10), high network (350) -> keep (network > 40)
             (6, 6, 10, 150, 150), // Low CPU (10), high network (300) -> keep (network > 40)
-            (7, 7, 20, 20, 20),   // Low CPU (20), low network (40) -> evict (CPU == 20, network == 40)
-            (8, 8, 15, 15, 15),   // Low CPU (15), low network (30) -> evict
+            (7, 7, 20, 20, 20), // Low CPU (20), low network (40) -> evict (CPU == 20, network == 40)
+            (8, 8, 15, 15, 15), // Low CPU (15), low network (30) -> evict
         ];
-        
+
         for (sql_id, plan_id, cpu_time, net_in, net_out) in test_cases_ts1.iter() {
             let sql_digest = vec![*sql_id];
             let plan_digest = vec![*plan_id];
@@ -607,22 +624,22 @@ mod tests {
                 })),
             });
         }
-        
+
         // Timestamp 2000: 7 records mixing different combinations
         // Expected: Keep records that meet either CPU threshold (>20) OR network threshold (>60)
         // Top 3 CPU: 100, 90, 70 -> threshold = 20 (4th largest)
         // Top 3 Network: 380, 360, 140 -> threshold = 60 (4th largest)
         let timestamp2 = 2000u64;
         let test_cases_ts2 = vec![
-            (9, 9, 100, 10, 10),   // High CPU (100), low network (20) -> keep (CPU > 20)
-            (10, 10, 90, 10, 10),  // High CPU (90), low network (20) -> keep (CPU > 20)
-            (11, 11, 70, 10, 10),  // High CPU (70), low network (20) -> keep (CPU > 20)
+            (9, 9, 100, 10, 10),    // High CPU (100), low network (20) -> keep (CPU > 20)
+            (10, 10, 90, 10, 10),   // High CPU (90), low network (20) -> keep (CPU > 20)
+            (11, 11, 70, 10, 10),   // High CPU (70), low network (20) -> keep (CPU > 20)
             (12, 12, 10, 190, 190), // Low CPU (10), high network (380) -> keep (network > 60)
             (13, 13, 10, 180, 180), // Low CPU (10), high network (360) -> keep (network > 60)
             (14, 14, 10, 70, 70),   // Low CPU (10), high network (140) -> keep (network > 60)
-            (15, 15, 20, 30, 30),   // Low CPU (20), low network (60) -> evict (CPU == 20, network == 60)
+            (15, 15, 20, 30, 30), // Low CPU (20), low network (60) -> evict (CPU == 20, network == 60)
         ];
-        
+
         for (sql_id, plan_id, cpu_time, net_in, net_out) in test_cases_ts2.iter() {
             let sql_digest = vec![*sql_id];
             let plan_digest = vec![*plan_id];
@@ -644,14 +661,11 @@ mod tests {
                 })),
             });
         }
-        
+
         // Timestamp 3000: 2 records (both should be kept since 2 <= top_n=3)
         let timestamp3 = 3000u64;
-        let test_cases_ts3 = vec![
-            (16, 16, 50, 50, 50),
-            (17, 17, 40, 40, 40),
-        ];
-        
+        let test_cases_ts3 = vec![(16, 16, 50, 50, 50), (17, 17, 40, 40, 40)];
+
         for (sql_id, plan_id, cpu_time, net_in, net_out) in test_cases_ts3.iter() {
             let sql_digest = vec![*sql_id];
             let plan_digest = vec![*plan_id];
@@ -673,26 +687,25 @@ mod tests {
                 })),
             });
         }
-        
+
         let result = TopSqlSubResponseParser::keep_top_n(responses, top_n);
-        
+
         // Group results by timestamp
         let mut results_by_timestamp: BTreeMap<u64, Vec<(u8, u32, u64)>> = BTreeMap::new(); // timestamp -> [(sql_id, cpu, network), ...]
         let mut others_by_timestamp: BTreeMap<u64, (u32, u64)> = BTreeMap::new(); // timestamp -> (cpu, network)
-        
+
         for response in result {
             if let Some(RespOneof::Record(record)) = response.resp_oneof {
                 // Verify keyspace_name is preserved
                 assert_eq!(
-                    record.keyspace_name,
-                    test_keyspace_name,
+                    record.keyspace_name, test_keyspace_name,
                     "keyspace_name should be preserved in all records"
                 );
-                
+
                 for item in record.items {
                     let timestamp = item.timestamp_sec;
                     let network_total = item.stmt_network_in_bytes + item.stmt_network_out_bytes;
-                    
+
                     if record.sql_digest.is_empty() {
                         // This is others
                         let entry = others_by_timestamp.entry(timestamp).or_insert((0, 0));
@@ -709,7 +722,7 @@ mod tests {
                 }
             }
         }
-        
+
         // Verify timestamp 1000: should keep 6 records (3 high CPU + 3 high network), evict 2
         // CPU threshold = 20 (4th largest), keep records with CPU > 20
         // Network threshold = 40 (4th largest), keep records with network > 40
@@ -717,19 +730,47 @@ mod tests {
             .get(&timestamp1)
             .map(|records| records.iter().map(|r| r.0).collect())
             .unwrap_or_default();
-        assert_eq!(ts1_kept.len(), 6, "Timestamp 1000 should keep 6 records (3 high CPU + 3 high network)");
+        assert_eq!(
+            ts1_kept.len(),
+            6,
+            "Timestamp 1000 should keep 6 records (3 high CPU + 3 high network)"
+        );
         // High CPU records (1, 2, 3) should be kept
-        assert!(ts1_kept.contains(&1), "Timestamp 1000 should keep sql_id 1 (high CPU)");
-        assert!(ts1_kept.contains(&2), "Timestamp 1000 should keep sql_id 2 (high CPU)");
-        assert!(ts1_kept.contains(&3), "Timestamp 1000 should keep sql_id 3 (high CPU)");
+        assert!(
+            ts1_kept.contains(&1),
+            "Timestamp 1000 should keep sql_id 1 (high CPU)"
+        );
+        assert!(
+            ts1_kept.contains(&2),
+            "Timestamp 1000 should keep sql_id 2 (high CPU)"
+        );
+        assert!(
+            ts1_kept.contains(&3),
+            "Timestamp 1000 should keep sql_id 3 (high CPU)"
+        );
         // High network records (4, 5, 6) should be kept
-        assert!(ts1_kept.contains(&4), "Timestamp 1000 should keep sql_id 4 (high network)");
-        assert!(ts1_kept.contains(&5), "Timestamp 1000 should keep sql_id 5 (high network)");
-        assert!(ts1_kept.contains(&6), "Timestamp 1000 should keep sql_id 6 (high network)");
+        assert!(
+            ts1_kept.contains(&4),
+            "Timestamp 1000 should keep sql_id 4 (high network)"
+        );
+        assert!(
+            ts1_kept.contains(&5),
+            "Timestamp 1000 should keep sql_id 5 (high network)"
+        );
+        assert!(
+            ts1_kept.contains(&6),
+            "Timestamp 1000 should keep sql_id 6 (high network)"
+        );
         // Low both records (7, 8) should be evicted
-        assert!(!ts1_kept.contains(&7), "Timestamp 1000 should NOT keep sql_id 7 (low both)");
-        assert!(!ts1_kept.contains(&8), "Timestamp 1000 should NOT keep sql_id 8 (low both)");
-        
+        assert!(
+            !ts1_kept.contains(&7),
+            "Timestamp 1000 should NOT keep sql_id 7 (low both)"
+        );
+        assert!(
+            !ts1_kept.contains(&8),
+            "Timestamp 1000 should NOT keep sql_id 8 (low both)"
+        );
+
         // Verify kept records meet at least one threshold
         if let Some(records) = results_by_timestamp.get(&timestamp1) {
             let cpu_threshold = 20u32;
@@ -744,14 +785,22 @@ mod tests {
                 );
             }
         }
-        
+
         if let Some((others_cpu, others_network)) = others_by_timestamp.get(&timestamp1) {
-            assert_eq!(*others_cpu, 20 + 15, "Timestamp 1000 others CPU should be 35 (20+15)");
-            assert_eq!(*others_network, 40 + 30, "Timestamp 1000 others network should be 70 (40+30)");
+            assert_eq!(
+                *others_cpu,
+                20 + 15,
+                "Timestamp 1000 others CPU should be 35 (20+15)"
+            );
+            assert_eq!(
+                *others_network,
+                40 + 30,
+                "Timestamp 1000 others network should be 70 (40+30)"
+            );
         } else {
             panic!("Timestamp 1000 should have others records");
         }
-        
+
         // Verify timestamp 2000: should keep 6 records (3 high CPU + 3 high network), evict 1
         // CPU threshold = 20 (4th largest), keep records with CPU > 20
         // Network threshold = 60 (4th largest), keep records with network > 60
@@ -759,18 +808,43 @@ mod tests {
             .get(&timestamp2)
             .map(|records| records.iter().map(|r| r.0).collect())
             .unwrap_or_default();
-        assert_eq!(ts2_kept.len(), 6, "Timestamp 2000 should keep 6 records (3 high CPU + 3 high network)");
+        assert_eq!(
+            ts2_kept.len(),
+            6,
+            "Timestamp 2000 should keep 6 records (3 high CPU + 3 high network)"
+        );
         // High CPU records (9, 10, 11) should be kept
-        assert!(ts2_kept.contains(&9), "Timestamp 2000 should keep sql_id 9 (high CPU)");
-        assert!(ts2_kept.contains(&10), "Timestamp 2000 should keep sql_id 10 (high CPU)");
-        assert!(ts2_kept.contains(&11), "Timestamp 2000 should keep sql_id 11 (high CPU)");
+        assert!(
+            ts2_kept.contains(&9),
+            "Timestamp 2000 should keep sql_id 9 (high CPU)"
+        );
+        assert!(
+            ts2_kept.contains(&10),
+            "Timestamp 2000 should keep sql_id 10 (high CPU)"
+        );
+        assert!(
+            ts2_kept.contains(&11),
+            "Timestamp 2000 should keep sql_id 11 (high CPU)"
+        );
         // High network records (12, 13, 14) should be kept
-        assert!(ts2_kept.contains(&12), "Timestamp 2000 should keep sql_id 12 (high network)");
-        assert!(ts2_kept.contains(&13), "Timestamp 2000 should keep sql_id 13 (high network)");
-        assert!(ts2_kept.contains(&14), "Timestamp 2000 should keep sql_id 14 (high network)");
+        assert!(
+            ts2_kept.contains(&12),
+            "Timestamp 2000 should keep sql_id 12 (high network)"
+        );
+        assert!(
+            ts2_kept.contains(&13),
+            "Timestamp 2000 should keep sql_id 13 (high network)"
+        );
+        assert!(
+            ts2_kept.contains(&14),
+            "Timestamp 2000 should keep sql_id 14 (high network)"
+        );
         // Low both record (15) should be evicted
-        assert!(!ts2_kept.contains(&15), "Timestamp 2000 should NOT keep sql_id 15 (low both)");
-        
+        assert!(
+            !ts2_kept.contains(&15),
+            "Timestamp 2000 should NOT keep sql_id 15 (low both)"
+        );
+
         // Verify kept records meet at least one threshold
         if let Some(records) = results_by_timestamp.get(&timestamp2) {
             let cpu_threshold = 20u32;
@@ -785,28 +859,47 @@ mod tests {
                 );
             }
         }
-        
+
         if let Some((others_cpu, others_network)) = others_by_timestamp.get(&timestamp2) {
             assert_eq!(*others_cpu, 20, "Timestamp 2000 others CPU should be 20");
-            assert_eq!(*others_network, 60, "Timestamp 2000 others network should be 60 (30+30)");
+            assert_eq!(
+                *others_network, 60,
+                "Timestamp 2000 others network should be 60 (30+30)"
+            );
         } else {
             panic!("Timestamp 2000 should have others records");
         }
-        
+
         // Verify timestamp 3000: should keep all 2 records (2 <= top_n=3)
         let ts3_kept: Vec<u8> = results_by_timestamp
             .get(&timestamp3)
             .map(|records| records.iter().map(|r| r.0).collect())
             .unwrap_or_default();
-        assert_eq!(ts3_kept.len(), 2, "Timestamp 3000 should keep all 2 records");
-        assert!(ts3_kept.contains(&16), "Timestamp 3000 should keep sql_id 16");
-        assert!(ts3_kept.contains(&17), "Timestamp 3000 should keep sql_id 17");
-        
+        assert_eq!(
+            ts3_kept.len(),
+            2,
+            "Timestamp 3000 should keep all 2 records"
+        );
+        assert!(
+            ts3_kept.contains(&16),
+            "Timestamp 3000 should keep sql_id 16"
+        );
+        assert!(
+            ts3_kept.contains(&17),
+            "Timestamp 3000 should keep sql_id 17"
+        );
+
         // Timestamp 3000 should not have others since all records are kept
-        assert!(!others_by_timestamp.contains_key(&timestamp3), "Timestamp 3000 should not have others");
-        
+        assert!(
+            !others_by_timestamp.contains_key(&timestamp3),
+            "Timestamp 3000 should not have others"
+        );
+
         // Verify total counts
-        let total_kept: usize = results_by_timestamp.values().map(|records| records.len()).sum();
+        let total_kept: usize = results_by_timestamp
+            .values()
+            .map(|records| records.len())
+            .sum();
         assert_eq!(total_kept, 14, "Total kept records should be 14 (6+6+2)");
     }
 
@@ -877,7 +970,10 @@ mod tests {
         assert_eq!(sum_old.stmt_duration_count, sum_new.stmt_duration_count);
         assert_eq!(sum_old.stmt_duration_sum_ns, sum_new.stmt_duration_sum_ns);
         assert_eq!(sum_old.stmt_network_in_bytes, sum_new.stmt_network_in_bytes);
-        assert_eq!(sum_old.stmt_network_out_bytes, sum_new.stmt_network_out_bytes);
+        assert_eq!(
+            sum_old.stmt_network_out_bytes,
+            sum_new.stmt_network_out_bytes
+        );
     }
 
     #[test]
@@ -909,25 +1005,118 @@ mod tests {
         // Check first event
         let event1 = &events[0];
         let log1 = event1;
-        assert_eq!(log1.get(LABEL_SOURCE_TABLE), Some(&LogValue::from(SOURCE_TABLE_TOPRU)));
-        assert_eq!(log1.get(LABEL_TIMESTAMPS), Some(&LogValue::from(1709646900)));
+        assert_eq!(
+            log1.get(LABEL_SOURCE_TABLE),
+            Some(&LogValue::from(SOURCE_TABLE_TOPRU))
+        );
+        assert_eq!(
+            log1.get(LABEL_TIMESTAMPS),
+            Some(&LogValue::from(1709646900))
+        );
         assert_eq!(log1.get(LABEL_DATE), Some(&LogValue::from("2024-03-05")));
-        assert_eq!(log1.get(LABEL_KEYSPACE), Some(&LogValue::from("test_keyspace")));
+        assert_eq!(
+            log1.get(LABEL_KEYSPACE),
+            Some(&LogValue::from("test_keyspace"))
+        );
         assert_eq!(log1.get(LABEL_USER), Some(&LogValue::from("test_user")));
-        assert_eq!(log1.get(LABEL_SQL_DIGEST), Some(&LogValue::from("73716C5F6469676573745F313233")));
-        assert_eq!(log1.get(LABEL_PLAN_DIGEST), Some(&LogValue::from("706C616E5F6469676573745F343536")));
+        assert_eq!(
+            log1.get(LABEL_SQL_DIGEST),
+            Some(&LogValue::from("73716C5F6469676573745F313233"))
+        );
+        assert_eq!(
+            log1.get(LABEL_PLAN_DIGEST),
+            Some(&LogValue::from("706C616E5F6469676573745F343536"))
+        );
         assert_eq!(log1.get(METRIC_NAME_TOTAL_RU), Some(&LogValue::from(100.5)));
         assert_eq!(log1.get(METRIC_NAME_EXEC_COUNT), Some(&LogValue::from(10)));
-        assert_eq!(log1.get(METRIC_NAME_EXEC_DURATION), Some(&LogValue::from(50000000)));
+        assert_eq!(
+            log1.get(METRIC_NAME_EXEC_DURATION),
+            Some(&LogValue::from(50000000))
+        );
 
         // Check second event
         let event2 = &events[1];
         let log2 = event2;
-        assert_eq!(log2.get(LABEL_SOURCE_TABLE), Some(&LogValue::from(SOURCE_TABLE_TOPRU)));
-        assert_eq!(log2.get(LABEL_TIMESTAMPS), Some(&LogValue::from(1709646960)));
+        assert_eq!(
+            log2.get(LABEL_SOURCE_TABLE),
+            Some(&LogValue::from(SOURCE_TABLE_TOPRU))
+        );
+        assert_eq!(
+            log2.get(LABEL_TIMESTAMPS),
+            Some(&LogValue::from(1709646960))
+        );
         assert_eq!(log2.get(LABEL_DATE), Some(&LogValue::from("2024-03-05")));
         assert_eq!(log2.get(METRIC_NAME_TOTAL_RU), Some(&LogValue::from(200.0)));
         assert_eq!(log2.get(METRIC_NAME_EXEC_COUNT), Some(&LogValue::from(20)));
-        assert_eq!(log2.get(METRIC_NAME_EXEC_DURATION), Some(&LogValue::from(100000000)));
+        assert_eq!(
+            log2.get(METRIC_NAME_EXEC_DURATION),
+            Some(&LogValue::from(100000000))
+        );
+    }
+
+    #[test]
+    fn test_parse_tidb_sql_meta_includes_keyspace() {
+        let sql_meta = SqlMeta {
+            sql_digest: b"sql_digest".to_vec(),
+            normalized_sql: "select 1".to_string(),
+            is_internal_sql: false,
+            keyspace_name: b"test_keyspace".to_vec(),
+        };
+
+        let events = TopSqlSubResponseParser::parse_tidb_sql_meta(sql_meta);
+        assert_eq!(events.len(), 1);
+
+        let log = &events[0];
+        assert_eq!(
+            log.get(LABEL_SOURCE_TABLE),
+            Some(&LogValue::from(SOURCE_TABLE_TOPSQL_SQL_META))
+        );
+        assert_eq!(
+            log.get(LABEL_SQL_DIGEST),
+            Some(&LogValue::from("73716C5F646967657374"))
+        );
+        assert_eq!(
+            log.get(LABEL_NORMALIZED_SQL),
+            Some(&LogValue::from("select 1"))
+        );
+        assert_eq!(
+            log.get(LABEL_KEYSPACE),
+            Some(&LogValue::from("test_keyspace"))
+        );
+    }
+
+    #[test]
+    fn test_parse_tidb_plan_meta_includes_keyspace() {
+        let plan_meta = PlanMeta {
+            plan_digest: b"plan_digest".to_vec(),
+            normalized_plan: "Point_Get".to_string(),
+            encoded_normalized_plan: "encoded_plan".to_string(),
+            keyspace_name: b"test_keyspace".to_vec(),
+        };
+
+        let events = TopSqlSubResponseParser::parse_tidb_plan_meta(plan_meta);
+        assert_eq!(events.len(), 1);
+
+        let log = &events[0];
+        assert_eq!(
+            log.get(LABEL_SOURCE_TABLE),
+            Some(&LogValue::from(SOURCE_TABLE_TOPSQL_PLAN_META))
+        );
+        assert_eq!(
+            log.get(LABEL_PLAN_DIGEST),
+            Some(&LogValue::from("706C616E5F646967657374"))
+        );
+        assert_eq!(
+            log.get(LABEL_NORMALIZED_PLAN),
+            Some(&LogValue::from("Point_Get"))
+        );
+        assert_eq!(
+            log.get(LABEL_ENCODED_NORMALIZED_PLAN),
+            Some(&LogValue::from("656E636F6465645F706C616E"))
+        );
+        assert_eq!(
+            log.get(LABEL_KEYSPACE),
+            Some(&LogValue::from("test_keyspace"))
+        );
     }
 }

@@ -52,10 +52,20 @@ Legacy mode discovery options:
 - `manager_server_address`: optional manager endpoint used to fetch active TiDB instances
 - `tidb_namespace`: manager namespace list used when calling `/api/tidb/get_active_tidb`
 - `enable_tikv_topsql`: whether to collect `tikv_topsql` and `tikv_topregion`; defaults to `true`
+- `topru`: TiDB TopRU subscription options (`enable`, `report_interval_seconds`, `item_interval_seconds`)
 
 ## Data Flow
 
 Same as TopSQL v1 but with improved reliability and performance.
+
+TiDB subscriptions emit four log-event families:
+
+- `tidb_topsql`: execution metrics keyed by SQL/plan digest
+- `topsql_topru`: RU metrics keyed by SQL/plan digest and user
+- `topsql_sql_meta`: normalized SQL text
+- `topsql_plan_meta`: normalized / encoded plan text
+
+For TiDB-originated events, `keyspace` is propagated when the upstream payload includes `keyspace_name`, including `topsql_sql_meta` and `topsql_plan_meta`.
 
 ## Dependencies
 
