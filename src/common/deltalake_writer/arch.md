@@ -57,6 +57,8 @@ Used by multiple sinks:
 - **topsql_data_deltalake**: TopSQL data sink
 - **topsql_meta_deltalake**: TopSQL metadata sink
 
+- Support for S3 (s3://) and Azure Blob (az://) storage backends
+
 ## Data Conversion
 
 ### Vector Event → Arrow
@@ -141,8 +143,67 @@ pub struct DeltaTableConfig {
 }
 ```
 
-## Dependencies
+## Storage Backends
+- **S3**: S3-compatible storage (AWS S3, Aliyun OSS, etc.)
+- **Azure Blob**: Azure Blob Storage with managed identity support
 
-- **deltalake**: Delta Lake Rust crate
-- **arrow**: Apache Arrow
-- **parquet**: Parquet file format
+- **Local**: Local filesystem
+
+## Azure Blob Storage Configuration
+The Azure Blob Storage backend supports multiple authentication methods:
+
+### Environment Variables for Authentication
+- **AZURE_CLIENT_ID**: Managed identity client ID (required for user-assigned managed identity)
+- **AZURE_TENANT_ID**: Azure tenant ID (optional)
+- **AZURE_STORAGE_ACCOUNT**: Storage account name
+
+### Alternative Authentication Methods
+1. **Managed Identity** (recommended for AKS/pods):
+   ```bash
+   export AZURE_CLIENT_ID="your-managed-identity-client-id"
+   export AZURE_STORAGE_ACCOUNT="your-storage-account"
+   ```
+
+2. **Access Key**:
+   ```bash
+   export AZURE_STORAGE_ACCOUNT="your-storage-account"
+   export AZURE_STORAGE_KEY="your-storage-key"
+   ```
+
+3. **SAS Token**:
+   ```bash
+   export AZURE_STORAGE_ACCOUNT="your-storage-account"
+   export AZURE_SAS_TOKEN="your-sas-token"
+   ```
+
+4. **Connection String**:
+   ```bash
+   export AZURE_STORAGE_CONNECTION_STRING="your-connection-string"
+   ```
+
+### Vector Configuration Example
+```toml
+[sinks.deltalake]
+type = "deltalake"
+inputs = ["your_source"]
+base_path = "az://container-name/path/to/delta-tables"
+batch_size = 1000
+timeout_secs = 30
+```
+
+## Storage Backend Authentication
+
+### S3 Authentication
+Uses AWS SDK credential chain via `deltalake_s3.rs` module.
+
+### Azure Blob Authentication
+Support for multiple authentication methods:
+- **Managed Identity** (recommended): Set `AZURE_CLIENT_ID` environment variable
+- **Access Key**: Set `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY`
+- **SAS Token**: Set `AZURE_STORAGE_ACCOUNT` and `AZURE_SAS_KEY`
+- **Connection String**: Set `AZURE_STORAGE_CONNECTION_STRING`
+
+Environment variables for Azure Managed Identity:
+- `AZURE_CLIENT_ID`: Managed identity client ID (required)
+- `AZURE_TENANT_ID`: Azure tenant ID (optional)
+- `AZURE_STORAGE_ACCOUNT`: Storage account name

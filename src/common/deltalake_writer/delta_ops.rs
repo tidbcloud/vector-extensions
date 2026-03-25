@@ -49,10 +49,11 @@ impl DeltaOpsManager {
                 "Using storage options for S3 authentication: {:?}",
                 redacted_options
             );
-            Ok(
-                DeltaOps::try_from_uri_with_storage_options(table_uri.clone(), storage_options.clone())
-                    .await?,
+            Ok(DeltaOps::try_from_uri_with_storage_options(
+                table_uri.clone(),
+                storage_options.clone(),
             )
+            .await?)
         } else {
             info!("No storage options provided, using default credential chain");
             Ok(DeltaOps::try_from_uri(table_uri.clone()).await?)
@@ -90,12 +91,14 @@ impl DeltaOpsManager {
             table_uri, table_name
         );
 
-        let mut create_builder = CreateBuilder::new().with_location(table_uri.to_string()).with_columns(
-            schema
-                .fields()
-                .iter()
-                .map(|field| self.type_converter.arrow_field_to_delta(field)),
-        );
+        let mut create_builder = CreateBuilder::new()
+            .with_location(table_uri.to_string())
+            .with_columns(
+                schema
+                    .fields()
+                    .iter()
+                    .map(|field| self.type_converter.arrow_field_to_delta(field)),
+            );
 
         // Add storage options for S3
         if let Some(storage_options) = storage_options {
@@ -198,7 +201,7 @@ impl DeltaOpsManager {
         // Retry logic for transaction conflicts (concurrent writes)
         const MAX_RETRIES: u32 = 3;
         const INITIAL_RETRY_DELAY_MS: u64 = 100;
-        
+
         for attempt in 0..MAX_RETRIES {
             if attempt > 0 {
                 // Exponential backoff: 100ms, 200ms, 400ms
@@ -206,16 +209,23 @@ impl DeltaOpsManager {
                 let delay = std::time::Duration::from_millis(delay_ms);
                 info!(
                     "Retrying write to Delta table (attempt {}/{}) after {:?} delay",
-                    attempt + 1, MAX_RETRIES, delay
+                    attempt + 1,
+                    MAX_RETRIES,
+                    delay
                 );
                 tokio::time::sleep(delay).await;
             }
-            
+
             // Reload table_ops on each attempt to get latest table state
             // Use DeltaOps for improved S3 support, following the successful test pattern
             let table_ops = self.create_delta_ops(&table_uri).await?;
-            
-            info!("Attempting to write to Delta table at {} (attempt {}/{})", table_uri, attempt + 1, MAX_RETRIES);
+
+            info!(
+                "Attempting to write to Delta table at {} (attempt {}/{})",
+                table_uri,
+                attempt + 1,
+                MAX_RETRIES
+            );
 
             let write_builder =
                 self.configure_write_builder(table_ops, record_batch.clone(), partition_by);
@@ -229,7 +239,7 @@ impl DeltaOpsManager {
                 }
                 Err(e) => {
                     let error_str = e.to_string();
-                    
+
                     // Check if error is due to table not existing
                     if error_str.contains("does not exist")
                         || error_str.contains("not found")
@@ -250,7 +260,9 @@ impl DeltaOpsManager {
                         if attempt < MAX_RETRIES - 1 {
                             warn!(
                                 "Transaction conflict detected (attempt {}/{}): {}. Will retry...",
-                                attempt + 1, MAX_RETRIES, error_str
+                                attempt + 1,
+                                MAX_RETRIES,
+                                error_str
                             );
                             // Continue to retry
                             continue;
