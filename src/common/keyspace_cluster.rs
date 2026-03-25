@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +26,50 @@ const CLUSTER_ID_KEYS: &[&str] = &["serverless_cluster_id"];
 pub struct KeyspaceRoute {
     pub org_id: String,
     pub cluster_id: String,
+}
+
+pub fn path_contains_keyspace_route_segments(path: &str) -> bool {
+    let mut has_org_segment = false;
+    let mut has_cluster_segment = false;
+    for segment in path.split('/') {
+        if segment.starts_with("org=") {
+            has_org_segment = true;
+        } else if segment.starts_with("cluster=") {
+            has_cluster_segment = true;
+        }
+    }
+
+    has_org_segment && has_cluster_segment
+}
+
+pub fn validate_keyspace_route_template(path: &str) -> Result<(), String> {
+    if path_contains_keyspace_route_segments(path) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "base_path must contain both `org=` and `cluster=` path segments when enable_keyspace_cluster_mapping is true; expected something like `.../org=xxx/cluster=xxx/...`, got: {}",
+        path
+    ))
+}
+
+pub fn replace_keyspace_route_segments(base_path: &PathBuf, route: &KeyspaceRoute) -> PathBuf {
+    let path = base_path.to_string_lossy();
+    let replaced = path
+        .split('/')
+        .map(|segment| {
+            if segment.starts_with("org=") {
+                format!("org={}", route.org_id)
+            } else if segment.starts_with("cluster=") {
+                format!("cluster={}", route.cluster_id)
+            } else {
+                segment.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+
+    PathBuf::from(replaced)
 }
 
 #[derive(Clone)]
@@ -280,6 +325,52 @@ mod tests {
         assert!(is_not_found_body(r#"{"message":"keyspace not found"}"#));
         assert!(!is_not_found_body("certificate not found"));
         assert!(!is_not_found_body(r#"{"message":"PD server not found"}"#));
+    }
+
+    #[test]
+    fn path_contains_keyspace_route_segments_requires_both_segments() {
+        assert!(path_contains_keyspace_route_segments(
+            "s3://bucket/deltalake/org=xxx/cluster=xxx/type=topsql"
+        ));
+        assert!(path_contains_keyspace_route_segments(
+            "/tmp/deltalake/org=xxx/cluster=xxx/type=topsql"
+        ));
+        assert!(!path_contains_keyspace_route_segments(
+            "s3://bucket/deltalake/org=xxx/type=topsql"
+        ));
+        assert!(!path_contains_keyspace_route_segments(
+            "/tmp/deltalake/type=topsql"
+        ));
+    }
+
+    #[test]
+    fn replace_keyspace_route_segments_rewrites_template_values() {
+        let replaced = replace_keyspace_route_segments(
+            &PathBuf::from("s3://bucket/deltalake/org=xxx/cluster=xxx/type=topsql"),
+            &KeyspaceRoute {
+                org_id: "30018".to_string(),
+                cluster_id: "10155668891296301432".to_string(),
+            },
+        );
+
+        assert_eq!(
+            replaced,
+            PathBuf::from(
+                "s3://bucket/deltalake/org=30018/cluster=10155668891296301432/type=topsql"
+            )
+        );
+    }
+
+    #[test]
+    fn validate_keyspace_route_template_requires_org_and_cluster_segments() {
+        assert!(
+            validate_keyspace_route_template("/tmp/deltalake/org=xxx/cluster=xxx/type=topsql")
+                .is_ok()
+        );
+
+        let error = validate_keyspace_route_template("/tmp/deltalake/type=topsql").unwrap_err();
+        assert!(error.contains("org="));
+        assert!(error.contains("cluster="));
     }
 
     #[tokio::test]

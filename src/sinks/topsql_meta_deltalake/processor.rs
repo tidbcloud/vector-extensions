@@ -11,6 +11,9 @@ use vector_lib::event::{Event, LogEvent};
 use vector_lib::sink::StreamSink;
 
 use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
+use crate::common::keyspace_cluster::{
+    path_contains_keyspace_route_segments, replace_keyspace_route_segments,
+};
 use crate::common::keyspace_cluster::{KeyspaceRoute, PdKeyspaceResolver};
 use crate::sources::topsql_v2::upstream::consts::{
     LABEL_DATE, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_KEYSPACE, LABEL_NORMALIZED_PLAN,
@@ -488,15 +491,17 @@ impl TopSQLDeltaLakeSink {
     }
 
     fn build_table_path(&self, table_name: &str, route: Option<&KeyspaceRoute>) -> PathBuf {
+        let mut base_path = self.base_path.clone();
         let mut segments = Vec::new();
         if let Some(route) = route {
-            segments.push(format!("org={}", route.org_id));
-            segments.push(format!("cluster={}", route.cluster_id));
+            if path_contains_keyspace_route_segments(&self.base_path.to_string_lossy()) {
+                base_path = replace_keyspace_route_segments(&base_path, route);
+            }
         }
         segments.push(format!("component={}", table_name));
 
         let segment_refs: Vec<&str> = segments.iter().map(|segment| segment.as_str()).collect();
-        Self::join_path(&self.base_path, &segment_refs)
+        Self::join_path(&base_path, &segment_refs)
     }
 
     fn join_path(base_path: &PathBuf, segments: &[&str]) -> PathBuf {
@@ -758,7 +763,9 @@ mod tests {
     #[test]
     fn test_build_table_path_with_keyspace_route_for_s3() {
         let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
-            PathBuf::from("s3://o11y-prod-shared-us-west-2-premium/deltalake"),
+            PathBuf::from(
+                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=xxx/cluster=xxx/type=topsql",
+            ),
             vec![],
             WriteConfig {
                 batch_size: 1,
@@ -781,8 +788,37 @@ mod tests {
         assert_eq!(
             table_path,
             PathBuf::from(
-                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=30018/cluster=10155668891296301432/component=topsql_sql_meta"
+                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=30018/cluster=10155668891296301432/type=topsql/component=topsql_sql_meta"
             )
+        );
+    }
+
+    #[test]
+    fn test_build_table_path_with_keyspace_route_replaces_template_for_local_path() {
+        let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
+            PathBuf::from("/tmp/test/org=xxx/cluster=xxx/type=topsql"),
+            vec![],
+            WriteConfig {
+                batch_size: 1,
+                timeout_secs: 0,
+            },
+            180,
+            None,
+            10000,
+            None,
+        );
+
+        let table_path = sink.build_table_path(
+            SOURCE_TABLE_TOPSQL_PLAN_META,
+            Some(&KeyspaceRoute {
+                org_id: "30018".to_string(),
+                cluster_id: "101".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            table_path,
+            PathBuf::from("/tmp/test/org=30018/cluster=101/type=topsql/component=topsql_plan_meta")
         );
     }
 

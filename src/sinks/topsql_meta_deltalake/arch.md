@@ -57,7 +57,7 @@ pub struct TopSQLMetaDeltaLakeConfig {
 - **Schema Storage**: Store SQL schemas
 - **Query Plan Storage**: Store query execution plans
 - **Metadata Versioning**: Track metadata changes over time
-- **Keyspace-aware Layout**: When `enable_keyspace_cluster_mapping = true`, metadata is written under `org=<id>/cluster=<id>/component=topsql_{sql_meta|plan_meta}`
+- **Keyspace-aware Layout**: When `enable_keyspace_cluster_mapping = true`, `base_path` must already contain `org=xxx/cluster=xxx` template segments; metadata writes replace those template values and keep the remaining layout, such as `.../type=topsql/component=topsql_{sql_meta|plan_meta}`
 
 ## Dependencies
 

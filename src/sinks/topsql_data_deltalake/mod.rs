@@ -27,7 +27,7 @@ mod processor;
 // Import default functions from common module
 use crate::common::deltalake_s3;
 use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
-use crate::common::keyspace_cluster::PdKeyspaceResolver;
+use crate::common::keyspace_cluster::{validate_keyspace_route_template, PdKeyspaceResolver};
 
 pub const fn default_enable_keyspace_cluster_mapping() -> bool {
     false
@@ -188,6 +188,10 @@ impl DeltaLakeConfig {
         s3_service: Option<&S3Service>,
         _cx: SinkContext,
     ) -> vector::Result<VectorSink> {
+        if self.enable_keyspace_cluster_mapping {
+            validate_keyspace_route_template(&self.base_path).map_err(vector::Error::from)?;
+        }
+
         // For OSS with virtual hosted style, we may need to adjust the base_path format
         // to ensure object_store correctly parses the bucket
         let base_path = if let Some(_endpoint) = self.region.as_ref().and_then(|r| r.endpoint()) {

@@ -56,7 +56,7 @@ pub struct TopSQLDataDeltaLakeConfig {
 - **SQL Digest Grouping**: Group by SQL digest
 - **Time Partitioning**: Partition by execution time
 - **Schema Optimization**: Optimized schema for TopSQL data
-- **Keyspace-based Routing**: Optional PD keyspace lookup can prepend `org=<id>/cluster=<id>` path segments before the table layout, which is especially useful for `topru` data written to shared S3 prefixes
+- **Keyspace-based Routing**: When `enable_keyspace_cluster_mapping = true`, `base_path` must already contain `org=xxx/cluster=xxx` template segments; the sink resolves keyspace via PD and replaces those template values with the routed `org` / `cluster`
 - **Component-based Path Layout**: TopSQL data is partitioned by `component=<tidb|tikv|topru>` and `instance=<id>`
 
 ## Dependencies
