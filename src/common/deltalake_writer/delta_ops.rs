@@ -197,7 +197,7 @@ impl DeltaOpsManager {
 
         info!("Writing to Delta Lake table at: {}", table_uri);
 
-        // Get partition columns from schema manager
+        // Get partition columns from schema manager (set via _schema_metadata._partition_by in events)
         let partition_by = schema_manager.get_partition_by(table_name);
 
         // Try to write directly first (avoid load() which can panic in deltalake-core 0.28.1)
