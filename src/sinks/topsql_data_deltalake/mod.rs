@@ -25,8 +25,8 @@ use tracing::{error, info, warn};
 mod processor;
 
 // Import default functions from common module
-use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
 use crate::common::deltalake_s3;
+use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
 
 pub const fn default_max_delay_secs() -> u64 {
     180
@@ -258,7 +258,7 @@ impl DeltaLakeConfig {
     }
 
     fn build_healthcheck(&self, s3_service: Option<&S3Service>) -> vector::Result<Healthcheck> {
-        deltalake_s3::build_healthcheck(self.bucket.as_deref(), &self.base_path, s3_service)
+        deltalake_s3::build_healthcheck(self.bucket.as_deref(), &self.base_path, s3_service, false)
     }
 }
 
