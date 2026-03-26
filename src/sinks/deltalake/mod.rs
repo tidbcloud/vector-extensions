@@ -108,14 +108,8 @@ impl GenerateConfig for DeltaLakeConfig {
 #[typetag::serde(name = "deltalake")]
 impl SinkConfig for DeltaLakeConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
-        error!(
-            "DEBUG: Building Delta Lake sink with bucket: {:?}",
-            self.bucket
-        );
-
         // Create S3 service if bucket is configured
         let s3_service = if self.bucket.is_some() {
-            error!("DEBUG: Bucket configured, creating S3 service");
             match self.create_service(&cx.proxy).await {
                 Ok(service) => {
                     info!("S3 service created successfully");

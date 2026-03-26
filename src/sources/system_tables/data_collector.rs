@@ -269,14 +269,23 @@ pub mod utils {
                             "_partition_by".to_string(),
                             Value::String(partition_by.join(",")),
                         );
+                        log.insert("_schema_metadata", schema_meta);
                     } else {
+                        // schema_metadata exists but is not an object; build a fresh one
                         warn!(
-                            "schema_metadata for table {} is not a JSON object, cannot inject partition_by",
+                            "schema_metadata for table {} is not a JSON object, creating new object for partition_by",
                             result.metadata.table_config.dest_table
                         );
+                        let mut new_meta = serde_json::Map::new();
+                        new_meta.insert(
+                            "_partition_by".to_string(),
+                            Value::String(partition_by.join(",")),
+                        );
+                        log.insert("_schema_metadata", Value::Object(new_meta));
                     }
+                } else {
+                    log.insert("_schema_metadata", schema_meta);
                 }
-                log.insert("_schema_metadata", schema_meta);
             }
             // Intentionally skip writing generic _vector_meta_* fields
         }
