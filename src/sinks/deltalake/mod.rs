@@ -29,7 +29,7 @@ use crate::common::deltalake_s3;
 use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
 
 // Re-export types from common module
-pub use crate::common::deltalake_writer::{DeltaTableConfig, WriteConfig};
+pub use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
 
 /// Configuration for the deltalake sink
 #[configurable_component(sink("deltalake"))]
