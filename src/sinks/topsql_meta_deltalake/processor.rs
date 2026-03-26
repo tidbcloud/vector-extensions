@@ -330,40 +330,53 @@ impl TopSQLDeltaLakeSink {
     /// Flush buffer to Delta Lake
     async fn flush_buffer(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut buffer = self.new_event_buffer.lock().await;
+        let mut pending_keys = self.pending_dedup_keys.lock().await;
         if buffer.is_empty() {
+            pending_keys.clear();
             return Ok(());
+        }
+
+        let drained_events: Vec<Event> = buffer.drain(..).collect();
+        let drained_pending_keys: Vec<(String, String)> = pending_keys.drain(..).collect();
+        drop(buffer);
+        drop(pending_keys);
+
+        if drained_events.len() != drained_pending_keys.len() {
+            return Err(format!(
+                "mismatched buffered events ({}) and pending dedup keys ({})",
+                drained_events.len(),
+                drained_pending_keys.len()
+            )
+            .into());
         }
 
         // Group events by writer target so each org/cluster route gets its own table.
         let mut table_events: HashMap<WriterKey, Vec<Event>> = HashMap::new();
+        let mut table_dedup_keys: HashMap<WriterKey, Vec<(String, String)>> = HashMap::new();
         let mut resolved_routes: HashMap<String, Option<KeyspaceRoute>> = HashMap::new();
-        let drained_events: Vec<Event> = buffer.drain(..).collect();
-        drop(buffer);
 
-        for event in drained_events {
+        for (event, dedup_key) in drained_events
+            .into_iter()
+            .zip(drained_pending_keys.into_iter())
+        {
             if let Event::Log(log_event) = event {
                 if let Some(writer_key) = self
                     .resolve_writer_key(&log_event, &mut resolved_routes)
-                    .await
-                    .map_err(|e| {
-                        // Put events back into buffer so retry can re-process them.
-                        // pending_dedup_keys are intentionally kept — they have not
-                        // been committed to LRU yet, so the retry path in
-                        // process_events_loop will re-drain them together.
-                        //
-                        // We cannot restore events here because we partially moved
-                        // them; the retry relies on the cloned snapshot in
-                        // process_events_loop instead.
-                        e
-                    })?
+                    .await?
                 {
                     table_events
-                        .entry(writer_key)
+                        .entry(writer_key.clone())
                         .or_insert_with(Vec::new)
                         .push(Event::Log(log_event));
+                    table_dedup_keys
+                        .entry(writer_key)
+                        .or_insert_with(Vec::new)
+                        .push(dedup_key);
                 }
             }
         }
+
+        let mut committed_dedup_keys = Vec::new();
 
         // Write table's events
         for (writer_key, mut events) in table_events {
@@ -387,23 +400,13 @@ impl TopSQLDeltaLakeSink {
                         e
                     );
                 }
+            } else if let Some(keys) = table_dedup_keys.remove(&writer_key) {
+                committed_dedup_keys.extend(keys);
             }
         }
 
-        // Flush succeeded — commit pending dedup keys to LRU so future
-        // duplicates are correctly suppressed.
-        {
-            let mut seen_sql = self.seen_keys_sql_meta.lock().await;
-            let mut seen_plan = self.seen_keys_plan_meta.lock().await;
-            let mut pending = self.pending_dedup_keys.lock().await;
-            for (table_name, key) in pending.drain(..) {
-                match table_name.as_str() {
-                    SOURCE_TABLE_TOPSQL_SQL_META => { seen_sql.put(key, ()); }
-                    SOURCE_TABLE_TOPSQL_PLAN_META => { seen_plan.put(key, ()); }
-                    _ => {}
-                }
-            }
-        }
+        // Commit dedup keys only for writes that actually succeeded.
+        self.commit_dedup_keys(committed_dedup_keys).await;
 
         // Update last flush time
         *self.last_flush_time.lock().await = Instant::now();
@@ -447,7 +450,10 @@ impl TopSQLDeltaLakeSink {
                         }
 
                         // Check if key is already pending in this unflushed batch
-                        if pending_keys.iter().any(|(t, k)| t == &table_name && k == &key) {
+                        if pending_keys
+                            .iter()
+                            .any(|(t, k)| t == &table_name && k == &key)
+                        {
                             continue;
                         }
 
@@ -626,6 +632,26 @@ impl TopSQLDeltaLakeSink {
 
         Ok(())
     }
+
+    async fn commit_dedup_keys(&self, dedup_keys: Vec<(String, String)>) {
+        if dedup_keys.is_empty() {
+            return;
+        }
+
+        let mut seen_sql = self.seen_keys_sql_meta.lock().await;
+        let mut seen_plan = self.seen_keys_plan_meta.lock().await;
+        for (table_name, key) in dedup_keys {
+            match table_name.as_str() {
+                SOURCE_TABLE_TOPSQL_SQL_META => {
+                    seen_sql.put(key, ());
+                }
+                SOURCE_TABLE_TOPSQL_PLAN_META => {
+                    seen_plan.put(key, ());
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 fn route_resolution_retry_delay(retry_count: usize) -> Duration {
@@ -730,6 +756,10 @@ impl StreamSink<Event> for TopSQLDeltaLakeSink {
 mod tests {
     use super::*;
     use futures::stream;
+    use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Body, Request, Response, Server};
+    use std::convert::Infallible;
+    use std::net::TcpListener;
     use vector_lib::event::{LogEvent, Value as LogValue};
 
     fn create_test_event(timestamp: i64) -> Event {
@@ -804,6 +834,57 @@ mod tests {
                 "ks-b_PLAN_DIGEST_2026-03-25".to_string(),
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn test_missing_route_does_not_commit_dedup_key() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server =
+            Server::from_tcp(listener)
+                .unwrap()
+                .serve(make_service_fn(move |_| async move {
+                    Ok::<_, Infallible>(service_fn(move |_request: Request<Body>| async move {
+                        Ok::<_, Infallible>(Response::new(Body::from(
+                            r#"{"config":{"tenant_id":"30018"}}"#,
+                        )))
+                    }))
+                }));
+        let server_handle = tokio::spawn(server);
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let resolver =
+            PdKeyspaceResolver::new_with_client(format!("http://{}", address), None, client);
+
+        let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
+            PathBuf::from("/tmp/test/org=xxx/cluster=xxx/type=topsql"),
+            vec![],
+            WriteConfig {
+                batch_size: 1,
+                timeout_secs: 0,
+            },
+            0,
+            None,
+            10000,
+            Some(resolver),
+        );
+
+        let log_event = create_meta_event(
+            SOURCE_TABLE_TOPSQL_SQL_META,
+            LABEL_SQL_DIGEST,
+            "SQL_DIGEST",
+            Some("ks-missing"),
+        );
+        sink.process_events(vec![vec![Event::Log(log_event)]])
+            .await
+            .unwrap();
+
+        assert_eq!(sink.seen_keys_sql_meta.lock().await.len(), 0);
+        assert_eq!(sink.seen_keys_plan_meta.lock().await.len(), 0);
+        assert!(sink.pending_dedup_keys.lock().await.is_empty());
+        assert!(sink.new_event_buffer.lock().await.is_empty());
+
+        server_handle.abort();
     }
 
     #[test]
