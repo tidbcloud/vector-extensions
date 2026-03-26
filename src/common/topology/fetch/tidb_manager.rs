@@ -30,8 +30,6 @@ pub enum FetchError {
     ActiveTiDBResponseTooLarge { limit_bytes: usize },
     #[snafu(display("Failed to parse active tidb response JSON text: {}", source))]
     ActiveTiDBJsonFromStr { source: serde_json::Error },
-    #[snafu(display("Invalid manager server response: {}", message))]
-    InvalidManagerResponse { message: String },
     #[snafu(display("Invalid manager keyspace shard config: {}", message))]
     InvalidShardConfig { message: String },
     #[snafu(display("Failed to parse tidb host from manager response: {}", source))]
@@ -177,16 +175,7 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
     fn parse_active_tidb_addresses_response(
         bytes: &[u8],
     ) -> Result<Vec<ActiveTiDBAddress>, FetchError> {
-        let addresses: Vec<ActiveTiDBAddress> =
-            serde_json::from_slice(bytes).context(ActiveTiDBJsonFromStrSnafu)?;
-
-        if addresses.is_empty() {
-            return Err(FetchError::InvalidManagerResponse {
-                message: "no active tidb addresses found".to_owned(),
-            });
-        }
-
-        Ok(addresses)
+        serde_json::from_slice(bytes).context(ActiveTiDBJsonFromStrSnafu)
     }
 
     fn filter_active_tidb_addresses(
