@@ -109,7 +109,7 @@ impl DeltaLakeSink {
                 self.base_path.join(table_name)
             };
 
-            // partition_by will be extracted from event metadata by SchemaManager
+            // Use config-level partition_by if present, otherwise default to ["date"]
             let table_config = self
                 .tables
                 .iter()
@@ -117,11 +117,12 @@ impl DeltaLakeSink {
                 .cloned()
                 .unwrap_or_else(|| {
                     info!(
-                        "Creating table config for {} (partition_by from event metadata)",
+                        "Creating default table config for {} with partition_by=[date]",
                         table_name
                     );
                     DeltaTableConfig {
                         name: table_name.to_string(),
+                        partition_by: Some(vec!["date".to_string()]),
                         schema_evolution: Some(true),
                     }
                 });

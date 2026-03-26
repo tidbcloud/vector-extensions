@@ -379,6 +379,7 @@ mod tests {
         // Create DeltaLakeWriter and write events
         let table_config = DeltaTableConfig {
             name: "test_table_1".to_string(),
+            partition_by: None,
             schema_evolution: Some(true),
         };
 
