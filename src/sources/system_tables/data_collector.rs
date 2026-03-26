@@ -269,6 +269,11 @@ pub mod utils {
                             "_partition_by".to_string(),
                             Value::String(partition_by.join(",")),
                         );
+                    } else {
+                        warn!(
+                            "schema_metadata for table {} is not a JSON object, cannot inject partition_by",
+                            result.metadata.table_config.dest_table
+                        );
                     }
                 }
                 log.insert("_schema_metadata", schema_meta);
@@ -277,9 +282,7 @@ pub mod utils {
         }
 
         // If partition_by is configured but no schema_metadata came from extra, create one
-        if result.metadata.table_config.partition_by.is_some()
-            && !result.metadata.extra.contains_key("schema_metadata")
-        {
+        if !result.metadata.extra.contains_key("schema_metadata") {
             if let Some(partition_by) = &result.metadata.table_config.partition_by {
                 let mut schema_meta = serde_json::Map::new();
                 schema_meta.insert(

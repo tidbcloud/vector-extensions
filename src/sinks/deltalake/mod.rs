@@ -676,7 +676,7 @@ mod tests {
             .await
             .expect("Failed to write events");
 
-        // Verify date=... partition directory exists
+        // Verify date=2024-03-15 partition directory exists (derived from _vector_timestamp)
         let partition_dirs: Vec<_> = fs::read_dir(&base_path)
             .expect("Failed to read table directory")
             .filter_map(|e| e.ok())
@@ -691,6 +691,11 @@ mod tests {
             !partition_dirs.is_empty(),
             "Expected date=... partition directory, found none in {:?}",
             base_path
+        );
+        assert_eq!(
+            partition_dirs[0].file_name().to_string_lossy(),
+            "date=2024-03-15",
+            "Partition directory should match the date from _vector_timestamp"
         );
 
         let _ = fs::remove_dir_all(base_path.parent().unwrap());

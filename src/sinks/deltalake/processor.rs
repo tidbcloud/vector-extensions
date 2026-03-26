@@ -109,7 +109,8 @@ impl DeltaLakeSink {
                 self.base_path.join(table_name)
             };
 
-            // Use config-level partition_by if present, otherwise default to ["date"]
+            // Partition columns come from event _schema_metadata._partition_by,
+            // set by the system_tables source via TableConfig.partition_by
             let table_config = self
                 .tables
                 .iter()
