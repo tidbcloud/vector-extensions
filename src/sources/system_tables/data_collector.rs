@@ -261,10 +261,38 @@ pub mod utils {
         // Add extra metadata
         for (key, value) in &result.metadata.extra {
             if key == "schema_metadata" {
-                // Add schema metadata directly as _schema_metadata for DeltaLake writer
-                log.insert("_schema_metadata", value.clone());
+                let mut schema_meta = value.clone();
+                // Inject partition_by from table config into schema metadata
+                if let Some(partition_by) = &result.metadata.table_config.partition_by {
+                    let partition_value = Value::String(partition_by.join(","));
+                    if let Some(obj) = schema_meta.as_object_mut() {
+                        obj.insert("_partition_by".to_string(), partition_value);
+                        log.insert("_schema_metadata", schema_meta);
+                    } else {
+                        // schema_metadata exists but is not an object; build a fresh one
+                        warn!(
+                            "schema_metadata for table {} is not a JSON object, creating new object for partition_by",
+                            result.metadata.table_config.dest_table
+                        );
+                        let mut new_meta = serde_json::Map::new();
+                        new_meta.insert("_partition_by".to_string(), partition_value);
+                        log.insert("_schema_metadata", Value::Object(new_meta));
+                    }
+                } else {
+                    log.insert("_schema_metadata", schema_meta);
+                }
             }
             // Intentionally skip writing generic _vector_meta_* fields
+        }
+
+        // If partition_by is configured but no schema_metadata came from extra, create one
+        if !result.metadata.extra.contains_key("schema_metadata") {
+            if let Some(partition_by) = &result.metadata.table_config.partition_by {
+                let partition_value = Value::String(partition_by.join(","));
+                let mut schema_meta = serde_json::Map::new();
+                schema_meta.insert("_partition_by".to_string(), partition_value);
+                log.insert("_schema_metadata", Value::Object(schema_meta));
+            }
         }
 
         // Add the actual row data
@@ -373,6 +401,7 @@ mod tests {
                 collection_interval: "short".to_string(),
                 where_clause: None,
                 enabled: true,
+                partition_by: None,
             },
             collection_method: CollectionMethod::Coprocessor,
             timestamp: chrono::Utc::now(),

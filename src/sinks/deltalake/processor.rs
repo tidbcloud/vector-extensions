@@ -109,7 +109,8 @@ impl DeltaLakeSink {
                 self.base_path.join(table_name)
             };
 
-            // partition_by will be extracted from event metadata by SchemaManager
+            // Partition columns come from event _schema_metadata._partition_by,
+            // set by the system_tables source via TableConfig.partition_by
             let table_config = self
                 .tables
                 .iter()
@@ -117,7 +118,7 @@ impl DeltaLakeSink {
                 .cloned()
                 .unwrap_or_else(|| {
                     info!(
-                        "Creating table config for {} (partition_by from event metadata)",
+                        "Creating default table config for {}",
                         table_name
                     );
                     DeltaTableConfig {
