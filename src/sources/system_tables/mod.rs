@@ -157,6 +157,10 @@ pub struct TableConfig {
     /// Whether this table is enabled
     #[configurable(derived)]
     pub enabled: bool,
+    /// Partition columns for the destination table (e.g. ["date"])
+    #[configurable(derived)]
+    #[serde(default)]
+    pub partition_by: Option<Vec<String>>,
 }
 
 /// Collection interval type
@@ -356,6 +360,7 @@ impl GenerateConfig for SystemTablesConfig {
                 collection_interval: "short".to_owned(),
                 where_clause: Some("command != 'Sleep'".to_owned()),
                 enabled: true,
+                partition_by: None,
             }],
             pd_tls: None,
             database_tls: None,
