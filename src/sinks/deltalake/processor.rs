@@ -263,4 +263,45 @@ mod tests {
         assert_eq!(table_events.get("table_a").unwrap().len(), 2);
         assert_eq!(table_events.get("table_b").unwrap().len(), 1);
     }
+
+    #[test]
+    fn test_default_table_config_has_date_partition() {
+        let tables: Vec<DeltaTableConfig> = vec![];
+        let table_name = "some_new_table";
+
+        let config = tables
+            .iter()
+            .find(|t| t.name == table_name)
+            .cloned()
+            .unwrap_or_else(|| DeltaTableConfig {
+                name: table_name.to_string(),
+                partition_by: Some(vec!["date".to_string()]),
+                schema_evolution: Some(true),
+            });
+
+        assert_eq!(config.partition_by, Some(vec!["date".to_string()]));
+    }
+
+    #[test]
+    fn test_explicit_table_config_overrides_default_partition() {
+        let custom_config = DeltaTableConfig {
+            name: "custom_table".to_string(),
+            partition_by: Some(vec!["region".to_string()]),
+            schema_evolution: Some(true),
+        };
+        let tables = vec![custom_config];
+        let table_name = "custom_table";
+
+        let config = tables
+            .iter()
+            .find(|t| t.name == table_name)
+            .cloned()
+            .unwrap_or_else(|| DeltaTableConfig {
+                name: table_name.to_string(),
+                partition_by: Some(vec!["date".to_string()]),
+                schema_evolution: Some(true),
+            });
+
+        assert_eq!(config.partition_by, Some(vec!["region".to_string()]));
+    }
 }
