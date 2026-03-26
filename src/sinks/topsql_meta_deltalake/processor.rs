@@ -426,7 +426,6 @@ impl TopSQLDeltaLakeSink {
                 .cloned()
                 .unwrap_or_else(|| DeltaTableConfig {
                     name: table_name.to_string(),
-                    partition_by: None,
                     schema_evolution: Some(true),
                 });
             DeltaLakeWriter::new_with_options(

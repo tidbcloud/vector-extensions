@@ -379,7 +379,6 @@ mod tests {
         // Create DeltaLakeWriter and write events
         let table_config = DeltaTableConfig {
             name: "test_table_1".to_string(),
-            partition_by: None,
             schema_evolution: Some(true),
         };
 
@@ -658,7 +657,6 @@ mod tests {
 
         let table_config = DeltaTableConfig {
             name: "hist_statements".to_string(),
-            partition_by: None, // config-level not set; partition comes from schema metadata
             schema_evolution: Some(true),
         };
         let write_config = WriteConfig {

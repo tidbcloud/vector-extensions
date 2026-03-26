@@ -24,9 +24,6 @@ pub struct DeltaTableConfig {
     /// Table name
     pub name: String,
 
-    /// Partition columns (e.g. ["date"])
-    pub partition_by: Option<Vec<String>>,
-
     /// Enable schema evolution
     pub schema_evolution: Option<bool>,
 }
@@ -158,7 +155,6 @@ impl DeltaLakeWriter {
                 record_batch,
                 &self.schema_manager,
                 self.storage_options.as_ref(),
-                self.table_config.partition_by.as_ref(),
             )
             .await?;
 

@@ -156,7 +156,6 @@ impl DeltaOpsManager {
         record_batch: RecordBatch,
         schema_manager: &SchemaManager,
         storage_options: Option<&HashMap<String, String>>,
-        config_partition_by: Option<&Vec<String>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Build Delta table URI as url::Url
         // For non-S3 paths, add file:// protocol prefix (only absolute paths are supported)
@@ -192,8 +191,8 @@ impl DeltaOpsManager {
 
         info!("Writing to Delta Lake table at: {}", table_uri);
 
-        // Use config partition_by if set, otherwise fall back to schema manager
-        let partition_by = config_partition_by.or_else(|| schema_manager.get_partition_by(table_name));
+        // Get partition columns from schema manager (set via _schema_metadata._partition_by in events)
+        let partition_by = schema_manager.get_partition_by(table_name);
 
         // Try to write directly first (avoid load() which can panic in deltalake-core 0.28.1)
         // Retry logic for transaction conflicts (concurrent writes)
