@@ -264,11 +264,9 @@ pub mod utils {
                 let mut schema_meta = value.clone();
                 // Inject partition_by from table config into schema metadata
                 if let Some(partition_by) = &result.metadata.table_config.partition_by {
+                    let partition_value = Value::String(partition_by.join(","));
                     if let Some(obj) = schema_meta.as_object_mut() {
-                        obj.insert(
-                            "_partition_by".to_string(),
-                            Value::String(partition_by.join(",")),
-                        );
+                        obj.insert("_partition_by".to_string(), partition_value);
                         log.insert("_schema_metadata", schema_meta);
                     } else {
                         // schema_metadata exists but is not an object; build a fresh one
@@ -277,10 +275,7 @@ pub mod utils {
                             result.metadata.table_config.dest_table
                         );
                         let mut new_meta = serde_json::Map::new();
-                        new_meta.insert(
-                            "_partition_by".to_string(),
-                            Value::String(partition_by.join(",")),
-                        );
+                        new_meta.insert("_partition_by".to_string(), partition_value);
                         log.insert("_schema_metadata", Value::Object(new_meta));
                     }
                 } else {
@@ -293,11 +288,9 @@ pub mod utils {
         // If partition_by is configured but no schema_metadata came from extra, create one
         if !result.metadata.extra.contains_key("schema_metadata") {
             if let Some(partition_by) = &result.metadata.table_config.partition_by {
+                let partition_value = Value::String(partition_by.join(","));
                 let mut schema_meta = serde_json::Map::new();
-                schema_meta.insert(
-                    "_partition_by".to_string(),
-                    Value::String(partition_by.join(",")),
-                );
+                schema_meta.insert("_partition_by".to_string(), partition_value);
                 log.insert("_schema_metadata", Value::Object(schema_meta));
             }
         }

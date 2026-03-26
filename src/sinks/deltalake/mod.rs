@@ -682,14 +682,14 @@ mod tests {
             .collect();
 
         assert!(
-            !partition_dirs.is_empty(),
-            "Expected date=... partition directory, found none in {:?}",
-            base_path
-        );
-        assert_eq!(
-            partition_dirs[0].file_name().to_string_lossy(),
-            "date=2024-03-15",
-            "Partition directory should match the date from _vector_timestamp"
+            partition_dirs
+                .iter()
+                .any(|e| e.file_name().to_string_lossy() == "date=2024-03-15"),
+            "Expected date=2024-03-15 partition directory, found: {:?}",
+            partition_dirs
+                .iter()
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>()
         );
 
         let _ = fs::remove_dir_all(base_path.parent().unwrap());
