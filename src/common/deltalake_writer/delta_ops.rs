@@ -161,11 +161,14 @@ impl DeltaOpsManager {
         storage_options: Option<&HashMap<String, String>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Build Delta table URI as url::Url
-        // For non-S3 paths, add file:// protocol prefix (only absolute paths are supported)
+        // For non-cloud paths, add file:// protocol prefix (only absolute paths are supported)
         let table_uri = {
             let path_str = table_path.to_string_lossy();
-            if path_str.starts_with("s3://") {
-                // S3 paths already have protocol prefix
+            if path_str.starts_with("s3://")
+                || path_str.starts_with("az://")
+                || path_str.starts_with("gs://")
+            {
+                // Cloud storage paths already have protocol prefix
                 Url::parse(&path_str)?
             } else if path_str.starts_with("file://") {
                 // Already has file:// prefix

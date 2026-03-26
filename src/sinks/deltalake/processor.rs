@@ -97,13 +97,15 @@ impl DeltaLakeSink {
         // Get or create writer for this table
         let mut writers = self.writers.lock().await;
         let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
-            let table_path = if self.base_path.to_string_lossy().starts_with("s3://") {
-                // For S3 paths, append the table name to the S3 path
-                PathBuf::from(format!(
-                    "{}/{}",
-                    self.base_path.to_string_lossy(),
-                    table_name
-                ))
+            let path_str = self.base_path.to_string_lossy();
+            let is_cloud_path = path_str.starts_with("s3://")
+                || path_str.starts_with("az://")
+                || path_str.starts_with("gs://");
+
+            let table_path = if is_cloud_path {
+                // For cloud storage paths, use string formatting to preserve the URI scheme
+                // PathBuf::join would corrupt the scheme prefix
+                PathBuf::from(format!("{}/{}", path_str.trim_end_matches('/'), table_name))
             } else {
                 // For local paths, use join as before
                 self.base_path.join(table_name)
