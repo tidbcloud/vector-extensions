@@ -129,6 +129,9 @@ pub struct TopSQLDeltaLakeSink {
     seen_keys_plan_meta: Arc<Mutex<LruCache<String, ()>>>,
     // Buffer for events to be flushed
     new_event_buffer: Arc<Mutex<Vec<Event>>>,
+    // Dedup keys pending commit — written to LRU only after a successful flush.
+    // Each entry is (source_table, dedup_key) parallel to new_event_buffer.
+    pending_dedup_keys: Arc<Mutex<Vec<(String, String)>>>,
     // Last flush time
     last_flush_time: Arc<Mutex<Instant>>,
 }
@@ -167,6 +170,7 @@ impl TopSQLDeltaLakeSink {
                 std::num::NonZeroUsize::new(meta_cache_capacity).unwrap(),
             ))), // LRU cache with configurable capacity
             new_event_buffer: Arc::new(Mutex::new(Vec::new())),
+            pending_dedup_keys: Arc::new(Mutex::new(Vec::new())),
             last_flush_time: Arc::new(Mutex::new(Instant::now())),
         };
         let sink_clone = sink.clone();
@@ -213,6 +217,7 @@ impl TopSQLDeltaLakeSink {
                 std::num::NonZeroUsize::new(meta_cache_capacity).unwrap(),
             ))), // LRU cache with configurable capacity
             new_event_buffer: Arc::new(Mutex::new(Vec::new())),
+            pending_dedup_keys: Arc::new(Mutex::new(Vec::new())),
             last_flush_time: Arc::new(Mutex::new(Instant::now())),
         };
 
@@ -234,6 +239,11 @@ impl TopSQLDeltaLakeSink {
                     Ok(()) => break,
                     Err(error) => {
                         error!("Failed to process events: {}", error);
+                        // Clear stale state so the retry snapshot is processed
+                        // from scratch — pending keys were never committed to
+                        // LRU, and the buffer was already drained by flush.
+                        self.pending_dedup_keys.lock().await.clear();
+                        self.new_event_buffer.lock().await.clear();
                         let Some(events) = retry_snapshot else {
                             if retry_on_failure {
                                 error!(
@@ -327,11 +337,25 @@ impl TopSQLDeltaLakeSink {
         // Group events by writer target so each org/cluster route gets its own table.
         let mut table_events: HashMap<WriterKey, Vec<Event>> = HashMap::new();
         let mut resolved_routes: HashMap<String, Option<KeyspaceRoute>> = HashMap::new();
-        for event in buffer.drain(..) {
+        let drained_events: Vec<Event> = buffer.drain(..).collect();
+        drop(buffer);
+
+        for event in drained_events {
             if let Event::Log(log_event) = event {
                 if let Some(writer_key) = self
                     .resolve_writer_key(&log_event, &mut resolved_routes)
-                    .await?
+                    .await
+                    .map_err(|e| {
+                        // Put events back into buffer so retry can re-process them.
+                        // pending_dedup_keys are intentionally kept — they have not
+                        // been committed to LRU yet, so the retry path in
+                        // process_events_loop will re-drain them together.
+                        //
+                        // We cannot restore events here because we partially moved
+                        // them; the retry relies on the cloned snapshot in
+                        // process_events_loop instead.
+                        e
+                    })?
                 {
                     table_events
                         .entry(writer_key)
@@ -366,6 +390,21 @@ impl TopSQLDeltaLakeSink {
             }
         }
 
+        // Flush succeeded — commit pending dedup keys to LRU so future
+        // duplicates are correctly suppressed.
+        {
+            let mut seen_sql = self.seen_keys_sql_meta.lock().await;
+            let mut seen_plan = self.seen_keys_plan_meta.lock().await;
+            let mut pending = self.pending_dedup_keys.lock().await;
+            for (table_name, key) in pending.drain(..) {
+                match table_name.as_str() {
+                    SOURCE_TABLE_TOPSQL_SQL_META => { seen_sql.put(key, ()); }
+                    SOURCE_TABLE_TOPSQL_PLAN_META => { seen_plan.put(key, ()); }
+                    _ => {}
+                }
+            }
+        }
+
         // Update last flush time
         *self.last_flush_time.lock().await = Instant::now();
 
@@ -381,9 +420,10 @@ impl TopSQLDeltaLakeSink {
             return Ok(());
         }
 
-        let mut seen_keys_sql_meta = self.seen_keys_sql_meta.lock().await;
-        let mut seen_keys_plan_meta = self.seen_keys_plan_meta.lock().await;
+        let seen_keys_sql_meta = self.seen_keys_sql_meta.lock().await;
+        let seen_keys_plan_meta = self.seen_keys_plan_meta.lock().await;
         let mut buffer = self.new_event_buffer.lock().await;
+        let mut pending_keys = self.pending_dedup_keys.lock().await;
         let last_flush = *self.last_flush_time.lock().await;
         let current_time = Instant::now();
         let flush_interval = Duration::from_secs(self.max_delay_secs);
@@ -396,21 +436,26 @@ impl TopSQLDeltaLakeSink {
                     if let Some((table_name, key)) = self.extract_event_key(&log_event) {
                         // Select the appropriate LRU cache based on table_name (source_table)
                         let seen_keys = match table_name.as_str() {
-                            SOURCE_TABLE_TOPSQL_SQL_META => &mut *seen_keys_sql_meta,
-                            SOURCE_TABLE_TOPSQL_PLAN_META => &mut *seen_keys_plan_meta,
+                            SOURCE_TABLE_TOPSQL_SQL_META => &*seen_keys_sql_meta,
+                            SOURCE_TABLE_TOPSQL_PLAN_META => &*seen_keys_plan_meta,
                             _ => continue, // Skip unknown event types
                         };
 
-                        // Check if key is already in LRU cache
-                        if seen_keys.get(&key).is_some() {
-                            // Update key in LRU cache (touch it) - get() already does this
+                        // Check if key is already committed in LRU cache
+                        if seen_keys.peek(&key).is_some() {
                             continue;
-                        } else {
-                            // Insert key to LRU cache
-                            seen_keys.put(key.clone(), ());
-                            // Put event in buffer
-                            buffer.push(Event::Log(log_event));
                         }
+
+                        // Check if key is already pending in this unflushed batch
+                        if pending_keys.iter().any(|(t, k)| t == &table_name && k == &key) {
+                            continue;
+                        }
+
+                        // Stage the key — it will be committed to LRU only after
+                        // flush_buffer succeeds, so a retry can re-process the
+                        // same events without them being silently dropped.
+                        pending_keys.push((table_name, key));
+                        buffer.push(Event::Log(log_event));
                     }
                     // If key cannot be extracted, skip the event
                 }
@@ -427,6 +472,7 @@ impl TopSQLDeltaLakeSink {
 
         if buffer_full || time_reached {
             // Release buffer lock before flushing
+            drop(pending_keys);
             drop(buffer);
 
             // Flush buffer to deltalake
