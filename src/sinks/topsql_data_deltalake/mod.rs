@@ -248,7 +248,7 @@ impl DeltaLakeConfig {
                 )
             })?;
             Some(
-                PdKeyspaceResolver::new(pd_address, self.pd_tls.clone()).map_err(|error| {
+                PdKeyspaceResolver::new(pd_address, self.pd_tls.as_ref()).map_err(|error| {
                     vector::Error::from(format!(
                         "failed to build PD keyspace resolver from pd_address: {}",
                         error

@@ -28,6 +28,9 @@ pub struct KeyspaceRoute {
     pub cluster_id: String,
 }
 
+// Path segments use the exact prefixes `org=` and `cluster=` as a convention.
+// These are Hive-style partition keys chosen for the storage path layout;
+// callers must follow this convention when constructing base_path templates.
 pub fn path_contains_keyspace_route_segments(path: &str) -> bool {
     let mut has_org_segment = false;
     let mut has_cluster_segment = false;
@@ -54,6 +57,10 @@ pub fn validate_keyspace_route_template(path: &str) -> Result<(), String> {
 }
 
 pub fn replace_keyspace_route_segments(base_path: &PathBuf, route: &KeyspaceRoute) -> PathBuf {
+    debug_assert!(
+        !route.org_id.contains('/') && !route.cluster_id.contains('/'),
+        "org_id and cluster_id must not contain path separators"
+    );
     let path = base_path.to_string_lossy();
     let replaced = path
         .split('/')
@@ -85,9 +92,9 @@ struct PdKeyspaceMetadata {
 }
 
 impl PdKeyspaceResolver {
-    pub fn new(pd_address: impl Into<String>, pd_tls: Option<TlsConfig>) -> Result<Self, BoxError> {
-        let client = build_http_client(pd_tls.as_ref())?;
-        Ok(Self::new_with_client(pd_address, pd_tls.as_ref(), client))
+    pub fn new(pd_address: impl Into<String>, pd_tls: Option<&TlsConfig>) -> Result<Self, BoxError> {
+        let client = build_http_client(pd_tls)?;
+        Ok(Self::new_with_client(pd_address, pd_tls, client))
     }
 
     pub fn new_with_client(
@@ -118,6 +125,9 @@ impl PdKeyspaceResolver {
         }
     }
 
+    // TODO: concurrent requests for the same keyspace can all miss the cache and
+    // issue duplicate HTTP calls. Consider an in-flight dedup mechanism if PD
+    // pressure becomes a concern.
     pub async fn resolve_keyspace(
         &self,
         keyspace_name: &str,

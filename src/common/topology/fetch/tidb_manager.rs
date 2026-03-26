@@ -1,7 +1,7 @@
 use std::{collections::HashSet, env};
 
 use hyper::body::HttpBody;
-use serde_json::{Map, Value};
+use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use vector::http::HttpClient;
 
@@ -12,7 +12,6 @@ use crate::common::topology::{Component, InstanceType};
 const GET_ACTIVE_TIDB_PATH: &str = "/api/tidb/get_active_tidb";
 const DEFAULT_TIDB_PRIMARY_PORT: u16 = 4000;
 const DEFAULT_TIDB_STATUS_PORT: u16 = 10080;
-const MAX_RESPONSE_DEPTH: usize = 8;
 const MAX_MANAGER_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const VECTOR_STS_REPLICA_COUNT_ENV: &str = "VECTOR_STS_REPLICA_COUNT";
 const VECTOR_STS_ID_ENV: &str = "VECTOR_STS_ID";
@@ -39,12 +38,16 @@ pub enum FetchError {
     ParseTiDBHost { source: utils::ParseError },
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
 struct ActiveTiDBAddress {
     host: String,
+    #[serde(default)]
     port: Option<u16>,
+    #[serde(default)]
     status_port: Option<u16>,
+    #[serde(default)]
     hostname: Option<String>,
+    #[serde(default)]
     keyspace_name: Option<String>,
 }
 
@@ -146,10 +149,6 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         ))
     }
 
-    fn normalize_namespaces(namespaces: Option<&str>) -> Option<String> {
-        normalize_namespace_list(namespaces)
-    }
-
     fn build_active_tidb_endpoint_url(manager_server_address: &str, namespaces: &str) -> String {
         let mut endpoint = if manager_server_address.ends_with(GET_ACTIVE_TIDB_PATH) {
             manager_server_address.to_owned()
@@ -178,8 +177,8 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
     fn parse_active_tidb_addresses_response(
         bytes: &[u8],
     ) -> Result<Vec<ActiveTiDBAddress>, FetchError> {
-        let value = serde_json::from_slice::<Value>(bytes).context(ActiveTiDBJsonFromStrSnafu)?;
-        let addresses = Self::extract_active_tidb_addresses(&value, 0)?;
+        let addresses: Vec<ActiveTiDBAddress> =
+            serde_json::from_slice(bytes).context(ActiveTiDBJsonFromStrSnafu)?;
 
         if addresses.is_empty() {
             return Err(FetchError::InvalidManagerResponse {
@@ -188,98 +187,6 @@ impl<'a> TiDBManagerTopologyFetcher<'a> {
         }
 
         Ok(addresses)
-    }
-
-    fn extract_active_tidb_addresses(
-        value: &Value,
-        depth: usize,
-    ) -> Result<Vec<ActiveTiDBAddress>, FetchError> {
-        if depth > MAX_RESPONSE_DEPTH {
-            return Err(FetchError::InvalidManagerResponse {
-                message: "response nesting is too deep".to_owned(),
-            });
-        }
-
-        match value {
-            Value::String(host) => Ok(vec![ActiveTiDBAddress {
-                host: host.clone(),
-                port: None,
-                status_port: None,
-                hostname: None,
-                keyspace_name: None,
-            }]),
-            Value::Array(items) => {
-                let mut addresses = Vec::new();
-                for item in items {
-                    addresses.extend(Self::extract_active_tidb_addresses(item, depth + 1)?);
-                }
-                Ok(addresses)
-            }
-            Value::Object(obj) => {
-                if let Some(address) = Self::extract_active_tidb_address_from_object(obj) {
-                    return Ok(vec![address]);
-                }
-
-                for key in [
-                    "data",
-                    "result",
-                    "active_tidb_addresses",
-                    "tidb_addresses",
-                    "active_tidbs",
-                    "tidbs",
-                    "addresses",
-                    "instances",
-                    "items",
-                    "nodes",
-                    "list",
-                ] {
-                    if let Some(next_value) = obj.get(key) {
-                        let addresses = Self::extract_active_tidb_addresses(next_value, depth + 1)?;
-                        if !addresses.is_empty() {
-                            return Ok(addresses);
-                        }
-                    }
-                }
-
-                Ok(Vec::new())
-            }
-            _ => Ok(Vec::new()),
-        }
-    }
-
-    fn extract_active_tidb_address_from_object(
-        obj: &Map<String, Value>,
-    ) -> Option<ActiveTiDBAddress> {
-        let host = Self::extract_string_field(
-            obj,
-            &["host", "address", "tidb_address", "active_tidb_address"],
-        )?;
-        let port = Self::extract_u16_field(obj, &["port", "primary_port"]);
-        let status_port = Self::extract_u16_field(obj, &["status_port", "secondary_port"]);
-        let hostname = Self::extract_string_field(obj, &["hostname", "pod_name", "instance_name"]);
-        let keyspace_name =
-            Self::extract_string_field(obj, &["keyspace_name", "keyspaceName", "keyspace"]);
-
-        Some(ActiveTiDBAddress {
-            host,
-            port,
-            status_port,
-            hostname,
-            keyspace_name,
-        })
-    }
-
-    fn extract_string_field(obj: &Map<String, Value>, keys: &[&str]) -> Option<String> {
-        keys.iter()
-            .find_map(|key| obj.get(*key).and_then(Value::as_str).map(str::to_owned))
-    }
-
-    fn extract_u16_field(obj: &Map<String, Value>, keys: &[&str]) -> Option<u16> {
-        keys.iter().find_map(|key| {
-            obj.get(*key)
-                .and_then(Value::as_u64)
-                .and_then(|raw| u16::try_from(raw).ok())
-        })
     }
 
     fn filter_active_tidb_addresses(
@@ -473,24 +380,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_response_supports_keyspace_aliases() {
-        let bytes = br#"[
-            {"host":"10.0.0.1","keyspace":"tenant-a"},
-            {"host":"10.0.0.2","keyspaceName":"tenant-b"}
-        ]"#;
-        let addresses =
-            TiDBManagerTopologyFetcher::parse_active_tidb_addresses_response(bytes).unwrap();
-
-        assert_eq!(addresses[0].keyspace_name.as_deref(), Some("tenant-a"));
-        assert_eq!(addresses[1].keyspace_name.as_deref(), Some("tenant-b"));
-    }
-
-    #[test]
     fn parse_response_invalid_format() {
         let bytes = br#"{"code":0,"message":"ok"}"#;
         let err = TiDBManagerTopologyFetcher::parse_active_tidb_addresses_response(bytes)
             .expect_err("expected invalid manager response");
-        assert!(matches!(err, FetchError::InvalidManagerResponse { .. }));
+        assert!(matches!(err, FetchError::ActiveTiDBJsonFromStr { .. }));
     }
 
     #[test]
@@ -544,20 +438,14 @@ mod tests {
 
     #[test]
     fn normalize_namespaces_none_or_empty() {
-        assert_eq!(TiDBManagerTopologyFetcher::normalize_namespaces(None), None);
-        assert_eq!(
-            TiDBManagerTopologyFetcher::normalize_namespaces(Some("")),
-            None
-        );
-        assert_eq!(
-            TiDBManagerTopologyFetcher::normalize_namespaces(Some("  ,   ")),
-            None
-        );
+        assert_eq!(normalize_namespace_list(None), None);
+        assert_eq!(normalize_namespace_list(Some("")), None);
+        assert_eq!(normalize_namespace_list(Some("  ,   ")), None);
     }
 
     #[test]
     fn normalize_namespaces_trim_and_filter() {
-        let normalized = TiDBManagerTopologyFetcher::normalize_namespaces(Some(
+        let normalized = normalize_namespace_list(Some(
             " super-vip-tidb-pool, canary-super-vip-tidb-pool , ",
         ));
         assert_eq!(
