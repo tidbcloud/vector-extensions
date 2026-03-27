@@ -106,12 +106,14 @@ impl EventConverter {
             if let Event::Log(log_event) = event {
                 let value_opt = match field.name().as_str() {
                     "_vector_table" => {
-                        if let Some(table_name) = log_event.get("_vector_table").and_then(|v| v.as_str()) {
+                        if let Some(table_name) =
+                            log_event.get("_vector_table").and_then(|v| v.as_str())
+                        {
                             Some(table_name.to_string())
                         } else {
                             default_table_name.map(|s| s.to_string())
                         }
-                    },
+                    }
                     "_vector_source_table" => log_event
                         .get("_vector_source_table")
                         .and_then(|v| v.as_str())
@@ -623,9 +625,9 @@ impl Default for EventConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::StringArray;
     use std::collections::BTreeMap;
     use vector_lib::event::LogEvent;
-    use arrow::array::StringArray;
 
     fn create_test_log_event() -> LogEvent {
         let mut log = LogEvent::from(BTreeMap::new());

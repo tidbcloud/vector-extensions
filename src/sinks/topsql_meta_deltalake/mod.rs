@@ -25,8 +25,8 @@ use tracing::{error, info, warn};
 mod processor;
 
 // Import default functions from common module
-use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
 use crate::common::deltalake_s3;
+use crate::common::deltalake_writer::{default_batch_size, default_timeout_secs};
 
 pub const fn default_max_delay_secs() -> u64 {
     180
@@ -127,13 +127,17 @@ impl GenerateConfig for DeltaLakeConfig {
 impl SinkConfig for DeltaLakeConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
         info!(
-            "DEBUG: Building Delta Lake sink with bucket: {:?}",
-            self.bucket
+            "Building Delta Lake sink with bucket: {:?}, base_path: {}",
+            self.bucket, self.base_path
         );
 
-        // Create S3 service if bucket is configured
+        let is_cloud_path = self.base_path.starts_with("s3://")
+            || self.base_path.starts_with("az://")
+            || self.base_path.starts_with("gs://");
+
+        // Create S3 service if bucket is configured (S3/OSS only)
         let s3_service = if self.bucket.is_some() {
-            info!("DEBUG: Bucket configured, creating S3 service");
+            info!("Bucket configured, creating S3 service");
             match self.create_service(&cx.proxy).await {
                 Ok(service) => {
                     info!("S3 service created successfully");
@@ -149,6 +153,12 @@ impl SinkConfig for DeltaLakeConfig {
                     None
                 }
             }
+        } else if is_cloud_path {
+            info!(
+                "Cloud storage path detected ({}), using storage_options for authentication",
+                &self.base_path[..self.base_path.find("://").unwrap_or(0) + 3]
+            );
+            None
         } else {
             info!("No bucket configured, using local filesystem");
             None
@@ -158,7 +168,7 @@ impl SinkConfig for DeltaLakeConfig {
         let sink = self.build_processor(s3_service.as_ref(), cx).await?;
 
         info!("Building healthcheck");
-        let healthcheck = self.build_healthcheck(s3_service.as_ref())?;
+        let healthcheck = self.build_healthcheck(s3_service.as_ref(), is_cloud_path)?;
 
         info!("Delta Lake sink build completed successfully");
         Ok((sink, healthcheck))
@@ -267,8 +277,17 @@ impl DeltaLakeConfig {
         .await
     }
 
-    fn build_healthcheck(&self, s3_service: Option<&S3Service>) -> vector::Result<Healthcheck> {
-        deltalake_s3::build_healthcheck(self.bucket.as_deref(), &self.base_path, s3_service)
+    fn build_healthcheck(
+        &self,
+        s3_service: Option<&S3Service>,
+        is_cloud_path: bool,
+    ) -> vector::Result<Healthcheck> {
+        deltalake_s3::build_healthcheck(
+            self.bucket.as_deref(),
+            &self.base_path,
+            s3_service,
+            is_cloud_path,
+        )
     }
 }
 

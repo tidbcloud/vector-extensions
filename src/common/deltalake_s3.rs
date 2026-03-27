@@ -3,12 +3,12 @@ use std::path::PathBuf;
 
 use reqwest::Client;
 use serde_json::Value;
+use tracing::{error, info, warn};
 use vector::aws::{AwsAuthentication, RegionOrEndpoint};
 use vector::sinks::s3_common::{self, service::S3Service};
 use vector::sinks::Healthcheck;
 use vector_lib::config::proxy::ProxyConfig;
 use vector_lib::tls::TlsConfig;
-use tracing::{error, info, warn};
 
 /// Shared S3 + DeltaLake helpers used by multiple sinks.
 ///
@@ -151,10 +151,7 @@ pub async fn create_service(
 
     info!("Using region: {:?} for S3 service", region);
     info!("Using auth: {:?} for S3 service", auth);
-    info!(
-        "Force path style: {:?}",
-        force_path_style.unwrap_or(true)
-    );
+    info!("Force path style: {:?}", force_path_style.unwrap_or(true));
 
     let result = s3_common::config::create_service(
         &region,
@@ -213,17 +210,17 @@ pub async fn apply_s3_storage_options(
         // Set endpoint if using custom endpoint
         if let Some(endpoint) = region.endpoint() {
             // Ensure endpoint URL has a protocol scheme
-            let endpoint_url = if endpoint.starts_with("http://") || endpoint.starts_with("https://")
-            {
-                endpoint.clone()
-            } else {
-                // For OSS internal endpoints, use http://; for others, use https://
-                if endpoint.contains("-internal") {
-                    format!("http://{}", endpoint)
+            let endpoint_url =
+                if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+                    endpoint.clone()
                 } else {
-                    format!("https://{}", endpoint)
-                }
-            };
+                    // For OSS internal endpoints, use http://; for others, use https://
+                    if endpoint.contains("-internal") {
+                        format!("http://{}", endpoint)
+                    } else {
+                        format!("https://{}", endpoint)
+                    }
+                };
             info!("Setting OSS endpoint URL: {}", endpoint_url);
             storage_options.insert("AWS_ENDPOINT_URL".to_string(), endpoint_url);
         }
@@ -344,7 +341,10 @@ pub async fn apply_s3_storage_options(
             };
             info!("Using AccessKey ID: {}", access_key_preview);
 
-            storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id_str.to_string());
+            storage_options.insert(
+                "AWS_ACCESS_KEY_ID".to_string(),
+                access_key_id_str.to_string(),
+            );
             storage_options.insert(
                 "AWS_SECRET_ACCESS_KEY".to_string(),
                 secret_access_key_str.to_string(),
@@ -404,10 +404,8 @@ pub async fn apply_s3_storage_options(
                         Ok((access_key_id, access_key_secret, security_token)) => {
                             info!("✓ Successfully obtained temporary credentials from Aliyun STS");
                             storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id);
-                            storage_options.insert(
-                                "AWS_SECRET_ACCESS_KEY".to_string(),
-                                access_key_secret,
-                            );
+                            storage_options
+                                .insert("AWS_SECRET_ACCESS_KEY".to_string(), access_key_secret);
                             storage_options.insert("AWS_SESSION_TOKEN".to_string(), security_token);
                             info!("✓ Using temporary credentials for OSS authentication");
                         }
@@ -515,12 +513,14 @@ pub fn build_healthcheck(
     bucket: Option<&str>,
     base_path: &str,
     s3_service: Option<&S3Service>,
+    is_cloud_path: bool,
 ) -> vector::Result<Healthcheck> {
     info!(
-        "Building healthcheck for bucket: {:?}, s3_service: {}, base_path: {}",
+        "Building healthcheck for bucket: {:?}, s3_service: {}, base_path: {}, is_cloud_path: {}",
         bucket,
         s3_service.is_some(),
-        base_path
+        base_path,
+        is_cloud_path
     );
 
     if let (Some(bucket), Some(_service)) = (bucket, s3_service) {
@@ -539,10 +539,26 @@ pub fn build_healthcheck(
         return Ok(healthcheck);
     }
 
-    info!(
-        "Using local filesystem healthcheck for path: {}",
-        base_path
-    );
+    // For cloud storage paths (az://, gs://) without S3 service,
+    // use a simplified healthcheck - connectivity will be verified during writes
+    if is_cloud_path {
+        let base_path_owned = base_path.to_string();
+        info!(
+            "Cloud storage path detected - using simplified healthcheck for: {}",
+            base_path_owned
+        );
+        let healthcheck = Box::pin(async move {
+            info!(
+                "Cloud storage healthcheck: Skipping filesystem test for {}",
+                base_path_owned
+            );
+            info!("Cloud storage connectivity will be verified during actual write operations");
+            Ok(())
+        });
+        return Ok(healthcheck);
+    }
+
+    info!("Using local filesystem healthcheck for path: {}", base_path);
     // Local filesystem healthcheck
     let base_path = PathBuf::from(base_path);
 
@@ -550,12 +566,9 @@ pub fn build_healthcheck(
         // Check if directory exists and is writable
         if !base_path.exists() {
             if let Err(e) = std::fs::create_dir_all(&base_path) {
-                return Err(format!(
-                    "Failed to create directory {}: {}",
-                    base_path.display(),
-                    e
-                )
-                .into());
+                return Err(
+                    format!("Failed to create directory {}: {}", base_path.display(), e).into(),
+                );
             }
         }
 
@@ -573,4 +586,3 @@ pub fn build_healthcheck(
 
     Ok(healthcheck)
 }
-
