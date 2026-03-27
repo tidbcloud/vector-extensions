@@ -96,7 +96,7 @@ impl DeltaLakeWriter {
         if path_str.starts_with("s3://") {
             deltalake::aws::register_handlers(None);
             info!("Registered Delta Lake S3 handlers for path: {}", path_str);
-        } else if path_str.starts_with("az://") {
+        } else if path_str.starts_with("abfss://") {
             deltalake::azure::register_handlers(None);
             info!(
                 "Registered Delta Lake Azure handlers for path: {}",

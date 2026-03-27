@@ -165,7 +165,7 @@ impl DeltaOpsManager {
         let table_uri = {
             let path_str = table_path.to_string_lossy();
             if path_str.starts_with("s3://")
-                || path_str.starts_with("az://")
+                || path_str.starts_with("abfss://")
                 || path_str.starts_with("gs://")
             {
                 // Cloud storage paths already have protocol prefix
