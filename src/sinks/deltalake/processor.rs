@@ -99,7 +99,7 @@ impl DeltaLakeSink {
         let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
             let path_str = self.base_path.to_string_lossy();
             let is_cloud_path = path_str.starts_with("s3://")
-                || path_str.starts_with("az://")
+                || path_str.starts_with("abfss://")
                 || path_str.starts_with("gs://");
 
             let table_path = if is_cloud_path {
@@ -119,10 +119,7 @@ impl DeltaLakeSink {
                 .find(|t| t.name == table_name)
                 .cloned()
                 .unwrap_or_else(|| {
-                    info!(
-                        "Creating default table config for {}",
-                        table_name
-                    );
+                    info!("Creating default table config for {}", table_name);
                     DeltaTableConfig {
                         name: table_name.to_string(),
                         schema_evolution: Some(true),

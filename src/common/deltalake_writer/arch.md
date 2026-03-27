@@ -57,7 +57,7 @@ Used by multiple sinks:
 - **topsql_data_deltalake**: TopSQL data sink
 - **topsql_meta_deltalake**: TopSQL metadata sink
 
-- Support for S3 (s3://) and Azure Blob (az://) storage backends
+- Support for S3 (s3://) and Azure Blob (abfss://) storage backends
 
 ## Data Conversion
 
@@ -186,7 +186,7 @@ The Azure Blob Storage backend supports multiple authentication methods:
 [sinks.deltalake]
 type = "deltalake"
 inputs = ["your_source"]
-base_path = "az://container-name/path/to/delta-tables"
+base_path = "abfss://container-name/path/to/delta-tables"
 batch_size = 1000
 timeout_secs = 30
 ```

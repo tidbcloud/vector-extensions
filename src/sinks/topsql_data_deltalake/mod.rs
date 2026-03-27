@@ -123,7 +123,7 @@ impl SinkConfig for DeltaLakeConfig {
         );
 
         let is_cloud_path = self.base_path.starts_with("s3://")
-            || self.base_path.starts_with("az://")
+            || self.base_path.starts_with("abfss://")
             || self.base_path.starts_with("gs://");
 
         // Create S3 service if bucket is configured (S3/OSS only)

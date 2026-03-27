@@ -539,7 +539,7 @@ pub fn build_healthcheck(
         return Ok(healthcheck);
     }
 
-    // For cloud storage paths (az://, gs://) without S3 service,
+    // For cloud storage paths (abfss://, gs://) without S3 service,
     // use a simplified healthcheck - connectivity will be verified during writes
     if is_cloud_path {
         let base_path_owned = base_path.to_string();

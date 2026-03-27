@@ -114,7 +114,7 @@ impl SinkConfig for DeltaLakeConfig {
         );
 
         let is_cloud_path = self.base_path.starts_with("s3://")
-            || self.base_path.starts_with("az://")
+            || self.base_path.starts_with("abfss://")
             || self.base_path.starts_with("gs://");
 
         // Create S3 service if bucket is configured (S3/OSS only)
@@ -699,11 +699,7 @@ mod tests {
         let partition_dirs: Vec<_> = fs::read_dir(&base_path)
             .expect("Failed to read table directory")
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("date=")
-            })
+            .filter(|e| e.file_name().to_string_lossy().starts_with("date="))
             .collect();
 
         assert!(

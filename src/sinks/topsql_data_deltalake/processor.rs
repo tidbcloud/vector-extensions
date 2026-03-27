@@ -459,7 +459,7 @@ impl TopSQLDeltaLakeSink {
             let instance_dir = format!("instance={}", table_instance);
 
             let table_path = if self.base_path.to_string_lossy().starts_with("s3://")
-                || self.base_path.to_string_lossy().starts_with("az://")
+                || self.base_path.to_string_lossy().starts_with("abfss://")
                 || self.base_path.to_string_lossy().starts_with("gs://")
             {
                 // For cloud paths, build a partition-like directory structure

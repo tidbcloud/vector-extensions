@@ -426,7 +426,7 @@ impl TopSQLDeltaLakeSink {
         let mut writers = self.writers.lock().await;
         let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
             let table_path = if self.base_path.to_string_lossy().starts_with("s3://")
-                || self.base_path.to_string_lossy().starts_with("az://")
+                || self.base_path.to_string_lossy().starts_with("abfss://")
                 || self.base_path.to_string_lossy().starts_with("gs://")
             {
                 // For cloud paths, append the table name to the cloud path
