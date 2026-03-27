@@ -425,8 +425,11 @@ impl TopSQLDeltaLakeSink {
         // Get or create writer for this table
         let mut writers = self.writers.lock().await;
         let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
-            let table_path = if self.base_path.to_string_lossy().starts_with("s3://") {
-                // For S3 paths, append the table name to the S3 path
+            let table_path = if self.base_path.to_string_lossy().starts_with("s3://")
+                || self.base_path.to_string_lossy().starts_with("az://")
+                || self.base_path.to_string_lossy().starts_with("gs://")
+            {
+                // For cloud paths, append the table name to the cloud path
                 PathBuf::from(format!(
                     "{}/component={}",
                     self.base_path.to_string_lossy(),
