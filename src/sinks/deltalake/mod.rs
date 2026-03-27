@@ -108,14 +108,8 @@ impl GenerateConfig for DeltaLakeConfig {
 #[typetag::serde(name = "deltalake")]
 impl SinkConfig for DeltaLakeConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
-        error!(
-            "DEBUG: Building Delta Lake sink with bucket: {:?}",
-            self.bucket
-        );
-
         // Create S3 service if bucket is configured
         let s3_service = if self.bucket.is_some() {
-            error!("DEBUG: Bucket configured, creating S3 service");
             match self.create_service(&cx.proxy).await {
                 Ok(service) => {
                     info!("S3 service created successfully");
@@ -616,6 +610,88 @@ mod tests {
         println!("   Multi-level partitioning (date/instance) verified");
 
         // Clean up temporary directory
+        let _ = fs::remove_dir_all(base_path.parent().unwrap());
+    }
+
+    /// Simulates system_tables source setting partition_by=["date"] via _schema_metadata,
+    /// then verifies the DeltaLake table is written with date=... partition directories.
+    #[tokio::test]
+    async fn test_partition_by_date_from_schema_metadata() {
+        let temp_dir = std::env::temp_dir();
+        let test_id = format!(
+            "delta_partition_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let base_path = temp_dir.join(test_id).join("delta-tables");
+        fs::create_dir_all(&base_path).expect("Failed to create base directory");
+
+        // Build an event the way system_tables source would, with _partition_by injected
+        let mut log = LogEvent::from(BTreeMap::new());
+        log.insert("_vector_table", "hist_statements");
+        log.insert("_vector_source_table", "CLUSTER_STATEMENTS_SUMMARY");
+        log.insert("_vector_source_schema", "information_schema");
+        log.insert("_vector_instance", "tidb-0:4000");
+        log.insert("_vector_timestamp", "2024-03-15T08:00:00Z");
+        log.insert("DIGEST", "abc123");
+        log.insert("EXEC_COUNT", 42i64);
+        // date field is auto-derived from _vector_timestamp by the converter
+        // _partition_by injected by data_collector when TableConfig.partition_by = ["date"]
+        let mut schema_meta = ObjectMap::new();
+        schema_meta.insert(
+            "_partition_by".into(),
+            vector_lib::event::Value::from("date"),
+        );
+        log.insert(
+            "_schema_metadata",
+            vector_lib::event::Value::Object(schema_meta),
+        );
+
+        let table_config = DeltaTableConfig {
+            name: "hist_statements".to_string(),
+            schema_evolution: Some(true),
+        };
+        let write_config = WriteConfig {
+            batch_size: 1000,
+            timeout_secs: 30,
+        };
+
+        let mut writer = crate::common::deltalake_writer::DeltaLakeWriter::new(
+            base_path.clone(),
+            table_config,
+            write_config,
+            None,
+        );
+
+        writer
+            .write_events(vec![Event::Log(log)])
+            .await
+            .expect("Failed to write events");
+
+        // Verify date=2024-03-15 partition directory exists (derived from _vector_timestamp)
+        let partition_dirs: Vec<_> = fs::read_dir(&base_path)
+            .expect("Failed to read table directory")
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("date=")
+            })
+            .collect();
+
+        assert!(
+            partition_dirs
+                .iter()
+                .any(|e| e.file_name().to_string_lossy() == "date=2024-03-15"),
+            "Expected date=2024-03-15 partition directory, found: {:?}",
+            partition_dirs
+                .iter()
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>()
+        );
+
         let _ = fs::remove_dir_all(base_path.parent().unwrap());
     }
 }
