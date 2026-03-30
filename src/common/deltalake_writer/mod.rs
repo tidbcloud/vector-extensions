@@ -141,6 +141,30 @@ impl DeltaLakeWriter {
             _ => self.table_config.name.clone(),
         };
 
+        // -------------------------------------------------------------------
+        // Schema evolution: detect compatible new-column additions and reset
+        // the cached schemas so the next RecordBatch includes them.
+        // Drops and type changes are blocked inside check_schema_evolution.
+        // -------------------------------------------------------------------
+        if let (Some(Event::Log(log_event)), Some(ref fixed_schema)) =
+            (events.first(), &self.fixed_arrow_schema)
+        {
+            if let schema::EvolutionResult::Compatible {
+                incoming_count,
+                fixed_count,
+            } = self
+                .schema_manager
+                .check_schema_evolution(log_event, fixed_schema)
+            {
+                info!(
+                    "Compatible schema evolution detected for table {}: {} data fields incoming, {} in fixed cache. New columns will be merged.",
+                    table_name, incoming_count, fixed_count
+                );
+                self.fixed_arrow_schema = None;
+                self.schema_manager.reset_schema_cache(&table_name);
+            }
+        }
+
         // Convert events to RecordBatch
         let (record_batch, schema) = EventConverter::events_to_record_batch(
             &mut self.schema_manager,
