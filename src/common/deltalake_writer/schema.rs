@@ -41,7 +41,11 @@ impl SchemaManager {
     }
 
     /// Extract and cache schema metadata from event
-    pub fn extract_and_cache(&mut self, log_event: &LogEvent, default_table_name: Option<&str>) -> Option<SchemaMetadata> {
+    pub fn extract_and_cache(
+        &mut self,
+        log_event: &LogEvent,
+        default_table_name: Option<&str>,
+    ) -> Option<SchemaMetadata> {
         // Get table name for schema cache key
         let table_name = log_event
             .get("_vector_table")

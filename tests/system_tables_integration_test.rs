@@ -9,7 +9,7 @@ use std::fs;
 use vector_lib::event::{Event, LogEvent, ObjectMap};
 
 // Import DeltaLake writer components
-use vector_extensions::sinks::deltalake::{writer::DeltaLakeWriter, DeltaTableConfig, WriteConfig};
+use vector_extensions::sinks::deltalake::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
 
 /// Generate mock system_tables events similar to what the source would produce
 fn generate_system_tables_mock_events() -> Vec<Event> {
