@@ -12,7 +12,7 @@ use crate::sources::topsql_v2::upstream::consts::{
     SOURCE_TABLE_TIDB_TOPSQL, SOURCE_TABLE_TOPRU, SOURCE_TABLE_TOPSQL_PLAN_META,
     SOURCE_TABLE_TOPSQL_SQL_META,
 };
-use crate::sources::topsql_v2::upstream::parser::UpstreamEventParser;
+use crate::sources::topsql_v2::upstream::parser::{truncate_label_value, UpstreamEventParser};
 use crate::sources::topsql_v2::upstream::tidb::proto::top_sql_sub_response::RespOneof;
 use crate::sources::topsql_v2::upstream::tidb::proto::{
     PlanMeta, SqlMeta, TopSqlRecord, TopSqlRecordItem, TopSqlSubResponse,
@@ -286,12 +286,13 @@ impl TopSqlSubResponseParser {
         let mut events = vec![];
         let sql_digest = hex::encode_upper(sql_meta.sql_digest);
         let keyspace_name = Self::decode_keyspace_name(&sql_meta.keyspace_name);
+        let normalized_sql = truncate_label_value(sql_meta.normalized_sql);
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
 
         log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPSQL_SQL_META);
         log.insert(LABEL_SQL_DIGEST, sql_digest);
-        log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql);
+        log.insert(LABEL_NORMALIZED_SQL, normalized_sql);
         if let Some(keyspace_name) = keyspace_name {
             log.insert(LABEL_KEYSPACE, keyspace_name);
         }
@@ -307,14 +308,17 @@ impl TopSqlSubResponseParser {
         let mut events = vec![];
         let plan_digest = hex::encode_upper(plan_meta.plan_digest);
         let keyspace_name = Self::decode_keyspace_name(&plan_meta.keyspace_name);
-        let encoded_normalized_plan = hex::encode_upper(plan_meta.encoded_normalized_plan);
+        let normalized_plan = truncate_label_value(plan_meta.normalized_plan);
+        let encoded_normalized_plan = truncate_label_value(hex::encode_upper(
+            plan_meta.encoded_normalized_plan,
+        ));
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
 
         // Add metadata with Vector prefix (ensure all fields have values)
         log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPSQL_PLAN_META);
         log.insert(LABEL_PLAN_DIGEST, plan_digest);
-        log.insert(LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan);
+        log.insert(LABEL_NORMALIZED_PLAN, normalized_plan);
         log.insert(LABEL_ENCODED_NORMALIZED_PLAN, encoded_normalized_plan);
         if let Some(keyspace_name) = keyspace_name {
             log.insert(LABEL_KEYSPACE, keyspace_name);
