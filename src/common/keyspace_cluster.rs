@@ -19,6 +19,20 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_KEYSPACE_ROUTE_CACHE_CAPACITY: usize = 10_000;
 
+const ROUTE_RESOLUTION_BASE_DELAY: Duration = Duration::from_secs(5);
+const ROUTE_RESOLUTION_MAX_DELAY: Duration = Duration::from_secs(60);
+pub const MAX_ROUTE_RESOLUTION_RETRIES: usize = 5;
+
+/// Exponential backoff delay for keyspace route resolution retries.
+pub fn route_resolution_retry_delay(retry_count: usize) -> Duration {
+    let multiplier = 1u64 << retry_count.saturating_sub(1).min(6);
+    let delay_secs = ROUTE_RESOLUTION_BASE_DELAY
+        .as_secs()
+        .saturating_mul(multiplier)
+        .min(ROUTE_RESOLUTION_MAX_DELAY.as_secs());
+    Duration::from_secs(delay_secs)
+}
+
 const ORG_ID_KEYS: &[&str] = &["serverless_tenant_id"];
 const CLUSTER_ID_KEYS: &[&str] = &["serverless_cluster_id"];
 
@@ -520,5 +534,13 @@ mod tests {
         assert_eq!(resolver.cache.lock().await.len(), 2);
 
         server_handle.abort();
+    }
+
+    #[test]
+    fn route_resolution_retry_delay_caps_at_maximum() {
+        assert_eq!(route_resolution_retry_delay(1), Duration::from_secs(5));
+        assert_eq!(route_resolution_retry_delay(2), Duration::from_secs(10));
+        assert_eq!(route_resolution_retry_delay(5), Duration::from_secs(60));
+        assert_eq!(route_resolution_retry_delay(8), Duration::from_secs(60));
     }
 }

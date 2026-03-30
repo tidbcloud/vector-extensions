@@ -13,8 +13,9 @@ use vector_lib::sink::StreamSink;
 use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
 use crate::common::keyspace_cluster::{
     path_contains_keyspace_route_segments, replace_keyspace_route_segments,
+    route_resolution_retry_delay, KeyspaceRoute, PdKeyspaceResolver,
+    MAX_ROUTE_RESOLUTION_RETRIES,
 };
-use crate::common::keyspace_cluster::{KeyspaceRoute, PdKeyspaceResolver};
 use crate::sources::topsql_v2::upstream::consts::{
     LABEL_DATE, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_KEYSPACE, LABEL_NORMALIZED_PLAN,
     LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_SOURCE_TABLE, LABEL_SQL_DIGEST,
@@ -108,9 +109,6 @@ lazy_static! {
 
 /// When buffer size exceeds this value, events will be flushed
 const EVENT_BUFFER_MAX_SIZE: usize = 1000;
-const ROUTE_RESOLUTION_RETRY_DELAY: Duration = Duration::from_secs(5);
-const MAX_ROUTE_RESOLUTION_RETRIES: usize = 5;
-const MAX_ROUTE_RESOLUTION_RETRY_DELAY: Duration = Duration::from_secs(60);
 
 /// Delta Lake sink processor
 #[derive(Clone)]
@@ -654,15 +652,6 @@ impl TopSQLDeltaLakeSink {
             }
         }
     }
-}
-
-fn route_resolution_retry_delay(retry_count: usize) -> Duration {
-    let multiplier = 1u64 << retry_count.saturating_sub(1).min(6);
-    let delay_secs = ROUTE_RESOLUTION_RETRY_DELAY
-        .as_secs()
-        .saturating_mul(multiplier)
-        .min(MAX_ROUTE_RESOLUTION_RETRY_DELAY.as_secs());
-    Duration::from_secs(delay_secs)
 }
 
 #[async_trait::async_trait]
