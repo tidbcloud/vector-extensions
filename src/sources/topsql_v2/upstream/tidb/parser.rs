@@ -14,7 +14,7 @@ use crate::sources::topsql_v2::upstream::consts::{
     METRIC_NAME_TOTAL_RU, METRIC_NAME_EXEC_COUNT, METRIC_NAME_EXEC_DURATION,
     SOURCE_TABLE_TIDB_TOPSQL, SOURCE_TABLE_TOPSQL_PLAN_META, SOURCE_TABLE_TOPSQL_SQL_META, SOURCE_TABLE_TOPRU,
 };
-use crate::sources::topsql_v2::upstream::parser::UpstreamEventParser;
+use crate::sources::topsql_v2::upstream::parser::{truncate_label_value, UpstreamEventParser};
 use crate::sources::topsql_v2::upstream::tidb::proto::top_sql_sub_response::RespOneof;
 use crate::sources::topsql_v2::upstream::tidb::proto::{
     PlanMeta, SqlMeta, TopSqlRecord, TopSqlRecordItem, TopSqlSubResponse,
@@ -287,7 +287,10 @@ impl TopSqlSubResponseParser {
 
         log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPSQL_SQL_META);
         log.insert(LABEL_SQL_DIGEST, sql_digest);
-        log.insert(LABEL_NORMALIZED_SQL, sql_meta.normalized_sql);
+        log.insert(
+            LABEL_NORMALIZED_SQL,
+            truncate_label_value(sql_meta.normalized_sql.clone()),
+        );
         let now = Utc::now();
         log.insert(LABEL_TIMESTAMPS, LogValue::from(now.timestamp()));
         let date_str = now.format("%Y-%m-%d").to_string();
@@ -299,15 +302,19 @@ impl TopSqlSubResponseParser {
     fn parse_tidb_plan_meta(plan_meta: PlanMeta) -> Vec<LogEvent> {
         let mut events = vec![];
         let plan_digest = hex::encode_upper(plan_meta.plan_digest);
-        let encoded_normalized_plan =
-        hex::encode_upper(plan_meta.encoded_normalized_plan);
+        let encoded_normalized_plan = truncate_label_value(hex::encode_upper(
+            plan_meta.encoded_normalized_plan,
+        ));
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
 
         // Add metadata with Vector prefix (ensure all fields have values)
         log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPSQL_PLAN_META);
         log.insert(LABEL_PLAN_DIGEST, plan_digest);
-        log.insert(LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan);
+        log.insert(
+            LABEL_NORMALIZED_PLAN,
+            truncate_label_value(plan_meta.normalized_plan.clone()),
+        );
         log.insert(
             LABEL_ENCODED_NORMALIZED_PLAN,
             encoded_normalized_plan,
