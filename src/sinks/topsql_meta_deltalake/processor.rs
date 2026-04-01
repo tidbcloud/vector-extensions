@@ -7,14 +7,16 @@ use futures::{stream::BoxStream, StreamExt};
 use lru::LruCache;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tracing::{error, info, warn};
 use vector_lib::event::Event;
 use vector_lib::sink::StreamSink;
 
 use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
+use crate::common::keyspace_cluster::{KeyspaceRoute, PdKeyspaceResolver};
 use crate::sources::topsql_v2::upstream::consts::{
-    LABEL_DATE, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_NORMALIZED_PLAN, LABEL_NORMALIZED_SQL,
-    LABEL_PLAN_DIGEST, LABEL_SOURCE_TABLE, LABEL_SQL_DIGEST, SOURCE_TABLE_TOPSQL_PLAN_META,
-    SOURCE_TABLE_TOPSQL_SQL_META,
+    LABEL_DATE, LABEL_ENCODED_NORMALIZED_PLAN, LABEL_KEYSPACE, LABEL_NORMALIZED_PLAN,
+    LABEL_NORMALIZED_SQL, LABEL_PLAN_DIGEST, LABEL_SOURCE_TABLE, LABEL_SQL_DIGEST,
+    SOURCE_TABLE_TOPSQL_PLAN_META, SOURCE_TABLE_TOPSQL_SQL_META,
 };
 
 use lazy_static::lazy_static;
@@ -30,6 +32,13 @@ lazy_static! {
         );
         schema_info.insert(
             LABEL_SQL_DIGEST.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            LABEL_KEYSPACE.into(),
             serde_json::json!({
                 "mysql_type": "text",
                 "is_nullable": true
@@ -66,6 +75,13 @@ lazy_static! {
             }),
         );
         schema_info.insert(
+            LABEL_KEYSPACE.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
             LABEL_NORMALIZED_PLAN.into(),
             serde_json::json!({
                 "mysql_type": "text",
@@ -90,6 +106,19 @@ lazy_static! {
 
 /// When buffer size exceeds this value, events will be flushed
 const EVENT_BUFFER_MAX_SIZE: usize = 1000;
+const ROUTE_RESOLUTION_RETRY_DELAY: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Debug)]
+struct BufferedEvent {
+    writer_key: WriterKey,
+    event: Event,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct WriterKey {
+    table_name: String,
+    table_path: PathBuf,
+}
 
 /// Delta Lake sink processor
 pub struct TopSQLDeltaLakeSink {
@@ -98,14 +127,15 @@ pub struct TopSQLDeltaLakeSink {
     write_config: WriteConfig,
     max_delay_secs: u64,
     storage_options: Option<HashMap<String, String>>,
-    writers: Arc<Mutex<HashMap<String, DeltaLakeWriter>>>,
+    keyspace_route_resolver: Option<PdKeyspaceResolver>,
+    writers: Arc<Mutex<HashMap<WriterKey, DeltaLakeWriter>>>,
     tx: Arc<mpsc::Sender<Vec<Vec<Event>>>>,
     // LRU cache for SQL meta deduplication: key -> ()
     seen_keys_sql_meta: Arc<Mutex<LruCache<String, ()>>>,
     // LRU cache for PLAN meta deduplication: key -> ()
     seen_keys_plan_meta: Arc<Mutex<LruCache<String, ()>>>,
     // Buffer for events to be flushed
-    new_event_buffer: Arc<Mutex<Vec<Event>>>,
+    new_event_buffer: Arc<Mutex<Vec<BufferedEvent>>>,
     // Last flush time
     last_flush_time: Arc<Mutex<Instant>>,
 }
@@ -118,6 +148,7 @@ impl TopSQLDeltaLakeSink {
         write_config: WriteConfig,
         max_delay_secs: u64,
         storage_options: Option<HashMap<String, String>>,
+        keyspace_route_resolver: Option<PdKeyspaceResolver>,
         meta_cache_capacity: usize,
     ) -> Self {
         // Create a channel with capacity 1
@@ -131,6 +162,7 @@ impl TopSQLDeltaLakeSink {
             write_config,
             max_delay_secs,
             storage_options,
+            keyspace_route_resolver,
             writers: Arc::new(Mutex::new(HashMap::new())),
             tx: Arc::clone(&tx),
             seen_keys_sql_meta: Arc::new(Mutex::new(LruCache::new(
@@ -167,6 +199,7 @@ impl TopSQLDeltaLakeSink {
                 write_config: inner_ref.write_config.clone(),
                 max_delay_secs: inner_ref.max_delay_secs,
                 storage_options: inner_ref.storage_options.clone(),
+                keyspace_route_resolver: inner_ref.keyspace_route_resolver.clone(),
                 writers: Arc::clone(&inner_ref.writers),
                 tx: Arc::clone(&inner_ref.tx),
                 seen_keys_sql_meta: Arc::clone(&inner_ref.seen_keys_sql_meta),
@@ -190,6 +223,7 @@ impl TopSQLDeltaLakeSink {
         write_config: WriteConfig,
         max_delay_secs: u64,
         storage_options: Option<HashMap<String, String>>,
+        keyspace_route_resolver: Option<PdKeyspaceResolver>,
         meta_cache_capacity: usize,
     ) -> (Self, mpsc::Receiver<Vec<Vec<Event>>>) {
         // Create a channel with capacity 1
@@ -206,6 +240,7 @@ impl TopSQLDeltaLakeSink {
             write_config,
             max_delay_secs,
             storage_options,
+            keyspace_route_resolver,
             writers: Arc::new(Mutex::new(HashMap::new())),
             tx,
             seen_keys_sql_meta: Arc::new(Mutex::new(LruCache::new(
@@ -225,57 +260,139 @@ impl TopSQLDeltaLakeSink {
     /// Process events from channel and write to Delta Lake
     async fn process_events_loop(&self, mut rx: mpsc::Receiver<Vec<Vec<Event>>>) {
         while let Some(events_vec) = rx.recv().await {
-            if let Err(e) = self.process_events(events_vec).await {
-                error!("Failed to process events: {}", e);
+            let retry_on_failure = self.keyspace_route_resolver.is_some();
+            let mut pending_events = events_vec;
+
+            loop {
+                let retry_snapshot = retry_on_failure.then(|| pending_events.clone());
+                match self.process_events(pending_events).await {
+                    Ok(()) => break,
+                    Err(error) => {
+                        error!("Failed to process events: {}", error);
+                        let Some(events) = retry_snapshot else {
+                            break;
+                        };
+                        tokio::time::sleep(ROUTE_RESOLUTION_RETRY_DELAY).await;
+                        pending_events = events;
+                    }
+                }
             }
         }
     }
 
-    /// Extract deduplication key from event
-    /// Returns (table_name, key) if key can be extracted, None otherwise
-    /// table_name is the value of LABEL_SOURCE_TABLE (e.g., SOURCE_TABLE_TOPSQL_SQL_META or SOURCE_TABLE_TOPSQL_PLAN_META)
-    /// key format: digest_date (e.g., sql_digest_2024-01-01)
+    /// Extract a route-aware deduplication key from event.
     fn extract_event_key(
         &self,
         log_event: &vector_lib::event::LogEvent,
-    ) -> Option<(String, String)> {
-        // Get table_name from source_table
-        let table_name = log_event
-            .get(LABEL_SOURCE_TABLE)
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())?;
+        writer_key: &WriterKey,
+    ) -> Option<String> {
+        let table_name = writer_key.table_name.as_str();
+        let route_key = writer_key.table_path.to_string_lossy();
+        let date = log_event.get(LABEL_DATE).and_then(|v| v.as_str())?;
 
-        // Get date from log_event
-        let date = log_event
-            .get(LABEL_DATE)
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())?;
-
-        // Extract key based on source_table type
         if table_name == SOURCE_TABLE_TOPSQL_SQL_META {
-            // For SQL meta: use sql_digest_date format
-            if let Some(sql_digest) = log_event
-                .get(LABEL_SQL_DIGEST)
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-            {
-                let key = format!("{}_{}", sql_digest, date);
-                return Some((table_name, key));
+            if let Some(sql_digest) = log_event.get(LABEL_SQL_DIGEST).and_then(|v| v.as_str()) {
+                return Some(format!("{}|{}_{}", route_key, sql_digest, date));
             }
         } else if table_name == SOURCE_TABLE_TOPSQL_PLAN_META {
-            // For PLAN meta: use plan_digest_date format
-            if let Some(plan_digest) = log_event
-                .get(LABEL_PLAN_DIGEST)
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-            {
-                let key = format!("{}_{}", plan_digest, date);
-                return Some((table_name, key));
+            if let Some(plan_digest) = log_event.get(LABEL_PLAN_DIGEST).and_then(|v| v.as_str()) {
+                return Some(format!("{}|{}_{}", route_key, plan_digest, date));
             }
         }
 
-        // If no key found or source_table doesn't match, return None (event will be skipped)
         None
+    }
+
+    async fn resolve_writer_key(
+        &self,
+        log_event: &vector_lib::event::LogEvent,
+        resolved_routes: &mut HashMap<String, Option<KeyspaceRoute>>,
+    ) -> Result<Option<WriterKey>, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(table_name) = log_event
+            .get(LABEL_SOURCE_TABLE)
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
+        else {
+            return Ok(None);
+        };
+        let route = self
+            .resolve_keyspace_route(log_event, resolved_routes)
+            .await?;
+        if self.keyspace_route_resolver.is_some() && route.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(WriterKey {
+            table_name: table_name.clone(),
+            table_path: self.build_table_path(&table_name, route.as_ref()),
+        }))
+    }
+
+    async fn resolve_keyspace_route(
+        &self,
+        log_event: &vector_lib::event::LogEvent,
+        resolved_routes: &mut HashMap<String, Option<KeyspaceRoute>>,
+    ) -> Result<Option<KeyspaceRoute>, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(resolver) = self.keyspace_route_resolver.as_ref() else {
+            return Ok(None);
+        };
+        let Some(keyspace) = log_event
+            .get(LABEL_KEYSPACE)
+            .and_then(|value| value.as_str())
+        else {
+            return Ok(None);
+        };
+        let keyspace_ref = keyspace.as_ref();
+
+        if let Some(route) = resolved_routes.get(keyspace_ref) {
+            return Ok(route.clone());
+        }
+
+        let route = resolver.resolve_keyspace(keyspace_ref).await?;
+        resolved_routes.insert(keyspace_ref.to_string(), route.clone());
+        if route.is_none() {
+            warn!(
+                "No cluster route found for keyspace {}, skipping TopSQL meta event",
+                keyspace_ref
+            );
+        }
+        Ok(route)
+    }
+
+    fn build_table_path(&self, table_name: &str, route: Option<&KeyspaceRoute>) -> PathBuf {
+        let mut segments = Vec::new();
+        if let Some(route) = route {
+            segments.push(format!("org={}", route.org_id));
+            segments.push(format!("cluster={}", route.cluster_id));
+        }
+        segments.push(format!("type={}", table_name));
+
+        let segment_refs: Vec<&str> = segments.iter().map(|segment| segment.as_str()).collect();
+        Self::join_path(&self.base_path, &segment_refs)
+    }
+
+    fn is_cloud_path(base_path: &PathBuf) -> bool {
+        let s = base_path.to_string_lossy();
+        s.starts_with("s3://") || s.starts_with("abfss://") || s.starts_with("gs://")
+    }
+
+    fn join_path(base_path: &PathBuf, segments: &[&str]) -> PathBuf {
+        if Self::is_cloud_path(base_path) {
+            let mut path = base_path
+                .to_string_lossy()
+                .trim_end_matches('/')
+                .to_string();
+            for segment in segments {
+                path.push('/');
+                path.push_str(segment);
+            }
+            PathBuf::from(path)
+        } else {
+            let mut path = base_path.clone();
+            for segment in segments {
+                path = path.join(segment);
+            }
+            path
+        }
     }
 
     /// Flush buffer to Delta Lake
@@ -285,27 +402,19 @@ impl TopSQLDeltaLakeSink {
             return Ok(());
         }
 
-        // Group events by table_name
-        let mut table_events: HashMap<String, Vec<Event>> = HashMap::new();
-        for event in buffer.drain(..) {
-            if let Event::Log(log_event) = event {
-                let table_name = log_event
-                    .get(LABEL_SOURCE_TABLE)
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                if let Some(table_name) = table_name {
-                    table_events
-                        .entry(table_name)
-                        .or_insert_with(Vec::new)
-                        .push(Event::Log(log_event));
-                }
-            }
+        // Group events by resolved writer key
+        let mut table_events: HashMap<WriterKey, Vec<Event>> = HashMap::new();
+        for buffered_event in buffer.drain(..) {
+            table_events
+                .entry(buffered_event.writer_key)
+                .or_insert_with(Vec::new)
+                .push(buffered_event.event);
         }
 
         // Write table's events
-        for (table_name, mut events) in table_events {
-            self.add_schema_info(&table_name, &mut events);
-            if let Err(e) = self.write_table_events(&table_name, events).await {
+        for (writer_key, mut events) in table_events {
+            self.add_schema_info(&writer_key.table_name, &mut events);
+            if let Err(e) = self.write_table_events(&writer_key, events).await {
                 let error_msg = e.to_string();
                 if error_msg.contains("log segment")
                     || error_msg.contains("Invalid table version")
@@ -314,10 +423,15 @@ impl TopSQLDeltaLakeSink {
                 {
                     panic!(
                         "Delta Lake corruption detected for table {}: {}",
-                        table_name, error_msg
+                        writer_key.table_name, error_msg
                     );
                 } else {
-                    error!("Failed to write events to table {}: {}", table_name, e);
+                    error!(
+                        "Failed to write events to table {} at {}: {}",
+                        writer_key.table_name,
+                        writer_key.table_path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -337,43 +451,52 @@ impl TopSQLDeltaLakeSink {
             return Ok(());
         }
 
-        let mut seen_keys_sql_meta = self.seen_keys_sql_meta.lock().await;
-        let mut seen_keys_plan_meta = self.seen_keys_plan_meta.lock().await;
-        let mut buffer = self.new_event_buffer.lock().await;
         let last_flush = *self.last_flush_time.lock().await;
         let current_time = Instant::now();
         let flush_interval = Duration::from_secs(self.max_delay_secs);
+        let mut resolved_routes: HashMap<String, Option<KeyspaceRoute>> = HashMap::new();
+        let mut pending_events: Vec<(WriterKey, String, Event)> = Vec::new();
 
         // Process all events
         for events in events_vec {
             for event in events {
                 if let Event::Log(log_event) = event {
-                    // Extract key from event
-                    if let Some((table_name, key)) = self.extract_event_key(&log_event) {
-                        // Select the appropriate LRU cache based on table_name (source_table)
-                        let seen_keys = match table_name.as_str() {
-                            SOURCE_TABLE_TOPSQL_SQL_META => &mut *seen_keys_sql_meta,
-                            SOURCE_TABLE_TOPSQL_PLAN_META => &mut *seen_keys_plan_meta,
-                            _ => continue, // Skip unknown event types
-                        };
+                    let Some(writer_key) = self
+                        .resolve_writer_key(&log_event, &mut resolved_routes)
+                        .await?
+                    else {
+                        continue;
+                    };
 
-                        // Check if key is already in LRU cache
-                        if seen_keys.get(&key).is_some() {
-                            // Update key in LRU cache (touch it) - get() already does this
-                            continue;
-                        } else {
-                            // Insert key to LRU cache
-                            seen_keys.put(key.clone(), ());
-                            // Put event in buffer
-                            buffer.push(Event::Log(log_event));
-                        }
-                    }
-                    // If key cannot be extracted, skip the event
+                    let Some(key) = self.extract_event_key(&log_event, &writer_key) else {
+                        continue;
+                    };
+
+                    pending_events.push((writer_key, key, Event::Log(log_event)));
                 }
             }
         }
 
-        // Release locks before checking flush conditions
+        let mut seen_keys_sql_meta = self.seen_keys_sql_meta.lock().await;
+        let mut seen_keys_plan_meta = self.seen_keys_plan_meta.lock().await;
+        let mut buffer = self.new_event_buffer.lock().await;
+
+        for (writer_key, key, event) in pending_events {
+            // Select the appropriate LRU cache based on table_name (source_table)
+            let seen_keys = match writer_key.table_name.as_str() {
+                SOURCE_TABLE_TOPSQL_SQL_META => &mut *seen_keys_sql_meta,
+                SOURCE_TABLE_TOPSQL_PLAN_META => &mut *seen_keys_plan_meta,
+                _ => continue, // Skip unknown event types
+            };
+
+            if seen_keys.get(&key).is_some() {
+                continue;
+            }
+
+            seen_keys.put(key, ());
+            buffer.push(BufferedEvent { writer_key, event });
+        }
+
         drop(seen_keys_sql_meta);
         drop(seen_keys_plan_meta);
 
@@ -419,38 +542,23 @@ impl TopSQLDeltaLakeSink {
     /// Write events to a specific table
     async fn write_table_events(
         &self,
-        table_name: &str,
+        writer_key: &WriterKey,
         events: Vec<Event>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Get or create writer for this table
         let mut writers = self.writers.lock().await;
-        let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
-            let table_path = if self.base_path.to_string_lossy().starts_with("s3://")
-                || self.base_path.to_string_lossy().starts_with("abfss://")
-                || self.base_path.to_string_lossy().starts_with("gs://")
-            {
-                // For cloud paths, append the table name to the cloud path
-                PathBuf::from(format!(
-                    "{}/component={}",
-                    self.base_path.to_string_lossy(),
-                    table_name
-                ))
-            } else {
-                // For local paths, use join as before
-                self.base_path.join(format!("component={}", table_name))
-            };
-
+        let writer = writers.entry(writer_key.clone()).or_insert_with(|| {
             let table_config = self
                 .tables
                 .iter()
-                .find(|t| t.name == table_name)
+                .find(|t| t.name == writer_key.table_name)
                 .cloned()
                 .unwrap_or_else(|| DeltaTableConfig {
-                    name: table_name.to_string(),
+                    name: writer_key.table_name.clone(),
                     schema_evolution: Some(true),
                 });
             DeltaLakeWriter::new_with_options(
-                table_path,
+                writer_key.table_path.clone(),
                 table_config,
                 self.write_config.clone(),
                 self.storage_options.clone(),
@@ -581,8 +689,102 @@ mod tests {
             },
             180, // Use default value for tests
             None,
+            None,
             10000, // Use default LRU cache capacity for tests
         )
+    }
+
+    fn create_sql_meta_event(keyspace: &str, sql_digest: &str, date: &str) -> LogEvent {
+        let mut log = LogEvent::default();
+        log.insert(LABEL_SOURCE_TABLE, SOURCE_TABLE_TOPSQL_SQL_META);
+        log.insert(LABEL_SQL_DIGEST, sql_digest);
+        log.insert(LABEL_KEYSPACE, keyspace);
+        log.insert(LABEL_DATE, date);
+        log
+    }
+
+    #[test]
+    fn test_build_table_path_with_meta_route_for_s3() {
+        let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
+            PathBuf::from("s3://o11y-prod-shared-us-west-2-premium/deltalake"),
+            vec![],
+            WriteConfig {
+                batch_size: 1,
+                timeout_secs: 0,
+            },
+            180,
+            None,
+            None,
+            10000,
+        );
+
+        let table_path = sink.build_table_path(
+            SOURCE_TABLE_TOPSQL_SQL_META,
+            Some(&KeyspaceRoute {
+                org_id: "30018".to_string(),
+                cluster_id: "10762701230946915645".to_string(),
+            }),
+        );
+
+        assert_eq!(
+            table_path,
+            PathBuf::from(
+                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=30018/cluster=10762701230946915645/type=topsql_sql_meta"
+            )
+        );
+    }
+
+    #[test]
+    fn test_build_table_path_without_meta_route_preserves_existing_layout() {
+        let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
+            PathBuf::from("/tmp/deltalake"),
+            vec![],
+            WriteConfig {
+                batch_size: 1,
+                timeout_secs: 0,
+            },
+            180,
+            None,
+            None,
+            10000,
+        );
+
+        let table_path = sink.build_table_path(SOURCE_TABLE_TOPSQL_PLAN_META, None);
+
+        assert_eq!(
+            table_path,
+            PathBuf::from("/tmp/deltalake/type=topsql_plan_meta")
+        );
+    }
+
+    #[test]
+    fn test_extract_event_key_isolated_by_route() {
+        let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
+            PathBuf::from("/tmp/deltalake"),
+            vec![],
+            WriteConfig {
+                batch_size: 1,
+                timeout_secs: 0,
+            },
+            180,
+            None,
+            None,
+            10000,
+        );
+        let log_event = create_sql_meta_event("test_keyspace", "sql_digest_1", "2026-03-16");
+        let route_a = WriterKey {
+            table_name: SOURCE_TABLE_TOPSQL_SQL_META.to_string(),
+            table_path: PathBuf::from("/tmp/deltalake/org=30018/cluster=101/type=topsql_sql_meta"),
+        };
+        let route_b = WriterKey {
+            table_name: SOURCE_TABLE_TOPSQL_SQL_META.to_string(),
+            table_path: PathBuf::from("/tmp/deltalake/org=30019/cluster=102/type=topsql_sql_meta"),
+        };
+
+        let key_a = sink.extract_event_key(&log_event, &route_a);
+        let key_b = sink.extract_event_key(&log_event, &route_b);
+
+        assert_ne!(key_a, key_b);
     }
 
     #[tokio::test]

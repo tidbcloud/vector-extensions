@@ -43,6 +43,8 @@ impl Controller {
     /// Create a new controller with abstracted collectors
     pub async fn new(
         pd_address: Option<String>,
+        manager_server_address: Option<String>,
+        tidb_namespace: Option<String>,
         tidb_group: Option<String>,
         label_k8s_instance: Option<String>,
         topology_fetch_interval: Duration,
@@ -70,6 +72,8 @@ impl Controller {
             TopologyFetcher::new(
                 Some(String::new()),
                 None,
+                None,
+                None,
                 proxy_config,
                 tidb_group.clone(),
                 label_k8s_instance.clone(),
@@ -94,6 +98,8 @@ impl Controller {
 
             TopologyFetcher::new(
                 Some(pd_addr),
+                manager_server_address,
+                tidb_namespace,
                 pd_tls.clone(),
                 proxy_config,
                 tidb_group.clone(),

@@ -38,6 +38,12 @@ pub struct TopSQLConfig {
     pub pd_address: Option<String>,
 
     /// PLACEHOLDER
+    pub manager_server_address: Option<String>,
+
+    /// PLACEHOLDER
+    pub tidb_namespace: Option<String>,
+
+    /// PLACEHOLDER
     pub tls: Option<TlsConfig>,
 
     /// PLACEHOLDER
@@ -81,6 +87,8 @@ impl GenerateConfig for TopSQLConfig {
             label_k8s_instance: None,
             keyspace_to_vmtenants: None,
             pd_address: None,
+            manager_server_address: None,
+            tidb_namespace: None,
             tls: None,
             init_retry_delay_seconds: default_init_retry_delay(),
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
@@ -102,6 +110,8 @@ impl SourceConfig for TopSQLConfig {
         let label_k8s_instance = self.label_k8s_instance.clone();
         let keyspace_to_vmtenants = self.keyspace_to_vmtenants.clone();
         let pd_address = self.pd_address.clone();
+        let manager_server_address = self.manager_server_address.clone();
+        let tidb_namespace = self.tidb_namespace.clone();
         let tls = self.tls.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
         let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
@@ -127,6 +137,8 @@ impl SourceConfig for TopSQLConfig {
             let controller = Controller::new(
                 sharedpool_id,
                 pd_address,
+                manager_server_address,
+                tidb_namespace,
                 topology_fetch_interval,
                 init_retry_delay,
                 top_n,
