@@ -370,8 +370,13 @@ impl TopSQLDeltaLakeSink {
         Self::join_path(&self.base_path, &segment_refs)
     }
 
+    fn is_cloud_path(base_path: &PathBuf) -> bool {
+        let s = base_path.to_string_lossy();
+        s.starts_with("s3://") || s.starts_with("abfss://") || s.starts_with("gs://")
+    }
+
     fn join_path(base_path: &PathBuf, segments: &[&str]) -> PathBuf {
-        if base_path.to_string_lossy().starts_with("s3://") {
+        if Self::is_cloud_path(base_path) {
             let mut path = base_path
                 .to_string_lossy()
                 .trim_end_matches('/')

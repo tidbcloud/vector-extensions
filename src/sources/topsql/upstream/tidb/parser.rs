@@ -37,7 +37,7 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             }
             Some(RespOneof::SqlMeta(sql_meta)) => Self::parse_tidb_sql_meta(sql_meta),
             Some(RespOneof::PlanMeta(plan_meta)) => Self::parse_tidb_plan_meta(plan_meta),
-            Some(RespOneof::TopRuRecords(_)) => vec![], // TODO: implement TopRURecords parsing
+            Some(RespOneof::RuRecord(_)) => vec![], // TODO: implement TopRU record parsing
             None => vec![],
         }
     }
@@ -405,7 +405,10 @@ impl TopSqlSubResponseParser {
                 &[
                     (LABEL_NAME, METRIC_NAME_SQL_META.to_owned()),
                     (LABEL_SQL_DIGEST, hex::encode_upper(sql_meta.sql_digest)),
-                    (LABEL_NORMALIZED_SQL, sql_meta.normalized_sql),
+                    (
+                        LABEL_NORMALIZED_SQL,
+                        truncate_label_value(sql_meta.normalized_sql),
+                    ),
                     (LABEL_IS_INTERNAL_SQL, sql_meta.is_internal_sql.to_string()),
                 ],
                 &[Utc::now()],
@@ -444,10 +447,13 @@ impl TopSqlSubResponseParser {
                 &[
                     (LABEL_NAME, METRIC_NAME_PLAN_META.to_owned()),
                     (LABEL_PLAN_DIGEST, hex::encode_upper(plan_meta.plan_digest)),
-                    (LABEL_NORMALIZED_PLAN, plan_meta.normalized_plan),
+                    (
+                        LABEL_NORMALIZED_PLAN,
+                        truncate_label_value(plan_meta.normalized_plan),
+                    ),
                     (
                         LABEL_ENCODED_NORMALIZED_PLAN,
-                        plan_meta.encoded_normalized_plan,
+                        truncate_label_value(plan_meta.encoded_normalized_plan),
                     ),
                 ],
                 &[Utc::now()],

@@ -29,7 +29,7 @@ impl ByteSizeOf for RespOneof {
                     + plan_meta.encoded_normalized_plan.len()
                     + plan_meta.keyspace_name.len()
             }
-            RespOneof::TopRuRecords(top_ru_records) => top_ru_records.records.size_of(),
+            RespOneof::RuRecord(ru_record) => ru_record.size_of(),
         }
     }
 }

@@ -6,6 +6,16 @@ use vector_lib::event::{Event, LogEvent, Value as LogValue};
 
 use super::types::TypeConverter;
 
+/// Result of a schema evolution compatibility check.
+pub enum EvolutionResult {
+    /// All existing columns are present with compatible types AND at least one new column was added.
+    Compatible { incoming_count: usize, fixed_count: usize },
+    /// A column was dropped or changed type; reset is blocked to protect the table.
+    Blocked,
+    /// Schema is unchanged (same column count as fixed schema).
+    Unchanged,
+}
+
 /// Schema metadata extracted from events
 #[derive(Debug, Clone)]
 pub struct SchemaMetadata {
@@ -41,7 +51,11 @@ impl SchemaManager {
     }
 
     /// Extract and cache schema metadata from event
-    pub fn extract_and_cache(&mut self, log_event: &LogEvent, default_table_name: Option<&str>) -> Option<SchemaMetadata> {
+    pub fn extract_and_cache(
+        &mut self,
+        log_event: &LogEvent,
+        default_table_name: Option<&str>,
+    ) -> Option<SchemaMetadata> {
         // Get table name for schema cache key
         let table_name = log_event
             .get("_vector_table")
@@ -240,11 +254,85 @@ impl SchemaManager {
         self.type_converter.infer_arrow_type(field_name, value)
     }
 
+    /// Check whether incoming events carry a compatible schema evolution (new columns only).
+    ///
+    /// Compares the MySQL field types in `_schema_metadata` against the Arrow types in
+    /// `fixed_schema`. Returns `EvolutionResult::Compatible` only when every existing
+    /// column is still present with the same Arrow type AND at least one new column has
+    /// been added. Returns `Blocked` on any drop or type change so the caller can avoid
+    /// corrupting the table.
+    pub fn check_schema_evolution(
+        &self,
+        log_event: &LogEvent,
+        fixed_schema: &Schema,
+    ) -> EvolutionResult {
+        let incoming_meta: HashMap<String, String> = log_event
+            .get("_schema_metadata")
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter(|(k, _)| !k.starts_with('_'))
+                    .filter_map(|(k, v)| {
+                        v.get("mysql_type")
+                            .and_then(|t| t.as_str())
+                            .map(|t| (k.as_str().to_string(), t.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Data fields only — exclude Vector system fields and the partition date column.
+        let fixed_data_fields: Vec<(&str, &DataType)> = fixed_schema
+            .fields()
+            .iter()
+            .filter(|f| !f.name().starts_with("_vector_") && f.name() != "date")
+            .map(|f| (f.name().as_str(), f.data_type()))
+            .collect();
+
+        for (field_name, old_arrow_type) in &fixed_data_fields {
+            match incoming_meta.get(*field_name) {
+                Some(mysql_type) => {
+                    let expected = self.type_converter.mysql_to_arrow(mysql_type);
+                    if old_arrow_type != &&expected {
+                        warn!(
+                            "Schema type mismatch for column '{}': fixed={:?}, incoming_mysql='{}'->{:?}. Blocking schema reset.",
+                            field_name, old_arrow_type, mysql_type, expected
+                        );
+                        return EvolutionResult::Blocked;
+                    }
+                }
+                None => {
+                    warn!(
+                        "Schema column '{}' exists in fixed schema but missing from incoming _schema_metadata. Blocking schema reset.",
+                        field_name
+                    );
+                    return EvolutionResult::Blocked;
+                }
+            }
+        }
+
+        if incoming_meta.len() > fixed_data_fields.len() {
+            EvolutionResult::Compatible {
+                incoming_count: incoming_meta.len(),
+                fixed_count: fixed_data_fields.len(),
+            }
+        } else {
+            EvolutionResult::Unchanged
+        }
+    }
+
     /// Get cached partition_by for a table
     pub fn get_partition_by(&self, table_name: &str) -> Option<&Vec<String>> {
         self.cached_schemas
             .get(table_name)
             .and_then(|metadata| metadata.partition_by.as_ref())
+    }
+
+    /// Reset all cached schema state for a table so the next batch rebuilds from scratch.
+    /// Used when incoming events carry new columns not present in the current cached schema.
+    pub fn reset_schema_cache(&mut self, table_name: &str) {
+        self.cached_schemas.remove(table_name);
+        self.cached_arrow_schemas.remove(table_name);
     }
 
     /// Get cached Arrow schema for a table

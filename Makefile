@@ -186,7 +186,7 @@ cargo-install-%:
 .PHONY: release-docker
 release-docker: target/x86_64-unknown-linux-gnu/release/vector
 release-docker: target/aarch64-unknown-linux-gnu/release/vector
-release-docker: target/armv7-unknown-linux-gnueabihf/release/vector
+#release-docker: target/armv7-unknown-linux-gnueabihf/release/vector
 	@echo "Releasing docker image..."
 	@scripts/release-docker.sh
 	@echo "Done releasing docker image."
@@ -194,7 +194,7 @@ release-docker: target/armv7-unknown-linux-gnueabihf/release/vector
 .PHONY: release-docker-nextgen
 release-docker-nextgen: target/x86_64-unknown-linux-gnu/release/vector-nextgen
 release-docker-nextgen: target/aarch64-unknown-linux-gnu/release/vector-nextgen
-release-docker-nextgen: target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
+# release-docker-nextgen: target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
 	@echo "Releasing docker image (nextgen mode)..."
 	@NEXTGEN=true scripts/release-docker.sh
 	@echo "Done releasing docker image (nextgen mode)."

@@ -165,6 +165,10 @@ pub struct TableConfig {
     /// Whether this table is enabled
     #[configurable(derived)]
     pub enabled: bool,
+    /// Partition columns for the destination table (e.g. ["date"])
+    #[configurable(derived)]
+    #[serde(default)]
+    pub partition_by: Option<Vec<String>>,
 }
 
 /// Collection interval type
@@ -372,6 +376,7 @@ impl GenerateConfig for SystemTablesConfig {
                 collection_interval: "short".to_owned(),
                 where_clause: Some("command != 'Sleep'".to_owned()),
                 enabled: true,
+                partition_by: None,
             }],
             pd_tls: None,
             database_tls: None,
@@ -519,5 +524,36 @@ mod tests {
     #[test]
     fn generate_config() {
         vector::test_util::test_generate_config::<SystemTablesConfig>();
+    }
+
+    #[test]
+    fn test_table_config_partition_by_deserialization() {
+        // Verify that partition_by can be set via config and defaults to None when absent
+        let with_partition: TableConfig = toml::from_str(
+            r#"
+source_schema = "information_schema"
+source_table = "CLUSTER_STATEMENTS_SUMMARY"
+dest_table = "hist_statements"
+collection_interval = "auto(300)"
+partition_by = ["date"]
+enabled = true
+"#,
+        )
+        .expect("Failed to deserialize TableConfig with partition_by");
+
+        assert_eq!(with_partition.partition_by, Some(vec!["date".to_string()]));
+
+        let without_partition: TableConfig = toml::from_str(
+            r#"
+source_schema = "information_schema"
+source_table = "PROCESSLIST"
+dest_table = "hist_processlist"
+collection_interval = "short"
+enabled = true
+"#,
+        )
+        .expect("Failed to deserialize TableConfig without partition_by");
+
+        assert_eq!(without_partition.partition_by, None);
     }
 }

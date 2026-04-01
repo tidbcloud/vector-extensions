@@ -50,14 +50,14 @@ pub const fn default_timeout_secs() -> u64 {
 
 /// Delta Lake table writer (refactored version)
 pub struct DeltaLakeWriter {
-    /// Table path (local or S3)
+    /// Table path (local, S3, or Azure)
     table_path: PathBuf,
     /// Table configuration
     table_config: DeltaTableConfig,
     /// Write configuration
     #[allow(dead_code)]
     write_config: WriteConfig,
-    /// Storage options for S3/cloud storage
+    /// Storage options for S3/Azure cloud storage
     storage_options: Option<HashMap<String, String>>,
     /// Fixed Arrow schema for this table to ensure consistency across batches
     fixed_arrow_schema: Option<Schema>,
@@ -75,7 +75,13 @@ impl DeltaLakeWriter {
         write_config: WriteConfig,
         storage_options: Option<HashMap<String, String>>,
     ) -> Self {
-        Self::new_with_options(table_path, table_config, write_config, storage_options, true)
+        Self::new_with_options(
+            table_path,
+            table_config,
+            write_config,
+            storage_options,
+            true,
+        )
     }
 
     /// Create a new Delta Lake writer with options
@@ -86,17 +92,21 @@ impl DeltaLakeWriter {
         storage_options: Option<HashMap<String, String>>,
         enable_standard_fields: bool,
     ) -> Self {
-        // Initialize S3 handlers if this is an S3 path
-        if table_path.to_string_lossy().starts_with("s3://") {
+        let path_str = table_path.to_string_lossy();
+        if path_str.starts_with("s3://") {
             deltalake::aws::register_handlers(None);
+            info!("Registered Delta Lake S3 handlers for path: {}", path_str);
+        } else if path_str.starts_with("abfss://") {
+            deltalake::azure::register_handlers(None);
             info!(
-                "Registered Delta Lake S3 handlers for path: {}",
-                table_path.to_string_lossy()
+                "Registered Delta Lake Azure handlers for path: {}",
+                path_str
             );
         }
 
         let type_converter = TypeConverter::new();
-        let schema_manager = SchemaManager::new_with_options(type_converter, enable_standard_fields);
+        let schema_manager =
+            SchemaManager::new_with_options(type_converter, enable_standard_fields);
         let delta_ops_manager = DeltaOpsManager::new(storage_options.clone());
 
         Self {
@@ -130,6 +140,30 @@ impl DeltaLakeWriter {
             }
             _ => self.table_config.name.clone(),
         };
+
+        // -------------------------------------------------------------------
+        // Schema evolution: detect compatible new-column additions and reset
+        // the cached schemas so the next RecordBatch includes them.
+        // Drops and type changes are blocked inside check_schema_evolution.
+        // -------------------------------------------------------------------
+        if let (Some(Event::Log(log_event)), Some(ref fixed_schema)) =
+            (events.first(), &self.fixed_arrow_schema)
+        {
+            if let schema::EvolutionResult::Compatible {
+                incoming_count,
+                fixed_count,
+            } = self
+                .schema_manager
+                .check_schema_evolution(log_event, fixed_schema)
+            {
+                info!(
+                    "Compatible schema evolution detected for table {}: {} data fields incoming, {} in fixed cache. New columns will be merged.",
+                    table_name, incoming_count, fixed_count
+                );
+                self.fixed_arrow_schema = None;
+                self.schema_manager.reset_schema_cache(&table_name);
+            }
+        }
 
         // Convert events to RecordBatch
         let (record_batch, schema) = EventConverter::events_to_record_batch(
