@@ -359,15 +359,29 @@ impl TopSQLDeltaLakeSink {
     }
 
     fn build_table_path(&self, table_name: &str, route: Option<&KeyspaceRoute>) -> PathBuf {
+        let Some(component) = Self::component_name(table_name) else {
+            error!("Unknown TopSQL meta table_name: {}", table_name);
+            return Self::join_path(&self.base_path, &["type=topsql", "component=unknown"]);
+        };
+
         let mut segments = Vec::new();
         if let Some(route) = route {
             segments.push(format!("org={}", route.org_id));
             segments.push(format!("cluster={}", route.cluster_id));
         }
-        segments.push(format!("type={}", table_name));
+        segments.push("type=topsql".to_string());
+        segments.push(format!("component={}", component));
 
         let segment_refs: Vec<&str> = segments.iter().map(|segment| segment.as_str()).collect();
         Self::join_path(&self.base_path, &segment_refs)
+    }
+
+    fn component_name(table_name: &str) -> Option<&'static str> {
+        match table_name {
+            SOURCE_TABLE_TOPSQL_SQL_META => Some("topsql_meta_sql"),
+            SOURCE_TABLE_TOPSQL_PLAN_META => Some("topsql_meta_plan"),
+            _ => None,
+        }
     }
 
     fn is_cloud_path(base_path: &PathBuf) -> bool {
@@ -729,13 +743,13 @@ mod tests {
         assert_eq!(
             table_path,
             PathBuf::from(
-                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=30018/cluster=10762701230946915645/type=topsql_sql_meta"
+                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=30018/cluster=10762701230946915645/type=topsql/component=topsql_meta_sql"
             )
         );
     }
 
     #[test]
-    fn test_build_table_path_without_meta_route_preserves_existing_layout() {
+    fn test_build_table_path_without_meta_route_uses_component_layout() {
         let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
             PathBuf::from("/tmp/deltalake"),
             vec![],
@@ -753,7 +767,7 @@ mod tests {
 
         assert_eq!(
             table_path,
-            PathBuf::from("/tmp/deltalake/type=topsql_plan_meta")
+            PathBuf::from("/tmp/deltalake/type=topsql/component=topsql_meta_plan")
         );
     }
 
@@ -774,11 +788,15 @@ mod tests {
         let log_event = create_sql_meta_event("test_keyspace", "sql_digest_1", "2026-03-16");
         let route_a = WriterKey {
             table_name: SOURCE_TABLE_TOPSQL_SQL_META.to_string(),
-            table_path: PathBuf::from("/tmp/deltalake/org=30018/cluster=101/type=topsql_sql_meta"),
+            table_path: PathBuf::from(
+                "/tmp/deltalake/org=30018/cluster=101/type=topsql/component=topsql_meta_sql",
+            ),
         };
         let route_b = WriterKey {
             table_name: SOURCE_TABLE_TOPSQL_SQL_META.to_string(),
-            table_path: PathBuf::from("/tmp/deltalake/org=30019/cluster=102/type=topsql_sql_meta"),
+            table_path: PathBuf::from(
+                "/tmp/deltalake/org=30019/cluster=102/type=topsql/component=topsql_meta_sql",
+            ),
         };
 
         let key_a = sink.extract_event_key(&log_event, &route_a);

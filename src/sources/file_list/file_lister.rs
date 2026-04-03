@@ -317,33 +317,22 @@ impl FileLister {
         Ok(out)
     }
 
-    /// List TopSQL instance paths under list_prefix (deltalake/org=X/cluster=Y/type=topsql_tidb/).
-    /// Returns paths like "deltalake/org=X/cluster=Y/type=topsql_tidb/instance=db.tidb-0".
-    pub async fn list_topsql_instance_paths(&self, list_prefix: &str) -> vector::Result<Vec<String>> {
+    /// Return the TopSQL table root when any object exists under
+    /// `deltalake/org=X/cluster=Y/type=topsql/component=tidb/`.
+    pub async fn list_topsql_table_paths(&self, list_prefix: &str) -> vector::Result<Vec<String>> {
         let prefix_path = ObjectStorePath::from(list_prefix.trim_end_matches('/'));
-        let mut instances = HashSet::new();
         let mut stream = self.object_store.list(Some(&prefix_path));
 
         while let Some(result) = stream.next().await {
             match result {
-                Ok(meta) => {
-                    let loc = meta.location.to_string();
-                    // location is like "instance=db.tidb-0/_delta_log/..." or "instance=db.tidb-0/part.parquet"
-                    if let Some(inst) = loc.split('/').next() {
-                        if inst.starts_with("instance=") {
-                            let path = format!("{}/{}", list_prefix.trim_end_matches('/'), inst);
-                            instances.insert(path);
-                        }
-                    }
-                }
+                Ok(_) => return Ok(vec![list_prefix.trim_end_matches('/').to_string()]),
                 Err(e) => {
-                    error!("Error listing TopSQL instances: {}", e);
+                    error!("Error listing TopSQL table path: {}", e);
                 }
             }
         }
-        let mut out: Vec<_> = instances.into_iter().collect();
-        out.sort();
-        Ok(out)
+
+        Ok(Vec::new())
     }
 
     /// List immediate subdirectory names under `prefix` (e.g. prefix "diagnosis/data/o11y/merged-logs/2026020411/"

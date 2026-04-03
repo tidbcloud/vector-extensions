@@ -22,6 +22,9 @@ use crate::sources::topsql_v2::upstream::consts::{
 };
 
 use lazy_static::lazy_static;
+
+const TABLE_TOPSQL_TIDB: &str = "topsql_tidb";
+const TABLE_TOPSQL_TIKV: &str = "topsql_tikv";
 lazy_static! {
     static ref TOPSQL_SCHEMA: serde_json::Map<String, serde_json::Value> = {
         let mut schema_info = serde_json::Map::new();
@@ -83,6 +86,13 @@ lazy_static! {
         );
         schema_info.insert(
             LABEL_PLAN_DIGEST.into(),
+            serde_json::json!({
+                "mysql_type": "text",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            LABEL_INSTANCE_KEY.into(),
             serde_json::json!({
                 "mysql_type": "text",
                 "is_nullable": true
@@ -455,17 +465,31 @@ impl TopSQLDeltaLakeSink {
     }
 
     fn extract_table_name(log_event: &LogEvent) -> Option<String> {
-        log_event
+        if let Some(source_table) = log_event
+            .get(LABEL_SOURCE_TABLE)
+            .and_then(|value| value.as_str())
+        {
+            if source_table == SOURCE_TABLE_TOPRU {
+                return Some(source_table.to_string());
+            }
+        }
+
+        match log_event
             .get(LABEL_INSTANCE_KEY)
             .and_then(|value| value.as_str())
-            .map(|value| value.to_string())
-            .or_else(|| {
-                log_event
-                    .get(LABEL_SOURCE_TABLE)
-                    .and_then(|value| value.as_str())
-                    .filter(|value| *value == SOURCE_TABLE_TOPRU)
-                    .map(|value| value.to_string())
-            })
+        {
+            Some(instance_key) if instance_key.starts_with("topsql_tidb_") => {
+                Some(TABLE_TOPSQL_TIDB.to_string())
+            }
+            Some(instance_key) if instance_key.starts_with("topsql_tikv_") => {
+                Some(TABLE_TOPSQL_TIKV.to_string())
+            }
+            Some(instance_key) => {
+                error!("Unexpected TopSQL instance_key format: {}", instance_key);
+                None
+            }
+            None => None,
+        }
     }
 
     async fn resolve_writer_key(
@@ -519,41 +543,34 @@ impl TopSQLDeltaLakeSink {
     }
 
     fn build_table_path(&self, table_name: &str, route: Option<&KeyspaceRoute>) -> PathBuf {
-        let (table_type, table_instance) = Self::table_partition_values(table_name);
+        let Some(component) = Self::component_name(table_name) else {
+            error!(
+                "Unexpected table_name format (expected grouped TopSQL/TiKV name or `topsql_topru`): {}",
+                table_name
+            );
+            return Self::join_path(&self.base_path, &["type=topsql", "component=unknown"]);
+        };
 
         let mut segments = Vec::new();
         if let Some(route) = route {
             segments.push(format!("org={}", route.org_id));
             segments.push(format!("cluster={}", route.cluster_id));
         }
-        segments.push(format!("type=topsql_{}", table_type));
-        segments.push(format!("instance={}", table_instance));
+        segments.push("type=topsql".to_string());
+        segments.push(format!("component={}", component));
 
         let segment_refs: Vec<&str> = segments.iter().map(|segment| segment.as_str()).collect();
         Self::join_path(&self.base_path, &segment_refs)
     }
 
-    fn table_partition_values(table_name: &str) -> (&str, &str) {
-        if table_name == SOURCE_TABLE_TOPRU {
-            ("topru", "default")
-        } else {
-            match table_name
-                .strip_prefix("topsql_")
-                .and_then(|rest| rest.split_once('_'))
-            {
-                Some((table_type, table_instance))
-                    if !table_type.is_empty() && !table_instance.is_empty() =>
-                {
-                    (table_type, table_instance)
-                }
-                _ => {
-                    error!(
-                        "Unexpected table_name format (expected `topsql_{{type}}_{{instance}}` or `topsql_topru`): {}",
-                        table_name
-                    );
-                    ("unknown", "unknown")
-                }
-            }
+    fn component_name(table_name: &str) -> Option<&'static str> {
+        match table_name {
+            SOURCE_TABLE_TOPRU => Some("topru"),
+            TABLE_TOPSQL_TIDB => Some("tidb"),
+            TABLE_TOPSQL_TIKV => Some("tikv"),
+            _ if table_name.starts_with("topsql_tidb_") => Some("tidb"),
+            _ if table_name.starts_with("topsql_tikv_") => Some("tikv"),
+            _ => None,
         }
     }
 
@@ -758,13 +775,13 @@ mod tests {
         assert_eq!(
             table_path,
             PathBuf::from(
-                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=1369847559692509642/cluster=10110362358366286743/type=topsql_tidb/instance=127.0.0.1:10080"
+                "s3://o11y-prod-shared-us-west-2-premium/deltalake/org=1369847559692509642/cluster=10110362358366286743/type=topsql/component=tidb"
             )
         );
     }
 
     #[test]
-    fn test_build_table_path_without_meta_route_preserves_existing_layout() {
+    fn test_build_table_path_without_meta_route_uses_component_layout() {
         let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
             PathBuf::from("/tmp/deltalake"),
             vec![],
@@ -781,7 +798,20 @@ mod tests {
 
         assert_eq!(
             table_path,
-            PathBuf::from("/tmp/deltalake/type=topsql_topru/instance=default")
+            PathBuf::from("/tmp/deltalake/type=topsql/component=topru")
+        );
+    }
+
+    #[test]
+    fn test_extract_table_name_groups_instance_key_by_component() {
+        let mut event = Event::Log(LogEvent::default());
+        event
+            .as_mut_log()
+            .insert(LABEL_INSTANCE_KEY, "topsql_tidb_127.0.0.1:10080");
+
+        assert_eq!(
+            TopSQLDeltaLakeSink::extract_table_name(event.as_log()),
+            Some(TABLE_TOPSQL_TIDB.to_string())
         );
     }
 

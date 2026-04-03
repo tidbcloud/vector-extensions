@@ -19,7 +19,7 @@ pub enum DataTypeKind {
     /// Delta Lake sqlstatement table: deltalake/{project_id}/{uuid}/sqlstatement/
     SqlStatement,
 
-    /// Delta Lake TopSQL per instance: deltalake/org={project_id}/cluster={cluster_id}/type=topsql_tidb/instance=*/
+    /// Delta Lake TopSQL table root: deltalake/org={project_id}/cluster={cluster_id}/type=topsql/component=tidb/
     TopSql,
 
     /// Conprof pprof compressed files: 0/{project_id}/{conprof_org_id}/{cluster_id}/profiles/*.log.gz
@@ -56,10 +56,10 @@ pub struct DeltaTableRequest {
     pub table_subdir: String,
 }
 
-/// TopSQL: list instance=* under type=topsql_tidb and emit each instance path.
+/// TopSQL: list the TiDB TopSQL table root under type=topsql/component=tidb.
 #[derive(Debug, Clone)]
 pub struct TopSqlListRequest {
-    /// Prefix: deltalake/org={project_id}/cluster={cluster_id}/type=topsql_tidb/
+    /// Prefix: deltalake/org={project_id}/cluster={cluster_id}/type=topsql/component=tidb/
     pub list_prefix: String,
 }
 
@@ -161,7 +161,7 @@ pub fn resolve_requests(
                     .ok_or("top_sql requires project_id")?;
                 out.push(ListRequest::TopSql(TopSqlListRequest {
                     list_prefix: format!(
-                        "deltalake/org={}/cluster={}/type=topsql_tidb/",
+                        "deltalake/org={}/cluster={}/type=topsql/component=tidb/",
                         pid, cluster_id
                     ),
                 }));
@@ -352,7 +352,7 @@ mod tests {
             ListRequest::TopSql(t) => {
                 assert_eq!(
                     t.list_prefix,
-                    "deltalake/org=1372813089209061633/cluster=10324983984131567830/type=topsql_tidb/"
+                    "deltalake/org=1372813089209061633/cluster=10324983984131567830/type=topsql/component=tidb/"
                 );
             }
             _ => panic!("expected TopSql"),

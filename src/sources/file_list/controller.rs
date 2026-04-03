@@ -578,7 +578,7 @@ impl Controller {
                     }
                     let paths = self
                         .file_lister
-                        .list_topsql_instance_paths(&t.list_prefix)
+                        .list_topsql_table_paths(&t.list_prefix)
                         .await?;
                     let n = paths.len();
                     for path in &paths {

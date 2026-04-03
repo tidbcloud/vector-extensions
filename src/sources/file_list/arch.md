@@ -19,14 +19,14 @@ The `file_list` source lists and filters files (or Delta Lake table paths) from 
 | **raw_logs** | Gzip-compressed raw logs | `diagnosis/data/{cluster_id}/merged-logs/{YYYYMMDDHH}/tidb/*.log` |
 | **slowlog** | Delta Lake slowlog table | `deltalake/{project_id}/{uuid}/slowlogs/` (discovered) |
 | **sql_statement** | Delta Lake sqlstatement table | `deltalake/{project_id}/{uuid}/sqlstatement/` (discovered) |
-| **top_sql** | Delta Lake TopSQL per instance | `deltalake/org={project_id}/cluster={cluster_id}/type=topsql_tidb/instance=*` |
+| **top_sql** | Delta Lake TiDB TopSQL table | `deltalake/org={project_id}/cluster={cluster_id}/type=topsql/component=tidb/` |
 | **conprof** | Pprof compressed files | `0/{project_id}/{conprof_org_id}/{cluster_id}/profiles/*.log.gz` |
 
 Example URLs (for reference):
 
 - Raw log: `.../diagnosis/data/10324983984131567830/merged-logs/2026010804/tidb/db-*-tidb-0.log`
 - Slowlog: `.../deltalake/1372813089209061633/019aedbc-.../slowlogs/_delta_log/_last_checkpoint`
-- TopSQL: `.../deltalake/org=1372813089209061633/cluster=10324983984131567830/type=topsql_tidb/instance=db.tidb-0/...`
+- TopSQL: `.../deltalake/org=1372813089209061633/cluster=10324983984131567830/type=topsql/component=tidb/...`
 - Conprof: `.../0/1372813089209061633/1372813089454544954/10324983984131567830/profiles/1767830400-pd-cpu-....log.gz`
 
 ## Architecture
@@ -39,7 +39,7 @@ file_list/
 ├── checkpoint.rs             # Checkpoint load/save (completed prefix keys for OOM/restart recovery)
 ├── path_resolver.rs          # DataTypeKind enum and path resolution (cluster_id + types + time → list requests)
 ├── controller.rs             # Runs list (legacy or by-request) and emits events
-├── file_lister.rs            # list_files_at, list_delta_table_paths, list_topsql_instance_paths
+├── file_lister.rs            # list_files_at, list_delta_table_paths, list_topsql_table_paths
 └── object_store_builder.rs   # Multi-cloud ObjectStore builder
 ```
 
