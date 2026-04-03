@@ -1998,6 +1998,28 @@ impl DataCollector for CoprocessorCollector {
             }
         };
 
+        // Apply post-filter if where_clause is configured.
+        // For STATEMENTS_SUMMARY tables, auto-apply 1 hour filter if no where_clause is set.
+        let where_clause = table.where_clause.as_deref().or_else(|| {
+            if table.source_table.contains("STATEMENTS_SUMMARY") {
+                Some("SUMMARY_END_TIME >= DATE_SUB(NOW(), INTERVAL 1 HOUR)")
+            } else {
+                None
+            }
+        });
+
+        let data = if let Some(clause) = where_clause {
+            let before = data.len();
+            let filtered = apply_time_filter(data, clause);
+            info!(
+                "Post-filter applied for table {}: where_clause='{}', {} -> {} rows",
+                table.source_table, clause, before, filtered.len()
+            );
+            filtered
+        } else {
+            data
+        };
+
         let duration = start_time.elapsed();
         let row_count = data.len();
 
@@ -2059,4 +2081,74 @@ impl DataCollector for CoprocessorCollector {
         // or check the gRPC connection status
         Ok(())
     }
+}
+
+/// Apply time-based post-filter to collected rows based on a where_clause string.
+///
+/// Supports the pattern: `COLUMN >= DATE_SUB(NOW(), INTERVAL N HOUR|MINUTE)`
+/// Time field values are expected as `Value::String("YYYY-MM-DD HH:MM:SS")`.
+/// If the clause cannot be parsed, all rows are returned unchanged.
+pub fn apply_time_filter(
+    rows: Vec<std::collections::HashMap<String, serde_json::Value>>,
+    where_clause: &str,
+) -> Vec<std::collections::HashMap<String, serde_json::Value>> {
+    // Parse: COLUMN >= DATE_SUB(NOW(), INTERVAL N HOUR|MINUTE) (case-insensitive)
+    let upper = where_clause.to_uppercase();
+    let Some((column, rest)) = upper.split_once(">=") else {
+        return rows;
+    };
+    let column = column.trim().to_string();
+    let rest = rest.trim();
+
+    // rest should look like: DATE_SUB(NOW(), INTERVAL N HOUR|MINUTE)
+    let Some(inner) = rest
+        .strip_prefix("DATE_SUB(NOW(),")
+        .or_else(|| rest.strip_prefix("DATE_SUB( NOW() ,"))
+        .or_else(|| rest.strip_prefix("DATE_SUB(NOW() ,"))
+        .or_else(|| rest.strip_prefix("DATE_SUB( NOW(),"))
+    else {
+        return rows;
+    };
+    let inner = inner.trim().trim_end_matches(')').trim();
+    // inner: INTERVAL N HOUR|MINUTE
+    let Some(interval_body) = inner.strip_prefix("INTERVAL") else {
+        return rows;
+    };
+    let parts: Vec<&str> = interval_body.split_whitespace().collect();
+    if parts.len() < 2 {
+        return rows;
+    }
+    let Ok(n) = parts[0].parse::<i64>() else {
+        return rows;
+    };
+    let cutoff = chrono::Utc::now()
+        - match parts[1] {
+            "HOUR" => chrono::Duration::hours(n),
+            "MINUTE" => chrono::Duration::minutes(n),
+            _ => return rows,
+        };
+    let cutoff_naive = cutoff.naive_utc();
+
+    // Use the original-case column name from the raw where_clause
+    let raw_upper = where_clause.to_uppercase();
+    let col_raw = where_clause[..raw_upper.find(">=").unwrap_or(0)]
+        .trim()
+        .to_string();
+
+    rows.into_iter()
+        .filter(|row| {
+            let Some(val) = row.get(&col_raw) else {
+                return true;
+            };
+            let Some(s) = val.as_str() else {
+                return true;
+            };
+            let Ok(row_time) =
+                chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+            else {
+                return true;
+            };
+            row_time >= cutoff_naive
+        })
+        .collect()
 }
