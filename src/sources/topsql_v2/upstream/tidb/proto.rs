@@ -19,15 +19,10 @@ impl ByteSizeOf for RespOneof {
                 record.items.size_of() + record.sql_digest.len() + record.plan_digest.len()
             }
             RespOneof::SqlMeta(sql_meta) => {
-                sql_meta.sql_digest.len()
-                    + sql_meta.normalized_sql.len()
-                    + sql_meta.keyspace_name.len()
+                sql_meta.sql_digest.len() + sql_meta.normalized_sql.len()
             }
             RespOneof::PlanMeta(plan_meta) => {
-                plan_meta.plan_digest.len()
-                    + plan_meta.normalized_plan.len()
-                    + plan_meta.encoded_normalized_plan.len()
-                    + plan_meta.keyspace_name.len()
+                plan_meta.plan_digest.len() + plan_meta.normalized_plan.len()
             }
             RespOneof::RuRecord(ru_record) => ru_record.size_of(),
         }
@@ -42,11 +37,11 @@ impl ByteSizeOf for TopSqlRecordItem {
 
 impl ByteSizeOf for TopRuRecord {
     fn allocated_bytes(&self) -> usize {
-        self.keyspace_name.len()
-            + self.user.len()
-            + self.sql_digest.len()
-            + self.plan_digest.len()
-            + self.items.size_of()
+        self.keyspace_name.len() + 
+        self.user.len() + 
+        self.sql_digest.len() + 
+        self.plan_digest.len() + 
+        self.items.size_of()
     }
 }
 

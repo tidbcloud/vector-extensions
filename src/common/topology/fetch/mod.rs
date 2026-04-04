@@ -2,7 +2,6 @@ mod models;
 mod pd;
 mod store;
 mod tidb;
-mod tidb_manager;
 mod utils;
 
 pub mod tidb_nextgen;
@@ -44,8 +43,6 @@ pub enum FetchError {
     FetchPDTopology { source: pd::FetchError },
     #[snafu(display("Failed to fetch tidb topology: {}", source))]
     FetchTiDBTopology { source: tidb::FetchError },
-    #[snafu(display("Failed to fetch tidb topology from manager server: {}", source))]
-    FetchTiDBFromManagerServerTopology { source: tidb_manager::FetchError },
     #[snafu(display("Failed to fetch store topology: {}", source))]
     FetchStoreTopology { source: store::FetchError },
     #[snafu(display("Failed to fetch tidb nextgen topology: {}", source))]
@@ -59,8 +56,6 @@ pub enum FetchError {
 // Legacy topology fetcher
 pub struct LegacyTopologyFetcher {
     pd_address: String,
-    manager_server_address: Option<String>,
-    tidb_namespace: Option<String>,
     http_client: HttpClient<hyper::Body>,
     pub etcd_client: etcd_client::Client,
 }
@@ -68,22 +63,15 @@ pub struct LegacyTopologyFetcher {
 impl LegacyTopologyFetcher {
     pub async fn new(
         pd_address: String,
-        manager_server_address: Option<String>,
-        tidb_namespace: Option<String>,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
     ) -> Result<Self, FetchError> {
         let pd_address = Self::polish_address(pd_address, &tls_config)?;
-        let manager_server_address = manager_server_address
-            .map(Self::polish_manager_server_address)
-            .transpose()?;
         let http_client = Self::build_http_client(tls_config.as_ref(), proxy_config)?;
         let etcd_client = Self::build_etcd_client(&pd_address, &tls_config).await?;
 
         Ok(Self {
             pd_address,
-            manager_server_address,
-            tidb_namespace,
             http_client,
             etcd_client,
         })
@@ -97,33 +85,10 @@ impl LegacyTopologyFetcher {
             .get_up_pds(components)
             .await
             .context(FetchPDTopologySnafu)?;
-        if let Some(manager_server_address) = self.manager_server_address.as_deref() {
-            if self
-                .tidb_namespace
-                .as_deref()
-                .map(str::trim)
-                .is_none_or(str::is_empty)
-            {
-                info!(
-                    message =
-                        "Skipping manager-based TiDB discovery because tidb namespace is empty",
-                    manager_server_address
-                );
-            }
-            tidb_manager::TiDBManagerTopologyFetcher::new(
-                manager_server_address,
-                self.tidb_namespace.as_deref(),
-                &self.http_client,
-            )
+        tidb::TiDBTopologyFetcher::new(&mut self.etcd_client)
             .get_up_tidbs(components)
             .await
-            .context(FetchTiDBFromManagerServerTopologySnafu)?;
-        } else {
-            tidb::TiDBTopologyFetcher::new(&mut self.etcd_client)
-                .get_up_tidbs(components)
-                .await
-                .context(FetchTiDBTopologySnafu)?;
-        }
+            .context(FetchTiDBTopologySnafu)?;
         store::StoreTopologyFetcher::new(&self.pd_address, &self.http_client)
             .get_up_stores(components)
             .await
@@ -142,17 +107,6 @@ impl LegacyTopologyFetcher {
             } else {
                 format!("http://{address}")
             };
-        }
-        if address.ends_with('/') {
-            address.pop();
-        }
-        Ok(address)
-    }
-
-    fn polish_manager_server_address(mut address: String) -> Result<String, FetchError> {
-        let uri: hyper::Uri = address.parse().context(ParseAddressSnafu)?;
-        if uri.scheme().is_none() {
-            address = format!("http://{address}");
         }
         if address.ends_with('/') {
             address.pop();
@@ -280,8 +234,6 @@ impl TopologyFetcher {
     /// Create a new topology fetcher based on the current feature configuration
     pub async fn new(
         pd_address: Option<String>,
-        manager_server_address: Option<String>,
-        tidb_namespace: Option<String>,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         tidb_group: Option<String>,
@@ -300,14 +252,7 @@ impl TopologyFetcher {
             let pd_address = pd_address.ok_or_else(|| FetchError::ConfigurationError {
                 message: "PD address is required in legacy mode".to_string(),
             })?;
-            let fetcher = LegacyTopologyFetcher::new(
-                pd_address,
-                manager_server_address,
-                tidb_namespace,
-                tls_config,
-                proxy_config,
-            )
-            .await?;
+            let fetcher = LegacyTopologyFetcher::new(pd_address, tls_config, proxy_config).await?;
             Ok(Self {
                 inner: TopologyFetcherImpl::Legacy(Box::new(fetcher)),
             })

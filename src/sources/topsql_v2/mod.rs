@@ -69,12 +69,6 @@ pub struct TopSQLConfig {
     pub pd_address: Option<String>,
 
     /// PLACEHOLDER
-    pub manager_server_address: Option<String>,
-
-    /// PLACEHOLDER
-    pub tidb_namespace: Option<String>,
-
-    /// PLACEHOLDER
     pub tls: Option<TlsConfig>,
 
     /// PLACEHOLDER
@@ -92,10 +86,6 @@ pub struct TopSQLConfig {
     /// PLACEHOLDER
     #[serde(default = "default_downsampling_interval")]
     pub downsampling_interval: u32,
-
-    /// Whether to collect TopSQL data from TiKV components.
-    #[serde(default = "default_enable_tikv_topsql")]
-    pub enable_tikv_topsql: bool,
 
     /// TopRU (Resource Unit) collection config. Only applies to TiDB upstream.
     #[serde(default)]
@@ -118,24 +108,17 @@ pub const fn default_downsampling_interval() -> u32 {
     60
 }
 
-pub const fn default_enable_tikv_topsql() -> bool {
-    true
-}
-
 impl GenerateConfig for TopSQLConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
             tidb_group: None,
             label_k8s_instance: None,
             pd_address: None,
-            manager_server_address: None,
-            tidb_namespace: None,
             tls: None,
             init_retry_delay_seconds: default_init_retry_delay(),
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
             top_n: default_top_n(),
             downsampling_interval: default_downsampling_interval(),
-            enable_tikv_topsql: default_enable_tikv_topsql(),
             topru: TopRUConfig::default(),
         })
         .unwrap()
@@ -151,27 +134,21 @@ impl SourceConfig for TopSQLConfig {
         let tidb_group = self.tidb_group.clone();
         let label_k8s_instance = self.label_k8s_instance.clone();
         let pd_address = self.pd_address.clone();
-        let manager_server_address = self.manager_server_address.clone();
-        let tidb_namespace = self.tidb_namespace.clone();
         let tls = self.tls.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
         let init_retry_delay = Duration::from_secs_f64(self.init_retry_delay_seconds);
         let top_n = self.top_n;
         let downsampling_interval = self.downsampling_interval;
-        let enable_tikv_topsql = self.enable_tikv_topsql;
         let topru = self.topru.clone();
         let schema_update_interval = Duration::from_secs(60);
 
         Ok(Box::pin(async move {
             let controller = Controller::new(
                 pd_address,
-                manager_server_address,
-                tidb_namespace,
                 topology_fetch_interval,
                 init_retry_delay,
                 top_n,
                 downsampling_interval,
-                enable_tikv_topsql,
                 schema_update_interval,
                 tls,
                 &cx.proxy,
