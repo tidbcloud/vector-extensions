@@ -98,6 +98,8 @@ pub struct PdKeyspaceResolver {
     base_url: String,
     client: Client,
     cache: Arc<Mutex<LruCache<String, KeyspaceRoute>>>,
+    /// Per-keyspace locks to deduplicate concurrent HTTP requests for the same keyspace.
+    keyspace_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,12 +138,10 @@ impl PdKeyspaceResolver {
             cache: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(cache_capacity.max(1)).unwrap(),
             ))),
+            keyspace_locks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    // TODO: concurrent requests for the same keyspace can all miss the cache and
-    // issue duplicate HTTP calls. Consider an in-flight dedup mechanism if PD
-    // pressure becomes a concern.
     pub async fn resolve_keyspace(
         &self,
         keyspace_name: &str,
@@ -150,12 +150,50 @@ impl PdKeyspaceResolver {
             return Ok(None);
         }
 
-        let mut cache = self.cache.lock().await;
-        if let Some(cached) = cache.get(keyspace_name).cloned() {
-            return Ok(Some(cached));
+        // Fast path: read lock on cache (via short-lived Mutex guard).
+        {
+            let mut cache = self.cache.lock().await;
+            if let Some(cached) = cache.get(keyspace_name).cloned() {
+                return Ok(Some(cached));
+            }
         }
-        drop(cache);
 
+        // Acquire a per-keyspace lock so only one request hits PD for the same keyspace.
+        let ks_lock = {
+            let mut locks = self.keyspace_locks.lock().await;
+            locks
+                .entry(keyspace_name.to_string())
+                .or_default()
+                .clone()
+        };
+        let _guard = ks_lock.lock().await;
+
+        // Double-check: another request may have populated the cache while we waited.
+        {
+            let mut cache = self.cache.lock().await;
+            if let Some(cached) = cache.get(keyspace_name).cloned() {
+                return Ok(Some(cached));
+            }
+        }
+
+        let route = self.fetch_keyspace_from_pd(keyspace_name).await?;
+
+        if let Some(route) = route.clone() {
+            self.cache
+                .lock()
+                .await
+                .put(keyspace_name.to_string(), route);
+        }
+        // Intentionally do not cache misses or transient failures so a later retry can recover
+        // once PD metadata becomes visible.
+
+        Ok(route)
+    }
+
+    async fn fetch_keyspace_from_pd(
+        &self,
+        keyspace_name: &str,
+    ) -> Result<Option<KeyspaceRoute>, BoxError> {
         let encoded_keyspace = byte_serialize(keyspace_name.as_bytes()).collect::<String>();
         let response = self
             .client
@@ -183,18 +221,7 @@ impl PdKeyspaceResolver {
         }
 
         let metadata: PdKeyspaceMetadata = response.json().await?;
-        let route = metadata.config.as_ref().and_then(extract_route_from_config);
-
-        if let Some(route) = route.clone() {
-            self.cache
-                .lock()
-                .await
-                .put(keyspace_name.to_string(), route);
-        }
-        // Intentionally do not cache misses or transient failures so a later retry can recover
-        // once PD metadata becomes visible.
-
-        Ok(route)
+        Ok(metadata.config.as_ref().and_then(extract_route_from_config))
     }
 }
 
