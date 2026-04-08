@@ -168,26 +168,45 @@ impl PdKeyspaceResolver {
         };
         let _guard = ks_lock.lock().await;
 
-        // Double-check: another request may have populated the cache while we waited.
+        let result: Result<Option<KeyspaceRoute>, BoxError> = async {
+            // Double-check: another request may have populated the cache while we waited.
+            {
+                let mut cache = self.cache.lock().await;
+                if let Some(cached) = cache.get(keyspace_name).cloned() {
+                    return Ok(Some(cached));
+                }
+            }
+
+            let route = self.fetch_keyspace_from_pd(keyspace_name).await?;
+
+            if let Some(route) = route.clone() {
+                self.cache
+                    .lock()
+                    .await
+                    .put(keyspace_name.to_string(), route);
+            }
+            // Intentionally do not cache misses or transient failures so a later retry can
+            // recover once PD metadata becomes visible.
+
+            Ok(route)
+        }
+        .await;
+
+        // Clean up the per-keyspace lock if no other task is waiting on it.
+        // Runs on every exit path: cache hit, fetch success, and fetch error.
+        drop(_guard);
         {
-            let mut cache = self.cache.lock().await;
-            if let Some(cached) = cache.get(keyspace_name).cloned() {
-                return Ok(Some(cached));
+            let mut locks = self.keyspace_locks.lock().await;
+            if let Some(lock) = locks.get(keyspace_name) {
+                // The HashMap holds one Arc and we cloned one into `ks_lock` (still alive).
+                // If strong_count == 2, no other task is queued, safe to remove.
+                if Arc::strong_count(lock) <= 2 {
+                    locks.remove(keyspace_name);
+                }
             }
         }
 
-        let route = self.fetch_keyspace_from_pd(keyspace_name).await?;
-
-        if let Some(route) = route.clone() {
-            self.cache
-                .lock()
-                .await
-                .put(keyspace_name.to_string(), route);
-        }
-        // Intentionally do not cache misses or transient failures so a later retry can recover
-        // once PD metadata becomes visible.
-
-        Ok(route)
+        result
     }
 
     async fn fetch_keyspace_from_pd(
