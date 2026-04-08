@@ -47,8 +47,6 @@ impl Controller {
     pub async fn new(
         sharedpool_id: Option<String>,
         pd_address: Option<String>,
-        manager_server_address: Option<String>,
-        tidb_namespace: Option<String>,
         topo_fetch_interval: Duration,
         init_retry_delay: Duration,
         top_n: usize,
@@ -63,8 +61,6 @@ impl Controller {
     ) -> vector::Result<Self> {
         let topo_fetcher = TopologyFetcher::new(
             pd_address,
-            manager_server_address,
-            tidb_namespace,
             tls_config.clone(),
             proxy_config,
             tidb_group,

@@ -41,8 +41,6 @@ impl DatabaseEnvVars {
 
     // PD/Topology related environment variables
     pub const PD_ADDRESS: &'static str = "PD_ADDRESS";
-    pub const MANAGER_SERVER_ADDRESS: &'static str = "MANAGER_SERVER_ADDRESS";
-    pub const TIDB_NAMESPACE: &'static str = "TIDB_NAMESPACE";
     pub const TIDB_GROUP: &'static str = "TIDB_GROUP";
     pub const LABEL_K8S_INSTANCE: &'static str = "LABEL_K8S_INSTANCE";
 
@@ -65,14 +63,8 @@ impl DatabaseEnvVars {
 #[configurable_component(source("system_tables"))]
 #[derive(Debug, Clone)]
 pub struct SystemTablesConfig {
-    /// PD address for legacy mode (for PD/store discovery and etcd access)
+    /// PD address for legacy mode (to discover TiDB instances)
     pub pd_address: Option<String>,
-
-    /// Manager server HTTP endpoint for TiDB discovery in legacy mode
-    pub manager_server_address: Option<String>,
-
-    /// Namespace filter for manager server active TiDB discovery
-    pub tidb_namespace: Option<String>,
 
     /// TiDB group name for nextgen mode
     pub tidb_group: Option<String>,
@@ -265,12 +257,6 @@ impl SystemTablesConfig {
         if let Ok(val) = env::var(DatabaseEnvVars::PD_ADDRESS) {
             self.pd_address = Some(val);
         }
-        if let Ok(val) = env::var(DatabaseEnvVars::MANAGER_SERVER_ADDRESS) {
-            self.manager_server_address = Some(val);
-        }
-        if let Ok(val) = env::var(DatabaseEnvVars::TIDB_NAMESPACE) {
-            self.tidb_namespace = Some(val);
-        }
         if let Ok(val) = env::var(DatabaseEnvVars::TIDB_GROUP) {
             self.tidb_group = Some(val);
         }
@@ -355,8 +341,6 @@ impl GenerateConfig for SystemTablesConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
             pd_address: Some("127.0.0.1:2379".to_owned()),
-            manager_server_address: None,
-            tidb_namespace: None,
             tidb_group: None,
             label_k8s_instance: None,
             database_username: Some("root".to_owned()),
@@ -420,20 +404,12 @@ impl SourceConfig for SystemTablesConfig {
         if let Some(ref pd_addr) = config.pd_address {
             info!("  PD address: {}", pd_addr);
         }
-        if let Some(ref manager_server_addr) = config.manager_server_address {
-            info!("  Manager server address: {}", manager_server_addr);
-        }
-        if let Some(ref tidb_namespace) = config.tidb_namespace {
-            info!("  TiDB namespace: {}", tidb_namespace);
-        }
         info!("  PD TLS enabled: {}", config.pd_tls.is_some());
         info!("  Tables configured: {}", config.tables.len());
 
         let topology_fetch_interval =
             Duration::from_secs_f64(config.topology_fetch_interval_seconds);
         let pd_address = config.pd_address.clone();
-        let manager_server_address = config.manager_server_address.clone();
-        let tidb_namespace = config.tidb_namespace.clone();
         let tidb_group = config.tidb_group.clone();
         let label_k8s_instance = config.label_k8s_instance.clone();
 
@@ -483,8 +459,6 @@ impl SourceConfig for SystemTablesConfig {
             info!("Using system tables controller with abstracted collectors");
             let controller = Controller::new(
                 pd_address,
-                manager_server_address,
-                tidb_namespace,
                 tidb_group,
                 label_k8s_instance,
                 topology_fetch_interval,
