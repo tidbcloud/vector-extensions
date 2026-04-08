@@ -136,16 +136,17 @@ impl GenerateConfig for DeltaLakeConfig {
 impl SinkConfig for DeltaLakeConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
         info!(
-            "DEBUG: Building Delta Lake sink with bucket: {:?}",
-            self.bucket
+            "Building Delta Lake sink with bucket: {:?}, base_path: {}",
+            self.bucket, self.base_path
         );
+
         let is_cloud_path = self.base_path.starts_with("s3://")
             || self.base_path.starts_with("abfss://")
             || self.base_path.starts_with("gs://");
 
-        // Create S3 service if bucket is configured
+        // Create S3 service if bucket is configured (S3/OSS only)
         let s3_service = if self.bucket.is_some() {
-            info!("DEBUG: Bucket configured, creating S3 service");
+            info!("Bucket configured, creating S3 service");
             match self.create_service(&cx.proxy).await {
                 Ok(service) => {
                     info!("S3 service created successfully");
