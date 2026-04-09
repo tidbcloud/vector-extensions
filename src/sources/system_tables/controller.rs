@@ -70,6 +70,8 @@ impl Controller {
             TopologyFetcher::new(
                 Some(String::new()),
                 None,
+                None,
+                None,
                 proxy_config,
                 tidb_group.clone(),
                 label_k8s_instance.clone(),
@@ -94,6 +96,8 @@ impl Controller {
 
             TopologyFetcher::new(
                 Some(pd_addr),
+                None,
+                None,
                 pd_tls.clone(),
                 proxy_config,
                 tidb_group.clone(),

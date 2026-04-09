@@ -2,6 +2,7 @@ mod models;
 mod pd;
 mod store;
 mod tidb;
+mod tidb_manager;
 mod utils;
 
 pub mod tidb_nextgen;
@@ -20,6 +21,20 @@ use std::fs::read;
 use vector::config::ProxyConfig;
 use vector::http::HttpClient;
 use vector::tls::{MaybeTlsSettings, TlsConfig};
+
+pub(super) fn normalize_namespace_list(namespaces: Option<&str>) -> Option<String> {
+    let namespaces = namespaces?;
+    let normalized = namespaces
+        .split(',')
+        .map(str::trim)
+        .filter(|namespace| !namespace.is_empty())
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.join(","))
+    }
+}
 
 #[derive(Debug, Snafu)]
 pub enum FetchError {
@@ -43,6 +58,10 @@ pub enum FetchError {
     FetchPDTopology { source: pd::FetchError },
     #[snafu(display("Failed to fetch tidb topology: {}", source))]
     FetchTiDBTopology { source: tidb::FetchError },
+    #[snafu(display("Failed to fetch tidb topology from manager server: {}", source))]
+    FetchTiDBFromManagerServerTopology { source: tidb_manager::FetchError },
+    #[snafu(display("Failed to read manager shard config: {}", source))]
+    ReadManagerShardConfig { source: tidb_manager::FetchError },
     #[snafu(display("Failed to fetch store topology: {}", source))]
     FetchStoreTopology { source: store::FetchError },
     #[snafu(display("Failed to fetch tidb nextgen topology: {}", source))]
@@ -56,6 +75,9 @@ pub enum FetchError {
 // Legacy topology fetcher
 pub struct LegacyTopologyFetcher {
     pd_address: String,
+    manager_server_address: Option<String>,
+    tidb_namespace: Option<String>,
+    manager_shard_config: Option<tidb_manager::ManagerShardConfig>,
     http_client: HttpClient<hyper::Body>,
     pub etcd_client: etcd_client::Client,
 }
@@ -63,15 +85,32 @@ pub struct LegacyTopologyFetcher {
 impl LegacyTopologyFetcher {
     pub async fn new(
         pd_address: String,
+        manager_server_address: Option<String>,
+        tidb_namespace: Option<String>,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
     ) -> Result<Self, FetchError> {
         let pd_address = Self::polish_address(pd_address, &tls_config)?;
+        let manager_server_address = manager_server_address
+            .map(Self::polish_manager_server_address)
+            .transpose()?;
+        let tidb_namespace =
+            Self::normalize_tidb_namespace(manager_server_address.as_deref(), tidb_namespace)?;
+        let manager_shard_config = if manager_server_address.is_some() {
+            // Shard env vars are process-scoped, so we parse them once during fetcher init.
+            tidb_manager::read_manager_shard_config_from_env()
+                .context(ReadManagerShardConfigSnafu)?
+        } else {
+            None
+        };
         let http_client = Self::build_http_client(tls_config.as_ref(), proxy_config)?;
         let etcd_client = Self::build_etcd_client(&pd_address, &tls_config).await?;
 
         Ok(Self {
             pd_address,
+            manager_server_address,
+            tidb_namespace,
+            manager_shard_config,
             http_client,
             etcd_client,
         })
@@ -85,10 +124,22 @@ impl LegacyTopologyFetcher {
             .get_up_pds(components)
             .await
             .context(FetchPDTopologySnafu)?;
-        tidb::TiDBTopologyFetcher::new(&mut self.etcd_client)
+        if let Some(manager_server_address) = self.manager_server_address.as_deref() {
+            tidb_manager::TiDBManagerTopologyFetcher::new(
+                manager_server_address,
+                self.tidb_namespace.as_deref(),
+                &self.http_client,
+                self.manager_shard_config,
+            )
             .get_up_tidbs(components)
             .await
-            .context(FetchTiDBTopologySnafu)?;
+            .context(FetchTiDBFromManagerServerTopologySnafu)?;
+        } else {
+            tidb::TiDBTopologyFetcher::new(&mut self.etcd_client)
+                .get_up_tidbs(components)
+                .await
+                .context(FetchTiDBTopologySnafu)?;
+        }
         store::StoreTopologyFetcher::new(&self.pd_address, &self.http_client)
             .get_up_stores(components)
             .await
@@ -107,6 +158,33 @@ impl LegacyTopologyFetcher {
             } else {
                 format!("http://{address}")
             };
+        }
+        if address.ends_with('/') {
+            address.pop();
+        }
+        Ok(address)
+    }
+
+    fn normalize_tidb_namespace(
+        manager_server_address: Option<&str>,
+        tidb_namespace: Option<String>,
+    ) -> Result<Option<String>, FetchError> {
+        let tidb_namespace = normalize_namespace_list(tidb_namespace.as_deref());
+
+        if manager_server_address.is_some() && tidb_namespace.is_none() {
+            return Err(FetchError::ConfigurationError {
+                message: "tidb_namespace is required when manager_server_address is configured"
+                    .to_string(),
+            });
+        }
+
+        Ok(tidb_namespace)
+    }
+
+    fn polish_manager_server_address(mut address: String) -> Result<String, FetchError> {
+        let uri: hyper::Uri = address.parse().context(ParseAddressSnafu)?;
+        if uri.scheme().is_none() {
+            address = format!("http://{address}");
         }
         if address.ends_with('/') {
             address.pop();
@@ -234,6 +312,8 @@ impl TopologyFetcher {
     /// Create a new topology fetcher based on the current feature configuration
     pub async fn new(
         pd_address: Option<String>,
+        manager_server_address: Option<String>,
+        tidb_namespace: Option<String>,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         tidb_group: Option<String>,
@@ -252,7 +332,14 @@ impl TopologyFetcher {
             let pd_address = pd_address.ok_or_else(|| FetchError::ConfigurationError {
                 message: "PD address is required in legacy mode".to_string(),
             })?;
-            let fetcher = LegacyTopologyFetcher::new(pd_address, tls_config, proxy_config).await?;
+            let fetcher = LegacyTopologyFetcher::new(
+                pd_address,
+                manager_server_address,
+                tidb_namespace,
+                tls_config,
+                proxy_config,
+            )
+            .await?;
             Ok(Self {
                 inner: TopologyFetcherImpl::Legacy(Box::new(fetcher)),
             })
@@ -313,3 +400,34 @@ impl TopologyFetcher {
 //         println!("{:?}", components);
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::LegacyTopologyFetcher;
+
+    #[test]
+    fn normalize_tidb_namespace_requires_value_when_manager_is_configured() {
+        let err =
+            LegacyTopologyFetcher::normalize_tidb_namespace(Some("http://manager:8080"), None)
+                .expect_err("expected missing namespace to fail");
+
+        assert!(matches!(err, super::FetchError::ConfigurationError { .. }));
+    }
+
+    #[test]
+    fn normalize_tidb_namespace_trims_and_joins_values() {
+        let normalized = LegacyTopologyFetcher::normalize_tidb_namespace(
+            Some("http://manager:8080"),
+            Some(" ns-a, ns-b , ".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(normalized.as_deref(), Some("ns-a,ns-b"));
+    }
+
+    #[test]
+    fn normalize_tidb_namespace_allows_missing_value_without_manager() {
+        let normalized = LegacyTopologyFetcher::normalize_tidb_namespace(None, None).unwrap();
+        assert_eq!(normalized, None);
+    }
+}

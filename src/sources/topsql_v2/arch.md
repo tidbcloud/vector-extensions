@@ -33,6 +33,7 @@ TopSQL v2 Source
 2. **Improved Error Recovery**: More robust error handling and recovery
 3. **Better Performance**: Optimized data collection and processing
 4. **Next-gen Features**: Support for new TiDB/TiKV features
+5. **Manager-based TiDB Discovery**: In legacy mode, active TiDB instances can be discovered from a manager service via `manager_server_address` and `tidb_namespace`
 
 ## Configuration
 
@@ -45,9 +46,26 @@ pub struct TopSQLV2Config {
 }
 ```
 
+Legacy mode discovery options:
+
+- `pd_address`: used for PD/store discovery and schema management
+- `manager_server_address`: optional manager endpoint used to fetch active TiDB instances
+- `tidb_namespace`: manager namespace list used when calling `/api/tidb/get_active_tidb`
+- `enable_tikv_topsql`: whether to collect `tikv_topsql` and `tikv_topregion`; defaults to `true`
+- `topru`: TiDB TopRU subscription options (`enable`, `report_interval_seconds`, `item_interval_seconds`)
+
 ## Data Flow
 
 Same as TopSQL v1 but with improved reliability and performance.
+
+TiDB subscriptions emit four log-event families:
+
+- `tidb_topsql`: execution metrics keyed by SQL/plan digest
+- `topsql_topru`: RU metrics keyed by SQL/plan digest and user
+- `topsql_sql_meta`: normalized SQL text
+- `topsql_plan_meta`: normalized / encoded plan text
+
+For TiDB-originated events, `keyspace` is propagated when the upstream payload includes `keyspace_name`, including `topsql_sql_meta` and `topsql_plan_meta`.
 
 ## Dependencies
 

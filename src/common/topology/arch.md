@@ -53,6 +53,7 @@ Components (Sources/Sinks)
 - **TiKV**: Discovers TiKV store instances
 - **TiFlash**: Discovers TiFlash instances
 - **Store**: Discovers store information
+- **Manager-based TiDB discovery**: In legacy mode, TiDB instances can be fetched from manager `/api/tidb/get_active_tidb`
 
 ### Next-Gen Support
 
@@ -70,6 +71,15 @@ pub struct TopologyFetcher {
     // ... more fields
 }
 ```
+
+Legacy manager-based TiDB discovery also supports keyspace-aware sharding:
+
+- `manager_server_address`: fetch active TiDB instances from manager instead of etcd
+- `tidb_namespace`: namespace list sent to `/api/tidb/get_active_tidb?namespace=...`; required when `manager_server_address` is set
+- `VECTOR_STS_REPLICA_COUNT`: total number of Vector StatefulSet replicas
+- `VECTOR_STS_ID`: current Vector StatefulSet ordinal
+
+When both shard envs are set, the manager response must include `keyspace_name`. The topology fetcher hashes `keyspace_name`, applies modulo `VECTOR_STS_REPLICA_COUNT`, and only keeps entries whose shard matches `VECTOR_STS_ID`. Entries without `keyspace_name` are skipped in this mode.
 
 ## Topology Data
 

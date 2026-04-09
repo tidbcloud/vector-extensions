@@ -28,6 +28,7 @@ pub struct Controller {
     init_retry_delay: Duration,
     top_n: usize,
     downsampling_interval: u32,
+    enable_tikv_topsql: bool,
     topru: TopRUConfig,
 
     schema_cache: Arc<SchemaCache>,
@@ -45,10 +46,13 @@ struct ActiveSchemaManager {
 impl Controller {
     pub async fn new(
         pd_address: Option<String>,
+        manager_server_address: Option<String>,
+        tidb_namespace: Option<String>,
         topo_fetch_interval: Duration,
         init_retry_delay: Duration,
         top_n: usize,
         downsampling_interval: u32,
+        enable_tikv_topsql: bool,
         schema_update_interval: Duration,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
@@ -59,6 +63,8 @@ impl Controller {
     ) -> vector::Result<Self> {
         let topo_fetcher = TopologyFetcher::new(
             pd_address,
+            manager_server_address,
+            tidb_namespace,
             tls_config.clone(),
             proxy_config,
             tidb_group,
@@ -81,6 +87,7 @@ impl Controller {
             init_retry_delay,
             top_n,
             downsampling_interval,
+            enable_tikv_topsql,
             topru,
             schema_cache,
             schema_update_interval,
@@ -122,6 +129,8 @@ impl Controller {
         self.topo_fetcher
             .get_up_components(&mut latest_components)
             .await?;
+        latest_components
+            .retain(|component| should_collect_component(component, self.enable_tikv_topsql));
 
         let prev_components = self.components.clone();
         let newcomers = latest_components.difference(&prev_components);
@@ -261,6 +270,10 @@ impl Controller {
     }
 
     fn start_component(&mut self, component: &Component) -> bool {
+        if !should_collect_component(component, self.enable_tikv_topsql) {
+            return false;
+        }
+
         let source = TopSQLSource::new(
             component.clone(),
             self.tls.clone(),
@@ -341,5 +354,40 @@ impl Controller {
         self.shutdown_notifier.shutdown();
         self.shutdown_notifier.wait_for_exit().await;
         info!(message = "All TopSQL sources have been shut down.");
+    }
+}
+
+fn should_collect_component(component: &Component, enable_tikv_topsql: bool) -> bool {
+    enable_tikv_topsql || component.instance_type != InstanceType::TiKV
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn component(instance_type: InstanceType) -> Component {
+        Component {
+            instance_type,
+            host: "127.0.0.1".to_string(),
+            primary_port: 20160,
+            secondary_port: 10080,
+            instance_name: None,
+        }
+    }
+
+    #[test]
+    fn should_collect_tikv_component_only_when_enabled() {
+        assert!(should_collect_component(
+            &component(InstanceType::TiDB),
+            false
+        ));
+        assert!(!should_collect_component(
+            &component(InstanceType::TiKV),
+            false
+        ));
+        assert!(should_collect_component(
+            &component(InstanceType::TiKV),
+            true
+        ));
     }
 }
