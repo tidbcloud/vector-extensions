@@ -46,7 +46,7 @@ impl DeltaOpsManager {
                 *session_token = "***REDACTED***".to_string();
             }
             info!(
-                "Using storage options for S3 authentication: {:?}",
+                "Using storage options: {:?}",
                 redacted_options
             );
             Ok(DeltaOps::try_from_uri_with_storage_options(
