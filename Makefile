@@ -191,6 +191,20 @@ release-docker: target/aarch64-unknown-linux-gnu/release/vector
 	@scripts/release-docker.sh
 	@echo "Done releasing docker image."
 
+.PHONY: release-docker-alpine
+release-docker-alpine: target/x86_64-unknown-linux-musl/release/vector
+release-docker-alpine: target/aarch64-unknown-linux-musl/release/vector
+	@echo "Releasing Alpine docker image..."
+	@DOCKER_BASE=alpine scripts/release-docker.sh
+	@echo "Done releasing Alpine docker image."
+
+.PHONY: release-docker-minimal
+release-docker-minimal: target/x86_64-unknown-linux-musl/release/vector
+release-docker-minimal: target/aarch64-unknown-linux-musl/release/vector
+	@echo "Releasing minimal scratch docker image..."
+	@DOCKER_BASE=minimal scripts/release-docker.sh
+	@echo "Done releasing minimal scratch docker image."
+
 .PHONY: release-docker-nextgen
 release-docker-nextgen: target/x86_64-unknown-linux-gnu/release/vector-nextgen
 release-docker-nextgen: target/aarch64-unknown-linux-gnu/release/vector-nextgen
@@ -198,6 +212,13 @@ release-docker-nextgen: target/aarch64-unknown-linux-gnu/release/vector-nextgen
 	@echo "Releasing docker image (nextgen mode)..."
 	@NEXTGEN=true scripts/release-docker.sh
 	@echo "Done releasing docker image (nextgen mode)."
+
+.PHONY: release-docker-nextgen-alpine
+release-docker-nextgen-alpine: target/x86_64-unknown-linux-musl/release/vector-nextgen
+release-docker-nextgen-alpine: target/aarch64-unknown-linux-musl/release/vector-nextgen
+	@echo "Releasing Alpine docker image (nextgen mode)..."
+	@NEXTGEN=true DOCKER_BASE=alpine scripts/release-docker.sh
+	@echo "Done releasing Alpine docker image (nextgen mode)."
 
 .PHONY: test-integration
 test-integration:
