@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean
 
 ARG TARGETARCH
-COPY --from=builder /usr/bin/vector-$TARGETARCH /usr/bin/vector
+COPY vector-$TARGETARCH /usr/bin/vector
 # COPY vector.toml /etc/vector/vector.toml
 
 ENV VECTOR_LOG="info"

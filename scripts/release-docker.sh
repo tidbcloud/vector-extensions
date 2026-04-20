@@ -43,7 +43,16 @@ REPO="${REPO:-"tidbcloud/vector"}"
 BASE="${DOCKER_BASE:-debian}"
 
 TAG="${TAG:-$REPO:$VERSION-$BASE}"
-DOCKERFILE="scripts/docker/Dockerfile${BASE:+.${BASE}}"
+# Default Debian image uses scripts/docker/Dockerfile (no .debian suffix).
+# Alpine/minimal use scripts/docker/Dockerfile.<base>.
+case "${BASE}" in
+debian)
+	DOCKERFILE="scripts/docker/Dockerfile"
+	;;
+*)
+	DOCKERFILE="scripts/docker/Dockerfile.${BASE}"
+	;;
+esac
 
 #PLATFORMS="linux/amd64,linux/arm64,linux/arm/v7"
 PLATFORMS="linux/amd64,linux/arm64"
