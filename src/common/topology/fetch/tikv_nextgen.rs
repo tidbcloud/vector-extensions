@@ -22,13 +22,7 @@ const K8S_COMPONENT_LABEL: &str = "app.kubernetes.io/component";
 const K8S_INSTANCE_LABEL: &str = "app.kubernetes.io/instance";
 
 const TIKV_COMPONENT: &str = "tikv";
-const COPROCESSOR_WORKER_COMPONENTS: [&str; 5] = [
-    "coprocessor_worker",
-    "coprocessor-worker",
-    "tikv-worker",
-    "cloud-worker",
-    "cloud_worker",
-];
+const COPROCESSOR_WORKER_COMPONENT: &str = "coprocessor-worker";
 
 const TIKV_GRPC_PORT: u16 = 20160;
 const TIKV_STATUS_PORT: u16 = 20180;
@@ -75,7 +69,7 @@ impl TiKVNextGenTopologyFetcher {
 
 fn build_label_selector(label_k8s_instance: &str) -> String {
     let component_values = std::iter::once(TIKV_COMPONENT)
-        .chain(COPROCESSOR_WORKER_COMPONENTS)
+        .chain(std::iter::once(COPROCESSOR_WORKER_COMPONENT))
         .collect::<Vec<_>>()
         .join(",");
     format!(
@@ -118,7 +112,7 @@ fn component_from_pod(pod: &Pod) -> Option<Component> {
 }
 
 fn is_coprocessor_worker_component(component: &str) -> bool {
-    COPROCESSOR_WORKER_COMPONENTS.contains(&component)
+    component == COPROCESSOR_WORKER_COMPONENT
 }
 
 #[cfg(test)]
@@ -149,13 +143,12 @@ mod tests {
     }
 
     #[test]
-    fn builds_selector_with_coprocessor_worker_aliases() {
+    fn builds_selector_with_coprocessor_worker_component() {
         let selector = build_label_selector("demo-cluster");
 
         assert!(selector.contains("app.kubernetes.io/component in ("));
         assert!(selector.contains("tikv"));
-        assert!(selector.contains("coprocessor_worker"));
-        assert!(selector.contains("tikv-worker"));
+        assert!(selector.contains("coprocessor-worker"));
         assert!(selector.contains("app.kubernetes.io/instance=demo-cluster"));
     }
 
@@ -174,7 +167,7 @@ mod tests {
     fn builds_tikv_component_from_coprocessor_worker_pod() {
         let component = component_from_pod(&pod(
             "coprocessor-worker-0",
-            "coprocessor_worker",
+            "coprocessor-worker",
             "Running",
             "10.0.0.2",
         ))
@@ -193,5 +186,15 @@ mod tests {
     #[test]
     fn skips_non_running_pod() {
         assert!(component_from_pod(&pod("tikv-1", "tikv", "Pending", "10.0.0.3")).is_none());
+    }
+
+    #[test]
+    fn does_not_treat_other_worker_aliases_as_coprocessor_worker() {
+        let component =
+            component_from_pod(&pod("tikv-worker-0", "tikv-worker", "Running", "10.0.0.4"))
+                .unwrap();
+
+        assert_eq!(component.primary_port, TIKV_GRPC_PORT);
+        assert_eq!(component.secondary_port, TIKV_STATUS_PORT);
     }
 }
