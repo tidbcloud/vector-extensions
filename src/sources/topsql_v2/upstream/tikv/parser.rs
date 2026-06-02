@@ -492,7 +492,7 @@ impl ResourceUsageRecordParser {
             schema_version = schema_cache.schema_version()
         );
 
-        let decoded = Self::decode_tag(record.resource_group_tag.as_slice());
+        let decoded = Self::decode_tag_or_others(record.resource_group_tag.as_slice());
         if decoded.is_none() {
             return vec![];
         }
@@ -610,6 +610,24 @@ impl ResourceUsageRecordParser {
             events.push(event.into_log());
         }
         events
+    }
+
+    fn decode_tag_or_others(
+        tag: &[u8],
+    ) -> Option<(String, String, String, Option<i64>, Option<Vec<u8>>)> {
+        if tag.is_empty() {
+            // TiKV uses an empty resource_group_tag to represent others. Keep those records
+            // instead of dropping them during parse.
+            return Some((
+                String::new(),
+                String::new(),
+                KV_TAG_LABEL_UNKNOWN.to_owned(),
+                None,
+                None,
+            ));
+        }
+
+        Self::decode_tag(tag)
     }
 
     fn decode_tag(tag: &[u8]) -> Option<(String, String, String, Option<i64>, Option<Vec<u8>>)> {
@@ -1401,6 +1419,73 @@ mod tests {
         assert_eq!(result_count, 0, "No records should be kept when all values are same");
         assert_eq!(total_cpu_time, 0, "No CPU time should be in kept records");
         assert_eq!(others_cpu_time, 500, "All CPU time should be in others (100 * 5 = 500)");
+
+        let emitted_events: Vec<_> = result
+            .into_iter()
+            .flat_map(|record| {
+                ResourceUsageRecordParser::parse(
+                    record,
+                    "tikv-1".to_string(),
+                    Arc::new(SchemaCache::new()),
+                )
+            })
+            .collect();
+        assert_eq!(emitted_events.len(), 1, "Others record should still be emitted");
+        assert_eq!(
+            emitted_events[0]
+                .get(LABEL_SQL_DIGEST)
+                .and_then(|value| value.as_str())
+                .as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_resource_group_tag_as_others() {
+        let record = ResourceUsageRecord {
+            record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                resource_group_tag: vec![],
+                items: vec![GroupTagRecordItem {
+                    timestamp_sec: 1000,
+                    cpu_time_ms: 42,
+                    read_keys: 7,
+                    write_keys: 3,
+                    network_in_bytes: 100,
+                    network_out_bytes: 200,
+                    logical_read_bytes: 300,
+                    logical_write_bytes: 400,
+                }],
+            })),
+        };
+
+        let events = ResourceUsageRecordParser::parse(
+            record,
+            "tikv-1".to_string(),
+            Arc::new(SchemaCache::new()),
+        );
+
+        assert_eq!(events.len(), 1, "Empty raw resource_group_tag should be emitted as others");
+        assert_eq!(
+            events[0]
+                .get(LABEL_SQL_DIGEST)
+                .and_then(|value| value.as_str())
+                .as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            events[0]
+                .get(LABEL_PLAN_DIGEST)
+                .and_then(|value| value.as_str())
+                .as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            events[0]
+                .get(LABEL_TAG_LABEL)
+                .and_then(|value| value.as_str())
+                .as_deref(),
+            Some(KV_TAG_LABEL_UNKNOWN)
+        );
     }
 
     #[test]
