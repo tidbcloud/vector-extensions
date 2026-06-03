@@ -24,6 +24,8 @@ use crate::sources::topsql_v2::upstream::tikv::proto::{
 
 pub struct ResourceUsageRecordParser;
 
+const OTHERS_REGION_ID: u64 = 0;
+
 #[derive(Clone)]
 struct PerPeriodData {
     resource_group_tag: Vec<u8>,
@@ -358,7 +360,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                 }
             } else if let Some(RecordOneof::RegionRecord(record)) = response.record_oneof {
                 // Use record.region_id as the aggregation key
-                if record.region_id == 0 {
+                if Self::is_others_region_id(record.region_id) {
                     // If region_id is 0, record to others
                     for item in record.items {
                         match ts_region_others.get_mut(&item.timestamp_sec) {
@@ -423,7 +425,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
             ts_region_others,
             top_n,
             |psd| psd.region_id,
-            0,
+            OTHERS_REGION_ID,
         );
 
         for (region_id, items) in region_items {
@@ -492,7 +494,7 @@ impl ResourceUsageRecordParser {
             schema_version = schema_cache.schema_version()
         );
 
-        let decoded = Self::decode_tag(record.resource_group_tag.as_slice());
+        let decoded = Self::decode_tag_or_others(record.resource_group_tag.as_slice());
         if decoded.is_none() {
             return vec![];
         }
@@ -500,11 +502,9 @@ impl ResourceUsageRecordParser {
 
         let mut db_name = "".to_string();
         let mut table_name = "".to_string();
-        let mut table_id_str = "".to_string();
         let mut keyspace_name_str = "".to_string();
 
         if let Some(tid) = table_id {
-            table_id_str = tid.to_string();
             if let Some(table_detail) = schema_cache.get(tid) {
                 db_name = table_detail.db.clone();
                 table_name = table_detail.name;
@@ -541,7 +541,9 @@ impl ResourceUsageRecordParser {
             log.insert(LABEL_TAG_LABEL, tag_label.clone());
             log.insert(LABEL_DB_NAME, db_name.clone());
             log.insert(LABEL_TABLE_NAME, table_name.clone());
-            log.insert(LABEL_TABLE_ID, table_id_str.clone());
+            if let Some(tid) = table_id {
+                log.insert(LABEL_TABLE_ID, LogValue::from(tid));
+            }
             log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
             log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
             log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys));
@@ -587,7 +589,9 @@ impl ResourceUsageRecordParser {
             }
             log.insert(LABEL_DATE, LogValue::from(date.clone()));
             log.insert(LABEL_INSTANCE_KEY, instance_key.clone());
-            log.insert(LABEL_REGION_ID, record.region_id.to_string());
+            if !Self::is_others_region_id(record.region_id) {
+                log.insert(LABEL_REGION_ID, record.region_id.to_string());
+            }
             log.insert(METRIC_NAME_CPU_TIME_MS, LogValue::from(item.cpu_time_ms));
             log.insert(METRIC_NAME_READ_KEYS, LogValue::from(item.read_keys));
             log.insert(METRIC_NAME_WRITE_KEYS, LogValue::from(item.write_keys));
@@ -610,6 +614,29 @@ impl ResourceUsageRecordParser {
             events.push(event.into_log());
         }
         events
+    }
+
+    #[inline]
+    fn is_others_region_id(region_id: u64) -> bool {
+        region_id == OTHERS_REGION_ID
+    }
+
+    fn decode_tag_or_others(
+        tag: &[u8],
+    ) -> Option<(String, String, String, Option<i64>, Option<Vec<u8>>)> {
+        if tag.is_empty() {
+            // TiKV uses an empty resource_group_tag to represent others. Keep those records
+            // instead of dropping them during parse.
+            return Some((
+                String::new(),
+                String::new(),
+                KV_TAG_LABEL_UNKNOWN.to_owned(),
+                None,
+                None,
+            ));
+        }
+
+        Self::decode_tag(tag)
     }
 
     fn decode_tag(tag: &[u8]) -> Option<(String, String, String, Option<i64>, Option<Vec<u8>>)> {
@@ -1401,6 +1428,224 @@ mod tests {
         assert_eq!(result_count, 0, "No records should be kept when all values are same");
         assert_eq!(total_cpu_time, 0, "No CPU time should be in kept records");
         assert_eq!(others_cpu_time, 500, "All CPU time should be in others (100 * 5 = 500)");
+
+        let emitted_events: Vec<_> = result
+            .into_iter()
+            .flat_map(|record| {
+                ResourceUsageRecordParser::parse(
+                    record,
+                    "tikv-1".to_string(),
+                    Arc::new(SchemaCache::new()),
+                )
+            })
+            .collect();
+        assert_eq!(emitted_events.len(), 1, "Others record should still be emitted");
+        assert_eq!(
+            emitted_events[0]
+                .get(LABEL_SQL_DIGEST)
+                .and_then(|value| value.as_str())
+                .as_deref(),
+            Some("")
+        );
+        assert!(
+            emitted_events[0].get(LABEL_TABLE_ID).is_none(),
+            "others record should not emit table_id placeholder"
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_resource_group_tag_as_others() {
+        let record = ResourceUsageRecord {
+            record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                resource_group_tag: vec![],
+                items: vec![GroupTagRecordItem {
+                    timestamp_sec: 1000,
+                    cpu_time_ms: 42,
+                    read_keys: 7,
+                    write_keys: 3,
+                    network_in_bytes: 100,
+                    network_out_bytes: 200,
+                    logical_read_bytes: 300,
+                    logical_write_bytes: 400,
+                }],
+            })),
+        };
+
+        let events = ResourceUsageRecordParser::parse(
+            record,
+            "tikv-1".to_string(),
+            Arc::new(SchemaCache::new()),
+        );
+
+        assert_eq!(events.len(), 1, "Empty raw resource_group_tag should be emitted as others");
+        assert_eq!(
+            events[0]
+                .get(LABEL_SQL_DIGEST)
+                .and_then(|value| value.as_str())
+                .as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            events[0]
+                .get(LABEL_PLAN_DIGEST)
+                .and_then(|value| value.as_str())
+                .as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            events[0]
+                .get(LABEL_TAG_LABEL)
+                .and_then(|value| value.as_str())
+                .as_deref(),
+            Some(KV_TAG_LABEL_UNKNOWN)
+        );
+        assert!(
+            events[0].get(LABEL_TABLE_ID).is_none(),
+            "empty raw resource_group_tag should emit null table_id"
+        );
+    }
+
+    #[test]
+    fn test_parse_region_others_without_region_id() {
+        let record = ResourceUsageRecord {
+            record_oneof: Some(RecordOneof::RegionRecord(RegionRecord {
+                region_id: OTHERS_REGION_ID,
+                items: vec![GroupTagRecordItem {
+                    timestamp_sec: 1000,
+                    cpu_time_ms: 42,
+                    read_keys: 7,
+                    write_keys: 3,
+                    network_in_bytes: 100,
+                    network_out_bytes: 200,
+                    logical_read_bytes: 300,
+                    logical_write_bytes: 400,
+                }],
+            })),
+        };
+
+        let events = ResourceUsageRecordParser::parse(
+            record,
+            "tikv-1".to_string(),
+            Arc::new(SchemaCache::new()),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0].get(LABEL_REGION_ID).is_none(),
+            "others region record should emit null region_id"
+        );
+    }
+
+    #[test]
+    fn test_keep_top_n_region_others_merge_raw_and_evicted_records() {
+        let records = vec![
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::RegionRecord(RegionRecord {
+                    region_id: OTHERS_REGION_ID,
+                    items: vec![GroupTagRecordItem {
+                        timestamp_sec: 1000,
+                        cpu_time_ms: 5,
+                        read_keys: 1,
+                        write_keys: 1,
+                        network_in_bytes: 10,
+                        network_out_bytes: 10,
+                        logical_read_bytes: 10,
+                        logical_write_bytes: 10,
+                    }],
+                })),
+            },
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::RegionRecord(RegionRecord {
+                    region_id: 1001,
+                    items: vec![GroupTagRecordItem {
+                        timestamp_sec: 1000,
+                        cpu_time_ms: 100,
+                        read_keys: 10,
+                        write_keys: 10,
+                        network_in_bytes: 100,
+                        network_out_bytes: 100,
+                        logical_read_bytes: 100,
+                        logical_write_bytes: 100,
+                    }],
+                })),
+            },
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::RegionRecord(RegionRecord {
+                    region_id: 1002,
+                    items: vec![GroupTagRecordItem {
+                        timestamp_sec: 1000,
+                        cpu_time_ms: 50,
+                        read_keys: 5,
+                        write_keys: 5,
+                        network_in_bytes: 50,
+                        network_out_bytes: 50,
+                        logical_read_bytes: 50,
+                        logical_write_bytes: 50,
+                    }],
+                })),
+            },
+        ];
+
+        let result = ResourceUsageRecordParser::keep_top_n(records, 1);
+
+        let mut kept_region_cpu = None;
+        let mut merged_others_cpu = None;
+        for record in &result {
+            if let Some(RecordOneof::RegionRecord(region_record)) = &record.record_oneof {
+                if ResourceUsageRecordParser::is_others_region_id(region_record.region_id) {
+                    assert_eq!(region_record.items.len(), 1);
+                    merged_others_cpu = Some(region_record.items[0].cpu_time_ms);
+                } else if region_record.region_id == 1001 {
+                    assert_eq!(region_record.items.len(), 1);
+                    kept_region_cpu = Some(region_record.items[0].cpu_time_ms);
+                }
+            }
+        }
+
+        assert_eq!(kept_region_cpu, Some(100));
+        assert_eq!(
+            merged_others_cpu,
+            Some(55),
+            "raw others and evicted region should merge into one others record"
+        );
+
+        let emitted_events: Vec<_> = result
+            .into_iter()
+            .flat_map(|record| {
+                ResourceUsageRecordParser::parse(
+                    record,
+                    "tikv-1".to_string(),
+                    Arc::new(SchemaCache::new()),
+                )
+            })
+            .collect();
+
+        let mut found_kept_region = false;
+        let mut found_others = false;
+        for event in emitted_events {
+            let cpu_time = event
+                .get(METRIC_NAME_CPU_TIME_MS)
+                .and_then(|value| value.as_integer())
+                .unwrap();
+            match event
+                .get(LABEL_REGION_ID)
+                .and_then(|value| value.as_str())
+                .as_deref()
+            {
+                Some("1001") => {
+                    assert_eq!(cpu_time, 100);
+                    found_kept_region = true;
+                }
+                None => {
+                    assert_eq!(cpu_time, 55);
+                    found_others = true;
+                }
+                other => panic!("unexpected region_id in emitted event: {:?}", other),
+            }
+        }
+
+        assert!(found_kept_region, "kept region should still be emitted");
+        assert!(found_others, "merged others should be emitted with null region_id");
     }
 
     #[test]
