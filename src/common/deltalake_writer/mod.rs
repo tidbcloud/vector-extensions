@@ -9,12 +9,14 @@ use vector_lib::event::Event;
 // Module declarations
 pub mod converter;
 pub mod delta_ops;
+pub mod errors;
 pub mod schema;
 pub mod types;
 
 // Re-export main types
 pub use converter::EventConverter;
 pub use delta_ops::DeltaOpsManager;
+pub use errors::is_stale_delta_log_error;
 pub use schema::SchemaManager;
 pub use types::TypeConverter;
 

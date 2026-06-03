@@ -9,6 +9,7 @@ use deltalake::DeltaOps;
 use tracing::{error, info, warn};
 use url::Url;
 
+use super::errors::is_stale_delta_log_error;
 use super::schema::SchemaManager;
 use super::types::TypeConverter;
 
@@ -272,6 +273,24 @@ impl DeltaOpsManager {
                         } else {
                             error!(
                                 "Transaction conflict after {} retries: {}",
+                                MAX_RETRIES, error_str
+                            );
+                            return Err(e.into());
+                        }
+                    }
+                    // Stale log view after external compaction or concurrent writers
+                    else if is_stale_delta_log_error(&error_str) {
+                        if attempt < MAX_RETRIES - 1 {
+                            warn!(
+                                "Stale Delta log detected (attempt {}/{}): {}. Reloading table and retrying...",
+                                attempt + 1,
+                                MAX_RETRIES,
+                                error_str
+                            );
+                            continue;
+                        } else {
+                            error!(
+                                "Stale Delta log after {} retries: {}",
                                 MAX_RETRIES, error_str
                             );
                             return Err(e.into());

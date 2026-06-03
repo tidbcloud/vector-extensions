@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::{stream::BoxStream, StreamExt};
 use tokio::sync::mpsc;
@@ -8,7 +9,9 @@ use tokio::sync::Mutex;
 use vector_lib::event::{Event, LogEvent};
 use vector_lib::sink::StreamSink;
 
-use crate::common::deltalake_writer::{DeltaLakeWriter, DeltaTableConfig, WriteConfig};
+use crate::common::deltalake_writer::{
+    is_stale_delta_log_error, DeltaLakeWriter, DeltaTableConfig, WriteConfig,
+};
 use crate::common::keyspace_cluster::{
     path_contains_keyspace_route_segments, replace_keyspace_route_segments,
     route_resolution_retry_delay, KeyspaceRoute, PdKeyspaceResolver,
@@ -401,24 +404,12 @@ impl TopSQLDeltaLakeSink {
         for (writer_key, mut events) in table_events {
             self.add_schema_info(&mut events, &writer_key.table_name);
             if let Err(e) = self.write_table_events(&writer_key, events).await {
-                let error_msg = e.to_string();
-                if error_msg.contains("log segment")
-                    || error_msg.contains("Invalid table version")
-                    || error_msg.contains("not found")
-                    || error_msg.contains("No such file or directory")
-                {
-                    panic!(
-                        "Delta Lake corruption detected for table {}: {}",
-                        writer_key.table_name, error_msg
-                    );
-                } else {
-                    error!(
-                        "Failed to write events to table {} at {}: {}",
-                        writer_key.table_name,
-                        writer_key.table_path.display(),
-                        e
-                    );
-                }
+                error!(
+                    "Failed to write events to table {} at {}: {}",
+                    writer_key.table_name,
+                    writer_key.table_path.display(),
+                    e
+                );
             }
         }
 
@@ -567,11 +558,33 @@ impl TopSQLDeltaLakeSink {
         }
     }
 
-    /// Write events to a specific table
+    /// Write events to a specific table, evicting and reopening the writer once on stale log errors.
     async fn write_table_events(
         &self,
         writer_key: &WriterKey,
         events: Vec<Event>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        match self.write_table_events_once(writer_key, &events).await {
+            Ok(()) => Ok(()),
+            Err(e) if is_stale_delta_log_error(&e.to_string()) => {
+                warn!(
+                    "Stale Delta log for table {} at {}, evicting cached writer and retrying once: {}",
+                    writer_key.table_name,
+                    writer_key.table_path.display(),
+                    e
+                );
+                self.writers.lock().await.remove(writer_key);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                self.write_table_events_once(writer_key, &events).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn write_table_events_once(
+        &self,
+        writer_key: &WriterKey,
+        events: &[Event],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut writers = self.writers.lock().await;
         let writer = writers.entry(writer_key.clone()).or_insert_with(|| {
@@ -594,7 +607,7 @@ impl TopSQLDeltaLakeSink {
         });
 
         // Write events
-        writer.write_events(events).await?;
+        writer.write_events(events.to_vec()).await?;
 
         Ok(())
     }
