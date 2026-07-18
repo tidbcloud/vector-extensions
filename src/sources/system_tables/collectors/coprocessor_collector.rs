@@ -1998,22 +1998,33 @@ impl DataCollector for CoprocessorCollector {
             }
         };
 
-        // Apply post-filter if where_clause is configured.
-        // For STATEMENTS_SUMMARY tables, auto-apply 1 hour filter if no where_clause is set.
-        let where_clause = table.where_clause.as_deref().or_else(|| {
-            if table.source_table.contains("STATEMENTS_SUMMARY") {
-                Some("SUMMARY_END_TIME >= DATE_SUB(NOW(), INTERVAL 1 HOUR)")
-            } else {
-                None
-            }
-        });
-
-        let data = if let Some(clause) = where_clause {
+        // Apply a configured time-based post-filter first. Coprocessor requests are
+        // DAG requests, so the clause cannot be pushed down as SQL.
+        let data = if let Some(clause) = table.where_clause.as_deref() {
             let before = data.len();
-            let filtered = apply_time_filter(data, clause);
+            let filtered = apply_time_filter(data, clause, timestamp);
             info!(
                 "Post-filter applied for table {}: where_clause='{}', {} -> {} rows",
                 table.source_table, clause, before, filtered.len()
+            );
+            filtered
+        } else {
+            data
+        };
+
+        // STATEMENTS_SUMMARY is lazily rotated by TiDB. An inactive TiDB can
+        // therefore keep returning its last closed window on every collection.
+        // Keep only rows whose window was still open when this collection began.
+        // This is based solely on the window timestamp, so it also covers the
+        // Others row, whose DIGEST and DIGEST_TEXT are NULL.
+        let data = if is_current_statements_summary_table(&table.source_table) {
+            let before = data.len();
+            let filtered = filter_current_statement_summary_rows(data, timestamp);
+            info!(
+                "Current-window filter applied for table {}: {} -> {} rows",
+                table.source_table,
+                before,
+                filtered.len()
             );
             filtered
         } else {
@@ -2086,18 +2097,19 @@ impl DataCollector for CoprocessorCollector {
 /// Apply time-based post-filter to collected rows based on a where_clause string.
 ///
 /// Supports the pattern: `COLUMN >= DATE_SUB(NOW(), INTERVAL N HOUR|MINUTE)`
-/// Time field values are expected as `Value::String("YYYY-MM-DD HH:MM:SS")`.
+/// Time field values can be Unix microseconds from the coprocessor TIMESTAMP
+/// decoder or strings in `YYYY-MM-DD HH:MM:SS`/RFC 3339 format.
 /// If the clause cannot be parsed, all rows are returned unchanged.
-pub fn apply_time_filter(
+fn apply_time_filter(
     rows: Vec<std::collections::HashMap<String, serde_json::Value>>,
     where_clause: &str,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<std::collections::HashMap<String, serde_json::Value>> {
     // Parse: COLUMN >= DATE_SUB(NOW(), INTERVAL N HOUR|MINUTE) (case-insensitive)
     let upper = where_clause.to_uppercase();
-    let Some((column, rest)) = upper.split_once(">=") else {
+    let Some((_, rest)) = upper.split_once(">=") else {
         return rows;
     };
-    let column = column.trim().to_string();
     let rest = rest.trim();
 
     // rest should look like: DATE_SUB(NOW(), INTERVAL N HOUR|MINUTE)
@@ -2121,7 +2133,7 @@ pub fn apply_time_filter(
     let Ok(n) = parts[0].parse::<i64>() else {
         return rows;
     };
-    let cutoff = chrono::Utc::now()
+    let cutoff = now
         - match parts[1] {
             "HOUR" => chrono::Duration::hours(n),
             "MINUTE" => chrono::Duration::minutes(n),
@@ -2140,15 +2152,50 @@ pub fn apply_time_filter(
             let Some(val) = row.get(&col_raw) else {
                 return true;
             };
-            let Some(s) = val.as_str() else {
-                return true;
-            };
-            let Ok(row_time) =
-                chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-            else {
+            let Some(row_time) = parse_coprocessor_time(val) else {
                 return true;
             };
             row_time >= cutoff_naive
         })
         .collect()
+}
+
+fn is_current_statements_summary_table(table_name: &str) -> bool {
+    table_name.eq_ignore_ascii_case("STATEMENTS_SUMMARY")
+        || table_name.eq_ignore_ascii_case("CLUSTER_STATEMENTS_SUMMARY")
+}
+
+/// Keep only statement-summary rows whose interval was still open when the
+/// collection began. Closed rows are immutable and would otherwise be emitted
+/// again on every poll from an inactive TiDB node.
+pub fn filter_current_statement_summary_rows(
+    rows: Vec<std::collections::HashMap<String, serde_json::Value>>,
+    collected_at: chrono::DateTime<chrono::Utc>,
+) -> Vec<std::collections::HashMap<String, serde_json::Value>> {
+    let collected_at = collected_at.naive_utc();
+    rows.into_iter()
+        .filter(|row| {
+            row.get("SUMMARY_END_TIME")
+                .and_then(parse_coprocessor_time)
+                // Preserve rows with an unknown representation instead of
+                // silently losing data if TiDB changes the encoding.
+                .is_none_or(|end_time| end_time > collected_at)
+        })
+        .collect()
+}
+
+fn parse_coprocessor_time(value: &serde_json::Value) -> Option<chrono::NaiveDateTime> {
+    if let Some(micros) = value.as_i64() {
+        return chrono::DateTime::<chrono::Utc>::from_timestamp_micros(micros)
+            .map(|time| time.naive_utc());
+    }
+
+    let value = value.as_str()?;
+    chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
+        .ok()
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .ok()
+                .map(|time| time.naive_utc())
+        })
 }

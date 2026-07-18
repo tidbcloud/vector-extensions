@@ -1028,79 +1028,52 @@ async fn test_sqlstatement_same_writer_new_column_not_visible() {
 }
 
 #[tokio::test]
-async fn test_statements_summary_multi_node_filter() {
-    use chrono::{Duration, Utc};
+async fn test_statements_summary_multi_node_filter_including_others() {
+    use chrono::{Duration, TimeZone, Utc};
     use serde_json::json;
     use std::collections::HashMap;
-    use vector_extensions::sources::system_tables::collectors::coprocessor_collector::apply_time_filter;
+    use vector_extensions::sources::system_tables::collectors::coprocessor_collector::filter_current_statement_summary_rows;
 
-    // Simulate 3 TiDB nodes with different last-active times
-    // Node 1: inactive for 3 days (very old window)
-    // Node 2: inactive for 7 hours (old window)
-    // Node 3: active recently (current window, within 30 minutes)
-
-    let now = Utc::now().naive_utc();
-    let node1_end = (now - Duration::days(3)).format("%Y-%m-%d %H:%M:%S").to_string();
-    let node1_begin = (now - Duration::days(3) - Duration::minutes(30)).format("%Y-%m-%d %H:%M:%S").to_string();
-
-    let node2_end = (now - Duration::hours(7)).format("%Y-%m-%d %H:%M:%S").to_string();
-    let node2_begin = (now - Duration::hours(7) - Duration::minutes(30)).format("%Y-%m-%d %H:%M:%S").to_string();
-
-    let node3_end = (now - Duration::minutes(10)).format("%Y-%m-%d %H:%M:%S").to_string();
-    let node3_begin = (now - Duration::minutes(40)).format("%Y-%m-%d %H:%M:%S").to_string();
+    let collected_at = Utc.with_ymd_and_hms(2026, 4, 2, 16, 29, 40).unwrap();
+    let closed_begin = collected_at - Duration::minutes(59) - Duration::seconds(40);
+    let closed_end = collected_at - Duration::minutes(29) - Duration::seconds(40);
+    let current_begin = collected_at - Duration::minutes(29) - Duration::seconds(40);
+    let current_end = collected_at + Duration::seconds(20);
 
     let mut rows = Vec::new();
 
-    // Node 1 rows (very old, should be filtered out)
-    for i in 0..4 {
+    for (digest, begin, end, encode_as_string) in [
+        (Some("closed_query"), closed_begin, closed_end, true),
+        (None, closed_begin, closed_end, false),
+        (Some("current_query"), current_begin, current_end, false),
+        (None, current_begin, current_end, true),
+    ] {
         let mut row = HashMap::new();
-        row.insert("SUMMARY_BEGIN_TIME".to_string(), json!(node1_begin));
-        row.insert("SUMMARY_END_TIME".to_string(), json!(node1_end));
-        row.insert("DIGEST_TEXT".to_string(), json!(format!("old_query_{}", i)));
+        let (begin, end) = if encode_as_string {
+            (
+                json!(begin.format("%Y-%m-%d %H:%M:%S").to_string()),
+                json!(end.format("%Y-%m-%d %H:%M:%S").to_string()),
+            )
+        } else {
+            // Coprocessor TIMESTAMP decoding normally produces Unix microseconds.
+            (json!(begin.timestamp_micros()), json!(end.timestamp_micros()))
+        };
+        row.insert("SUMMARY_BEGIN_TIME".to_string(), begin);
+        row.insert("SUMMARY_END_TIME".to_string(), end);
+        row.insert("DIGEST".to_string(), json!(digest));
+        row.insert("DIGEST_TEXT".to_string(), json!(digest));
         row.insert("EXEC_COUNT".to_string(), json!(1));
         rows.push(row);
     }
 
-    // Node 2 rows (old, should be filtered out)
-    for i in 0..2 {
-        let mut row = HashMap::new();
-        row.insert("SUMMARY_BEGIN_TIME".to_string(), json!(node2_begin));
-        row.insert("SUMMARY_END_TIME".to_string(), json!(node2_end));
-        row.insert("DIGEST_TEXT".to_string(), json!(format!("stale_query_{}", i)));
-        row.insert("EXEC_COUNT".to_string(), json!(1));
-        rows.push(row);
-    }
+    let filtered = filter_current_statement_summary_rows(rows, collected_at);
 
-    // Node 3 rows (recent, should be kept)
-    for i in 0..4 {
-        let mut row = HashMap::new();
-        row.insert("SUMMARY_BEGIN_TIME".to_string(), json!(node3_begin));
-        row.insert("SUMMARY_END_TIME".to_string(), json!(node3_end));
-        row.insert("DIGEST_TEXT".to_string(), json!(format!("recent_query_{}", i)));
-        row.insert("EXEC_COUNT".to_string(), json!(1));
-        rows.push(row);
-    }
-
-    assert_eq!(rows.len(), 10, "Should have 10 total rows before filtering");
-
-    // Apply the auto-filter (1 hour window)
-    let where_clause = "SUMMARY_END_TIME >= DATE_SUB(NOW(), INTERVAL 1 HOUR)";
-    let filtered = apply_time_filter(rows, where_clause);
-
-    // Only Node 3's recent rows should remain
-    assert_eq!(filtered.len(), 4, "Should keep only the 4 recent rows from active node");
-
-    for row in &filtered {
-        let digest = row.get("DIGEST_TEXT").unwrap().as_str().unwrap();
-        assert!(
-            digest.starts_with("recent_query_"),
-            "Filtered rows should only contain recent queries, got: {}",
-            digest
-        );
-    }
-
-    println!("Multi-node filter test passed!");
-    println!("  - Node 1 (3 days old): 4 rows filtered out");
-    println!("  - Node 2 (7 hours old): 2 rows filtered out");
-    println!("  - Node 3 (recent): 4 rows kept");
+    assert_eq!(filtered.len(), 2);
+    assert!(filtered
+        .iter()
+        .any(|row| row["DIGEST"] == json!("current_query")));
+    assert!(filtered.iter().any(|row| row["DIGEST"].is_null()));
+    assert!(filtered
+        .iter()
+        .all(|row| row["DIGEST"] != json!("closed_query")));
 }
