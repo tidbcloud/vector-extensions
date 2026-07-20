@@ -1,0 +1,31 @@
+# Alpine-based Dockerfile for minimal image size
+FROM alpine:3.19 as builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    curl \
+    binutils \
+    musl-dev
+
+# Final stage with minimal runtime dependencies
+FROM alpine:3.19
+
+# Install only runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    && rm -rf /var/cache/apk/*
+
+ARG TARGETARCH
+COPY vector-$TARGETARCH /usr/bin/vector
+# COPY vector.toml /etc/vector/vector.toml
+
+ENV VECTOR_LOG="info"
+
+RUN ["chmod", "+x", "/usr/bin/vector"]
+# Smoke test
+RUN ["vector", "--version"]
+
+ENTRYPOINT ["/usr/bin/vector"]

@@ -1,0 +1,22 @@
+# Minimal scratch-based Dockerfile for smallest possible image
+FROM scratch
+
+# Copy CA certificates from a build stage
+FROM alpine:3.19 as certs
+RUN apk add --no-cache ca-certificates
+
+# Final minimal image
+FROM scratch
+
+# Copy only what's needed
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=certs /usr/share/ca-certificates /usr/share/ca-certificates
+
+ARG TARGETARCH
+COPY vector-$TARGETARCH /vector
+
+# Use static binary for scratch compatibility
+ENV VECTOR_LOG="info"
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
+ENTRYPOINT ["/vector"]
