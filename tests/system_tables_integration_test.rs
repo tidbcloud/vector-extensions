@@ -1027,3 +1027,53 @@ async fn test_sqlstatement_same_writer_new_column_not_visible() {
     let _ = std::fs::remove_dir_all(&table_path);
 }
 
+#[tokio::test]
+async fn test_statements_summary_multi_node_filter_including_others() {
+    use chrono::{Duration, TimeZone, Utc};
+    use serde_json::json;
+    use std::collections::HashMap;
+    use vector_extensions::sources::system_tables::collectors::coprocessor_collector::filter_current_statement_summary_rows;
+
+    let collected_at = Utc.with_ymd_and_hms(2026, 4, 2, 16, 29, 40).unwrap();
+    let closed_begin = collected_at - Duration::minutes(59) - Duration::seconds(40);
+    let closed_end = collected_at - Duration::minutes(29) - Duration::seconds(40);
+    let current_begin = collected_at - Duration::minutes(29) - Duration::seconds(40);
+    let current_end = collected_at + Duration::seconds(20);
+
+    let mut rows = Vec::new();
+
+    for (digest, begin, end, encode_as_string) in [
+        (Some("closed_query"), closed_begin, closed_end, true),
+        (None, closed_begin, closed_end, false),
+        (Some("current_query"), current_begin, current_end, false),
+        (None, current_begin, current_end, true),
+    ] {
+        let mut row = HashMap::new();
+        let (begin, end) = if encode_as_string {
+            (
+                json!(begin.format("%Y-%m-%d %H:%M:%S").to_string()),
+                json!(end.format("%Y-%m-%d %H:%M:%S").to_string()),
+            )
+        } else {
+            // Coprocessor TIMESTAMP decoding normally produces Unix microseconds.
+            (json!(begin.timestamp_micros()), json!(end.timestamp_micros()))
+        };
+        row.insert("SUMMARY_BEGIN_TIME".to_string(), begin);
+        row.insert("SUMMARY_END_TIME".to_string(), end);
+        row.insert("DIGEST".to_string(), json!(digest));
+        row.insert("DIGEST_TEXT".to_string(), json!(digest));
+        row.insert("EXEC_COUNT".to_string(), json!(1));
+        rows.push(row);
+    }
+
+    let filtered = filter_current_statement_summary_rows(rows, collected_at);
+
+    assert_eq!(filtered.len(), 2);
+    assert!(filtered
+        .iter()
+        .any(|row| row["DIGEST"] == json!("current_query")));
+    assert!(filtered.iter().any(|row| row["DIGEST"].is_null()));
+    assert!(filtered
+        .iter()
+        .all(|row| row["DIGEST"] != json!("closed_query")));
+}
