@@ -40,10 +40,19 @@ cp target/aarch64-unknown-linux-gnu/release/${BINARY_NAME} "$WORK_DIR"/vector-ar
 
 VERSION="${VECTOR_VERSION:-"$(scripts/version.sh)"}"
 REPO="${REPO:-"tidbcloud/vector"}"
-BASE=debian
+BASE="${DOCKER_BASE:-debian}"
 
 TAG="${TAG:-$REPO:$VERSION-$BASE}"
-DOCKERFILE="scripts/docker/Dockerfile"
+# Default Debian image uses scripts/docker/Dockerfile (no .debian suffix).
+# Alpine/minimal use scripts/docker/Dockerfile.<base>.
+case "${BASE}" in
+debian)
+	DOCKERFILE="scripts/docker/Dockerfile"
+	;;
+*)
+	DOCKERFILE="scripts/docker/Dockerfile.${BASE}"
+	;;
+esac
 
 #PLATFORMS="linux/amd64,linux/arm64,linux/arm/v7"
 PLATFORMS="linux/amd64,linux/arm64"
