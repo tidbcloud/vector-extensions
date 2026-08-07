@@ -23,8 +23,9 @@ use crate::sources::topsql_v2::upstream::consts::{
     LABEL_TAG_LABEL, LABEL_TIMESTAMPS, LABEL_USER, METRIC_NAME_CPU_TIME_MS, METRIC_NAME_EXEC_COUNT,
     METRIC_NAME_EXEC_DURATION, METRIC_NAME_LOGICAL_READ_BYTES, METRIC_NAME_LOGICAL_WRITE_BYTES,
     METRIC_NAME_NETWORK_IN_BYTES, METRIC_NAME_NETWORK_OUT_BYTES, METRIC_NAME_READ_KEYS,
-    METRIC_NAME_STMT_DURATION_COUNT, METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT,
-    METRIC_NAME_TOTAL_RU, METRIC_NAME_WRITE_KEYS, SOURCE_TABLE_TOPRU,
+    METRIC_NAME_ROCKSDB_BLOCK_READ_COUNT, METRIC_NAME_STMT_DURATION_COUNT,
+    METRIC_NAME_STMT_DURATION_SUM_NS, METRIC_NAME_STMT_EXEC_COUNT, METRIC_NAME_TOTAL_RU,
+    METRIC_NAME_WRITE_KEYS, SOURCE_TABLE_TOPRU,
 };
 
 use lazy_static::lazy_static;
@@ -160,6 +161,13 @@ lazy_static! {
         );
         schema_info.insert(
             METRIC_NAME_LOGICAL_WRITE_BYTES.into(),
+            serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }),
+        );
+        schema_info.insert(
+            METRIC_NAME_ROCKSDB_BLOCK_READ_COUNT.into(),
             serde_json::json!({
                 "mysql_type": "bigint",
                 "is_nullable": true
@@ -730,6 +738,17 @@ mod tests {
             None,
             None,
         )
+    }
+
+    #[test]
+    fn test_topsql_schema_contains_rocksdb_block_read_count() {
+        assert_eq!(
+            TOPSQL_SCHEMA.get(METRIC_NAME_ROCKSDB_BLOCK_READ_COUNT),
+            Some(&serde_json::json!({
+                "mysql_type": "bigint",
+                "is_nullable": true
+            }))
+        );
     }
 
     #[test]
