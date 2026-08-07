@@ -12,7 +12,7 @@ use crate::sources::topsql_v2::upstream::consts::{
     LABEL_PLAN_DIGEST, LABEL_REGION_ID, LABEL_SQL_DIGEST, LABEL_KEYSPACE,
     LABEL_SOURCE_TABLE, LABEL_TAG_LABEL, LABEL_TABLE_ID, LABEL_TABLE_NAME, LABEL_TIMESTAMPS,
     METRIC_NAME_CPU_TIME_MS, METRIC_NAME_LOGICAL_READ_BYTES, METRIC_NAME_LOGICAL_WRITE_BYTES, METRIC_NAME_NETWORK_IN_BYTES,
-    METRIC_NAME_NETWORK_OUT_BYTES, METRIC_NAME_READ_KEYS, METRIC_NAME_WRITE_KEYS,
+    METRIC_NAME_NETWORK_OUT_BYTES, METRIC_NAME_READ_KEYS, METRIC_NAME_ROCKSDB_BLOCK_READ_COUNT, METRIC_NAME_WRITE_KEYS,
     SOURCE_TABLE_TIKV_TOPSQL, SOURCE_TABLE_TIKV_TOPREGION,
 };
 use crate::sources::topsql_v2::upstream::parser::UpstreamEventParser;
@@ -36,6 +36,7 @@ struct PerPeriodData {
     network_out_bytes: u64,
     logical_read_bytes: u64,
     logical_write_bytes: u64,
+    rocksdb_block_read_count: u64,
 }
 
 #[derive(Clone)]
@@ -48,6 +49,7 @@ struct PerPeriodRegionData {
     network_out_bytes: u64,
     logical_read_bytes: u64,
     logical_write_bytes: u64,
+    rocksdb_block_read_count: u64,
 }
 
 /// Trait for extracting metrics from records types
@@ -57,6 +59,7 @@ trait MetricsData {
     fn network_out_bytes(&self) -> u64;
     fn logical_read_bytes(&self) -> u64;
     fn logical_write_bytes(&self) -> u64;
+    fn rocksdb_block_read_count(&self) -> u64;
     fn read_keys(&self) -> u32;
     fn write_keys(&self) -> u32;
 }
@@ -81,6 +84,10 @@ impl MetricsData for PerPeriodData {
     #[inline]
     fn logical_write_bytes(&self) -> u64 {
         self.logical_write_bytes
+    }
+    #[inline]
+    fn rocksdb_block_read_count(&self) -> u64 {
+        self.rocksdb_block_read_count
     }
     #[inline]
     fn read_keys(&self) -> u32 {
@@ -112,6 +119,10 @@ impl MetricsData for PerPeriodRegionData {
     #[inline]
     fn logical_write_bytes(&self) -> u64 {
         self.logical_write_bytes
+    }
+    #[inline]
+    fn rocksdb_block_read_count(&self) -> u64 {
+        self.rocksdb_block_read_count
     }
     #[inline]
     fn read_keys(&self) -> u32 {
@@ -168,33 +179,46 @@ impl ResourceUsageRecordParser {
                     others.network_out_bytes += psd.network_out_bytes();
                     others.logical_read_bytes += psd.logical_read_bytes();
                     others.logical_write_bytes += psd.logical_write_bytes();
+                    others.rocksdb_block_read_count += psd.rocksdb_block_read_count();
                 }
                 continue;
             }
             
             // Calculate metrics for each record
-            let records_with_metrics: Vec<(usize, u32, u64, u64)> = v.iter()
+            let records_with_metrics: Vec<(usize, u32, u64, u64, u64, u64)> = v.iter()
                 .enumerate()
                 .map(|(idx, psd)| {
                     let network = psd.network_in_bytes() + psd.network_out_bytes();
-                    let logical = psd.logical_read_bytes() + psd.logical_write_bytes();
-                    (idx, psd.cpu_time_ms(), network, logical)
+                    (
+                        idx,
+                        psd.cpu_time_ms(),
+                        network,
+                        psd.logical_read_bytes(),
+                        psd.logical_write_bytes(),
+                        psd.rocksdb_block_read_count(),
+                    )
                 })
                 .collect();
             
-            let (cpu_threshold, network_threshold, logical_threshold) = 
-                Self::calculate_thresholds(&records_with_metrics, top_n);
+            let (
+                cpu_threshold,
+                network_threshold,
+                logical_read_threshold,
+                logical_write_threshold,
+                block_read_threshold,
+            ) = Self::calculate_thresholds(&records_with_metrics, top_n);
             
             // Filter and separate records in a single pass
             let mut kept: Vec<D> = Vec::new();
             for (_, psd) in v.iter().enumerate() {
                 let cpu_time_ms = psd.cpu_time_ms();
                 let network = psd.network_in_bytes() + psd.network_out_bytes();
-                let logical = psd.logical_read_bytes() + psd.logical_write_bytes();
                 
                 if cpu_time_ms > cpu_threshold 
                     || network > network_threshold 
-                    || logical > logical_threshold {
+                    || psd.logical_read_bytes() > logical_read_threshold
+                    || psd.logical_write_bytes() > logical_write_threshold
+                    || psd.rocksdb_block_read_count() > block_read_threshold {
                     kept.push(psd.clone());
                 } else {
                     let others = ts_others.entry(*ts).or_insert_with(|| {
@@ -209,6 +233,7 @@ impl ResourceUsageRecordParser {
                     others.network_out_bytes += psd.network_out_bytes();
                     others.logical_read_bytes += psd.logical_read_bytes();
                     others.logical_write_bytes += psd.logical_write_bytes();
+                    others.rocksdb_block_read_count += psd.rocksdb_block_read_count();
                 }
             }
             *v = kept;
@@ -226,6 +251,7 @@ impl ResourceUsageRecordParser {
                     network_out_bytes: psd.network_out_bytes(),
                     logical_read_bytes: psd.logical_read_bytes(),
                     logical_write_bytes: psd.logical_write_bytes(),
+                    rocksdb_block_read_count: psd.rocksdb_block_read_count(),
                 };
                 let key = get_key(&psd);
                 match result_items.get_mut(&key) {
@@ -246,11 +272,11 @@ impl ResourceUsageRecordParser {
     }
 
     /// Calculate thresholds for top_n filtering based on metrics.
-    /// Returns (cpu_threshold, network_threshold, logical_threshold).
+    /// Returns thresholds for CPU, network, logical reads, logical writes, and block reads.
     fn calculate_thresholds(
-        records_with_metrics: &[(usize, u32, u64, u64)],
+        records_with_metrics: &[(usize, u32, u64, u64, u64, u64)],
         top_n: usize,
-    ) -> (u32, u64, u64) {
+    ) -> (u32, u64, u64, u64, u64) {
         // Find thresholds at position top_n (0-indexed) for each metric using select_nth_unstable
         let cpu_threshold = if records_with_metrics.len() > top_n {
             let mut cpu_time_ms_values: Vec<u32> = records_with_metrics.iter().map(|r| r.1).collect();
@@ -273,7 +299,7 @@ impl ResourceUsageRecordParser {
             0
         };
         
-        let logical_threshold = if records_with_metrics.len() > top_n {
+        let logical_read_threshold = if records_with_metrics.len() > top_n {
             let mut logical_values: Vec<u64> = records_with_metrics.iter().map(|r| r.3).collect();
             let target_idx = top_n;
             logical_values.select_nth_unstable_by(target_idx, |a, b| b.cmp(a));
@@ -281,8 +307,33 @@ impl ResourceUsageRecordParser {
         } else {
             0
         };
+
+        let logical_write_threshold = if records_with_metrics.len() > top_n {
+            let mut logical_values: Vec<u64> = records_with_metrics.iter().map(|r| r.4).collect();
+            let target_idx = top_n;
+            logical_values.select_nth_unstable_by(target_idx, |a, b| b.cmp(a));
+            logical_values[target_idx]
+        } else {
+            0
+        };
+
+        let block_read_threshold = if records_with_metrics.len() > top_n {
+            let mut block_read_values: Vec<u64> =
+                records_with_metrics.iter().map(|r| r.5).collect();
+            let target_idx = top_n;
+            block_read_values.select_nth_unstable_by(target_idx, |a, b| b.cmp(a));
+            block_read_values[target_idx]
+        } else {
+            0
+        };
         
-        (cpu_threshold, network_threshold, logical_threshold)
+        (
+            cpu_threshold,
+            network_threshold,
+            logical_read_threshold,
+            logical_write_threshold,
+            block_read_threshold,
+        )
     }
 }
 
@@ -333,6 +384,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                                 existed_item.network_out_bytes += item.network_out_bytes;
                                 existed_item.logical_read_bytes += item.logical_read_bytes;
                                 existed_item.logical_write_bytes += item.logical_write_bytes;
+                                existed_item.rocksdb_block_read_count += item.rocksdb_block_read_count;
                             }
                         }
                     }
@@ -347,6 +399,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                             network_out_bytes: item.network_out_bytes,
                             logical_read_bytes: item.logical_read_bytes,
                             logical_write_bytes: item.logical_write_bytes,
+                            rocksdb_block_read_count: item.rocksdb_block_read_count,
                         };
                         match ts_digests.get_mut(&item.timestamp_sec) {
                             None => {
@@ -375,6 +428,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                                 existed_item.network_out_bytes += item.network_out_bytes;
                                 existed_item.logical_read_bytes += item.logical_read_bytes;
                                 existed_item.logical_write_bytes += item.logical_write_bytes;
+                                existed_item.rocksdb_block_read_count += item.rocksdb_block_read_count;
                             }
                         }
                     }
@@ -389,6 +443,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                             network_out_bytes: item.network_out_bytes,
                             logical_read_bytes: item.logical_read_bytes,
                             logical_write_bytes: item.logical_write_bytes,
+                            rocksdb_block_read_count: item.rocksdb_block_read_count,
                         };
                         match ts_region_digests.get_mut(&item.timestamp_sec) {
                             None => {
@@ -476,6 +531,7 @@ impl ResourceUsageRecordParser {
                     existed_item.network_out_bytes += item.network_out_bytes;
                     existed_item.logical_read_bytes += item.logical_read_bytes;
                     existed_item.logical_write_bytes += item.logical_write_bytes;
+                    existed_item.rocksdb_block_read_count += item.rocksdb_block_read_count;
                 }
             }
         }
@@ -563,6 +619,10 @@ impl ResourceUsageRecordParser {
                 METRIC_NAME_LOGICAL_WRITE_BYTES,
                 LogValue::from(item.logical_write_bytes),
             );
+            log.insert(
+                METRIC_NAME_ROCKSDB_BLOCK_READ_COUNT,
+                LogValue::from(item.rocksdb_block_read_count),
+            );
             events.push(event.into_log());
         }
         events
@@ -610,6 +670,10 @@ impl ResourceUsageRecordParser {
             log.insert(
                 METRIC_NAME_LOGICAL_WRITE_BYTES,
                 LogValue::from(item.logical_write_bytes),
+            );
+            log.insert(
+                METRIC_NAME_ROCKSDB_BLOCK_READ_COUNT,
+                LogValue::from(item.rocksdb_block_read_count),
             );
             events.push(event.into_log());
         }
@@ -715,6 +779,8 @@ mod tests {
         logical_read_bytes: u64,
         #[serde(default)]
         logical_write_bytes: u64,
+        #[serde(default)]
+        rocksdb_block_read_count: u64,
     }
 
     fn load_mock_records() -> Vec<ResourceUsageRecord> {
@@ -742,11 +808,98 @@ mod tests {
                             network_out_bytes: i.network_out_bytes,
                             logical_read_bytes: i.logical_read_bytes,
                             logical_write_bytes: i.logical_write_bytes,
+                            rocksdb_block_read_count: i.rocksdb_block_read_count,
                         })
                         .collect(),
                 })),
             })
             .collect()
+    }
+
+    #[test]
+    fn test_keep_top_n_uses_detailed_io_dimensions() {
+        fn record(tag: &[u8], item: GroupTagRecordItem) -> ResourceUsageRecord {
+            let resource_group_tag = if tag.is_empty() {
+                vec![]
+            } else {
+                ResourceUsageRecordParser::encode_tag(
+                    tag.to_vec(),
+                    vec![],
+                    None,
+                    None,
+                    None,
+                )
+            };
+            ResourceUsageRecord {
+                record_oneof: Some(RecordOneof::Record(GroupTagRecord {
+                    resource_group_tag,
+                    items: vec![item],
+                })),
+            }
+        }
+
+        let item = |cpu_time_ms: u32,
+                    network_in_bytes: u64,
+                    logical_read_bytes: u64,
+                    logical_write_bytes: u64,
+                    rocksdb_block_read_count: u64| GroupTagRecordItem {
+            timestamp_sec: 1_000,
+            cpu_time_ms,
+            read_keys: cpu_time_ms,
+            write_keys: cpu_time_ms,
+            network_in_bytes,
+            network_out_bytes: 0,
+            logical_read_bytes,
+            logical_write_bytes,
+            rocksdb_block_read_count,
+        };
+
+        let records = vec![
+            record(b"cpu", item(100, 0, 0, 0, 0)),
+            record(b"network", item(0, 100, 0, 0, 0)),
+            record(b"logical-read", item(0, 0, 100, 0, 0)),
+            record(b"logical-write", item(0, 0, 0, 100, 0)),
+            record(b"block-read", item(0, 0, 0, 0, 100)),
+            record(b"evicted", item(1, 1, 1, 1, 1)),
+            record(b"", item(2, 2, 2, 2, 2)),
+        ];
+
+        let result = ResourceUsageRecordParser::keep_top_n(records, 1);
+        let mut kept = std::collections::HashSet::new();
+        let mut others = None;
+        for response in result {
+            if let Some(RecordOneof::Record(record)) = response.record_oneof {
+                if record.resource_group_tag.is_empty() {
+                    others = record.items.into_iter().next();
+                } else {
+                    kept.insert(record.resource_group_tag);
+                }
+            }
+        }
+
+        for tag in [
+            b"cpu".as_slice(),
+            b"network".as_slice(),
+            b"logical-read".as_slice(),
+            b"logical-write".as_slice(),
+            b"block-read".as_slice(),
+        ] {
+            assert!(kept.contains(&ResourceUsageRecordParser::encode_tag(
+                tag.to_vec(),
+                vec![],
+                None,
+                None,
+                None,
+            )));
+        }
+        assert_eq!(kept.len(), 5);
+
+        let others = others.unwrap();
+        assert_eq!(others.cpu_time_ms, 3);
+        assert_eq!(others.network_in_bytes, 3);
+        assert_eq!(others.logical_read_bytes, 3);
+        assert_eq!(others.logical_write_bytes, 3);
+        assert_eq!(others.rocksdb_block_read_count, 3);
     }
 
     #[test]
@@ -793,6 +946,13 @@ mod tests {
     #[test]
     fn test_downsampling() {
         let mut records = load_mock_records();
+        for record in &mut records {
+            if let Some(RecordOneof::Record(record)) = &mut record.record_oneof {
+                for (index, item) in record.items.iter_mut().enumerate() {
+                    item.rocksdb_block_read_count = index as u64 + 1;
+                }
+            }
+        }
         let mut items = vec![];
         for record in &records {
             if let Some(RecordOneof::Record(record)) = &record.record_oneof {
@@ -826,6 +986,7 @@ mod tests {
             sum_old.network_out_bytes += item.network_out_bytes;
             sum_old.logical_read_bytes += item.logical_read_bytes;
             sum_old.logical_write_bytes += item.logical_write_bytes;
+            sum_old.rocksdb_block_read_count += item.rocksdb_block_read_count;
         }
 
         ResourceUsageRecordParser::downsampling(&mut records, 15);
@@ -859,6 +1020,7 @@ mod tests {
             sum_new.network_out_bytes += item.network_out_bytes;
             sum_new.logical_read_bytes += item.logical_read_bytes;
             sum_new.logical_write_bytes += item.logical_write_bytes;
+            sum_new.rocksdb_block_read_count += item.rocksdb_block_read_count;
         }
 
         assert_eq!(sum_old.cpu_time_ms, sum_new.cpu_time_ms);
@@ -868,6 +1030,7 @@ mod tests {
         assert_eq!(sum_old.network_out_bytes, sum_new.network_out_bytes);
         assert_eq!(sum_old.logical_read_bytes, sum_new.logical_read_bytes);
         assert_eq!(sum_old.logical_write_bytes, sum_new.logical_write_bytes);
+        assert_eq!(sum_old.rocksdb_block_read_count, sum_new.rocksdb_block_read_count);
     }
 
     #[test]
@@ -886,6 +1049,7 @@ mod tests {
                         network_out_bytes: 200,
                         logical_read_bytes: 300,
                         logical_write_bytes: 400,
+                        rocksdb_block_read_count: 0,
                     },
                     GroupTagRecordItem {
                         timestamp_sec: 1709654612,
@@ -896,6 +1060,7 @@ mod tests {
                         network_out_bytes: 300,
                         logical_read_bytes: 400,
                         logical_write_bytes: 500,
+                        rocksdb_block_read_count: 0,
                     },
                     GroupTagRecordItem {
                         timestamp_sec: 1709654613,
@@ -906,6 +1071,7 @@ mod tests {
                         network_out_bytes: 250,
                         logical_read_bytes: 350,
                         logical_write_bytes: 450,
+                        rocksdb_block_read_count: 0,
                     },
                     GroupTagRecordItem {
                         timestamp_sec: 1709654625,
@@ -916,6 +1082,7 @@ mod tests {
                         network_out_bytes: 400,
                         logical_read_bytes: 500,
                         logical_write_bytes: 600,
+                        rocksdb_block_read_count: 0,
                     },
                 ],
             })),
@@ -1005,6 +1172,7 @@ mod tests {
                             network_out_bytes: 2000,
                             logical_read_bytes: 3000,
                             logical_write_bytes: 4000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1029,6 +1197,7 @@ mod tests {
                             network_out_bytes: 3000,
                             logical_read_bytes: 4000,
                             logical_write_bytes: 5000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1047,6 +1216,7 @@ mod tests {
                             network_out_bytes: 2500,
                             logical_read_bytes: 3500,
                             logical_write_bytes: 4500,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1065,6 +1235,7 @@ mod tests {
                             network_out_bytes: 3500,
                             logical_read_bytes: 4500,
                             logical_write_bytes: 5500,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1112,6 +1283,7 @@ mod tests {
                             network_out_bytes: 2000,
                             logical_read_bytes: 3000,
                             logical_write_bytes: 4000,
+                            rocksdb_block_read_count: 0,
                         },
                         GroupTagRecordItem {
                             timestamp_sec: 1001,
@@ -1122,6 +1294,7 @@ mod tests {
                             network_out_bytes: 2500,
                             logical_read_bytes: 3500,
                             logical_write_bytes: 4500,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1145,6 +1318,7 @@ mod tests {
                             network_out_bytes: 3000,
                             logical_read_bytes: 4000,
                             logical_write_bytes: 5000,
+                            rocksdb_block_read_count: 0,
                         },
                         GroupTagRecordItem {
                             timestamp_sec: 1002,
@@ -1155,6 +1329,7 @@ mod tests {
                             network_out_bytes: 4000,
                             logical_read_bytes: 5000,
                             logical_write_bytes: 6000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1203,6 +1378,7 @@ mod tests {
                             network_out_bytes: 2000,
                             logical_read_bytes: 3000,
                             logical_write_bytes: 4000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1226,6 +1402,7 @@ mod tests {
                             network_out_bytes: 3000,
                             logical_read_bytes: 4000,
                             logical_write_bytes: 5000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1249,6 +1426,7 @@ mod tests {
                             network_out_bytes: 1000,
                             logical_read_bytes: 1500,
                             logical_write_bytes: 2000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1301,6 +1479,7 @@ mod tests {
                             network_out_bytes: 2000,
                             logical_read_bytes: 3000,
                             logical_write_bytes: 4000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1324,6 +1503,7 @@ mod tests {
                             network_out_bytes: 2000,
                             logical_read_bytes: 3000,
                             logical_write_bytes: 4000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1347,6 +1527,7 @@ mod tests {
                             network_out_bytes: 2000,
                             logical_read_bytes: 3000,
                             logical_write_bytes: 4000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1370,6 +1551,7 @@ mod tests {
                             network_out_bytes: 2000,
                             logical_read_bytes: 3000,
                             logical_write_bytes: 4000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1393,6 +1575,7 @@ mod tests {
                             network_out_bytes: 2000,
                             logical_read_bytes: 3000,
                             logical_write_bytes: 4000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1467,6 +1650,7 @@ mod tests {
                     network_out_bytes: 200,
                     logical_read_bytes: 300,
                     logical_write_bytes: 400,
+                    rocksdb_block_read_count: 500,
                 }],
             })),
         };
@@ -1503,6 +1687,12 @@ mod tests {
             events[0].get(LABEL_TABLE_ID).is_none(),
             "empty raw resource_group_tag should emit null table_id"
         );
+        assert_eq!(
+            events[0]
+                .get(METRIC_NAME_ROCKSDB_BLOCK_READ_COUNT)
+                .and_then(|value| value.as_integer()),
+            Some(500)
+        );
     }
 
     #[test]
@@ -1519,6 +1709,7 @@ mod tests {
                     network_out_bytes: 200,
                     logical_read_bytes: 300,
                     logical_write_bytes: 400,
+                    rocksdb_block_read_count: 600,
                 }],
             })),
         };
@@ -1533,6 +1724,12 @@ mod tests {
         assert!(
             events[0].get(LABEL_REGION_ID).is_none(),
             "others region record should emit null region_id"
+        );
+        assert_eq!(
+            events[0]
+                .get(METRIC_NAME_ROCKSDB_BLOCK_READ_COUNT)
+                .and_then(|value| value.as_integer()),
+            Some(600)
         );
     }
 
@@ -1551,6 +1748,7 @@ mod tests {
                         network_out_bytes: 10,
                         logical_read_bytes: 10,
                         logical_write_bytes: 10,
+                        rocksdb_block_read_count: 0,
                     }],
                 })),
             },
@@ -1566,6 +1764,7 @@ mod tests {
                         network_out_bytes: 100,
                         logical_read_bytes: 100,
                         logical_write_bytes: 100,
+                        rocksdb_block_read_count: 0,
                     }],
                 })),
             },
@@ -1581,6 +1780,7 @@ mod tests {
                         network_out_bytes: 50,
                         logical_read_bytes: 50,
                         logical_write_bytes: 50,
+                        rocksdb_block_read_count: 0,
                     }],
                 })),
             },
@@ -1674,6 +1874,7 @@ mod tests {
                             network_out_bytes: 5000,
                             logical_read_bytes: 1000,
                             logical_write_bytes: 1000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1699,6 +1900,7 @@ mod tests {
                             network_out_bytes: 2000,
                             logical_read_bytes: 2000,
                             logical_write_bytes: 2000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1724,6 +1926,7 @@ mod tests {
                             network_out_bytes: 1000,
                             logical_read_bytes: 3000,
                             logical_write_bytes: 3000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1749,6 +1952,7 @@ mod tests {
                             network_out_bytes: 3000,
                             logical_read_bytes: 5000,
                             logical_write_bytes: 5000,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),
@@ -1774,6 +1978,7 @@ mod tests {
                             network_out_bytes: 100,
                             logical_read_bytes: 100,
                             logical_write_bytes: 100,
+                            rocksdb_block_read_count: 0,
                         },
                     ],
                 })),

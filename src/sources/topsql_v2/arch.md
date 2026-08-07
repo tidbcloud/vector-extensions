@@ -67,6 +67,16 @@ TiDB subscriptions emit four log-event families:
 
 For TiDB-originated events, `keyspace` is propagated when the upstream payload includes `keyspace_name`, including `topsql_sql_meta` and `topsql_plan_meta`.
 
+TiKV subscriptions emit `tikv_topsql` and `tikv_topregion` events. In addition to CPU,
+key counts, network bytes, and logical read/write bytes, these events include
+`topsql_rocksdb_block_read_count`. The value is the foreground request's RocksDB block-read
+count and must not be interpreted as device-level read IOPS.
+
+Per-second Top N filtering keeps the union of records selected independently by CPU, combined
+network traffic, logical reads, logical writes, and RocksDB block reads. Metrics from evicted
+records and upstream `others` records are merged without dropping any dimension, and the same
+fields are preserved during downsampling.
+
 ## Dependencies
 
 - Same as TopSQL v1

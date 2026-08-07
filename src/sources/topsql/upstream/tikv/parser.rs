@@ -129,6 +129,7 @@ impl UpstreamEventParser for ResourceUsageRecordParser {
                     network_out_bytes: 0, // Not supported in topsql v1
                     logical_read_bytes: 0, // Not supported in topsql v1
                     logical_write_bytes: 0, // Not supported in topsql v1
+                    rocksdb_block_read_count: 0, // Not supported in topsql v1
                 };
                 match digest_items.get_mut(&psd.resource_group_tag) {
                     None => {
@@ -393,6 +394,7 @@ mod tests {
                             network_out_bytes: i.network_out_bytes,
                             logical_read_bytes: i.logical_read_bytes,
                             logical_write_bytes: i.logical_write_bytes,
+                            rocksdb_block_read_count: 0,
                         })
                         .collect(),
                 })),

@@ -21,6 +21,7 @@ pub const METRIC_NAME_NETWORK_IN_BYTES: &str = "topsql_network_in_bytes";
 pub const METRIC_NAME_NETWORK_OUT_BYTES: &str = "topsql_network_out_bytes";
 pub const METRIC_NAME_LOGICAL_READ_BYTES: &str = "topsql_logical_read_bytes";
 pub const METRIC_NAME_LOGICAL_WRITE_BYTES: &str = "topsql_logical_write_bytes";
+pub const METRIC_NAME_ROCKSDB_BLOCK_READ_COUNT: &str = "topsql_rocksdb_block_read_count";
 pub const METRIC_NAME_STMT_EXEC_COUNT: &str = "topsql_stmt_exec_count";
 pub const METRIC_NAME_STMT_DURATION_SUM_NS: &str = "topsql_stmt_duration_sum_ns";
 pub const METRIC_NAME_STMT_DURATION_COUNT: &str = "topsql_stmt_duration_count";
