@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::Semaphore;
 use tokio::time::{interval, sleep_until, Instant};
 use tracing::{debug, error, info, warn};
 use vector::shutdown::ShutdownSignal;
@@ -17,6 +19,10 @@ use crate::sources::system_tables::data_collector::{
     CollectionMethod, CollectorConfig, DataCollector,
 };
 
+/// Cap concurrent table collections across all TiDB collectors.
+/// Multiple instance-level collectors otherwise pull in parallel and multiply peak RSS.
+const DEFAULT_MAX_CONCURRENT_COLLECTIONS: usize = 1;
+
 /// Main controller using abstracted data collectors
 #[allow(dead_code)]
 pub struct Controller {
@@ -30,6 +36,8 @@ pub struct Controller {
     collection_method: CollectionMethod,
     proxy_config: ProxyConfig,
     out: SourceSender,
+    /// Shared across collector tasks so only N collections run at once.
+    collection_semaphore: Arc<Semaphore>,
 }
 
 /// Task information for a running collector
@@ -107,6 +115,11 @@ impl Controller {
             .map_err(|e| format!("Failed to create legacy topology fetcher: {}", e))?
         };
 
+        info!(
+            "Limiting concurrent system_tables collections to {}",
+            DEFAULT_MAX_CONCURRENT_COLLECTIONS
+        );
+
         Ok(Self {
             topology_fetch_interval,
             topology_fetcher,
@@ -118,6 +131,7 @@ impl Controller {
             collection_method,
             proxy_config: proxy_config.clone(),
             out,
+            collection_semaphore: Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_COLLECTIONS)),
         })
     }
 
@@ -364,9 +378,31 @@ impl Controller {
                 // Start the collector task
                 let out_clone = self.out.clone();
                 let collection_config_clone = self.collection_config.clone();
+                let collection_semaphore = self.collection_semaphore.clone();
+                // Stagger first pull so instance collectors do not align on the same second.
+                let start_jitter = {
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = DefaultHasher::new();
+                    collector_key.hash(&mut hasher);
+                    Duration::from_secs(hasher.finish() % 30)
+                };
                 let handle = tokio::spawn(async move {
-                    Self::run_collector_task(collector, tables, out_clone, collection_config_clone)
-                        .await;
+                    if !start_jitter.is_zero() {
+                        info!(
+                            "Delaying collector start by {:?} to stagger multi-TiDB pulls",
+                            start_jitter
+                        );
+                        tokio::time::sleep(start_jitter).await;
+                    }
+                    Self::run_collector_task(
+                        collector,
+                        tables,
+                        out_clone,
+                        collection_config_clone,
+                        collection_semaphore,
+                    )
+                    .await;
                 });
                 let task = CollectorTask {
                     handle,
@@ -389,10 +425,9 @@ impl Controller {
         tables: Vec<TableConfig>,
         mut out: SourceSender,
         collection_config: CollectionConfig,
+        collection_semaphore: Arc<Semaphore>,
     ) {
-        use crate::sources::system_tables::data_collector::utils::{
-            create_event_from_result, parse_collection_interval,
-        };
+        use crate::sources::system_tables::data_collector::utils::parse_collection_interval;
 
         let table_config = &tables[0]; // Use first table's config as reference
         let table_names: Vec<String> = tables.iter().map(|t| t.source_table.clone()).collect();
@@ -465,9 +500,19 @@ impl Controller {
                     let mut attempts = 0u8;
                     loop {
                         attempts += 1;
-                        match collector.collect_table_data(table).await {
-                            Ok(result) => {
-                                let row_count = result.data.len();
+                        let permit = match collection_semaphore.acquire().await {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                error!(
+                                    "Collection semaphore closed while collecting table {}",
+                                    table.source_table
+                                );
+                                break;
+                            }
+                        };
+                        match collector.collect_and_emit(table, &mut out).await {
+                            Ok(row_count) => {
+                                drop(permit);
                                 info!(
                                     "Collected {} rows from table {} using {} (attempt {}/{})",
                                     row_count,
@@ -476,24 +521,10 @@ impl Controller {
                                     attempts,
                                     5
                                 );
-
-                                for row_data in &result.data {
-                                    let event = create_event_from_result(&result, row_data.clone());
-                                    if let Err(e) = out.send_event(event).await {
-                                        error!(
-                                            "Failed to send event for table {}: {}",
-                                            table.source_table, e
-                                        );
-                                    } else {
-                                        debug!(
-                                            "Successfully sent event for table {}",
-                                            table.source_table
-                                        );
-                                    }
-                                }
                                 break;
                             }
                             Err(e) => {
+                                drop(permit);
                                 if attempts >= 5 {
                                     error!(
                                         "Failed to collect data from table {} using {} after {} attempts: {}",
@@ -565,31 +596,28 @@ impl Controller {
                         );
                         continue;
                     }
-                    match collector.collect_table_data(table).await {
-                        Ok(result) => {
-                            let row_count = result.data.len();
+                    let permit = match collection_semaphore.acquire().await {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            error!(
+                                "Collection semaphore closed while collecting table {}",
+                                table.source_table
+                            );
+                            continue;
+                        }
+                    };
+                    match collector.collect_and_emit(table, &mut out).await {
+                        Ok(row_count) => {
+                            drop(permit);
                             info!(
                                 "Collected {} rows from table {} using {}",
                                 row_count,
                                 table.source_table,
                                 collector.collection_method()
                             );
-                            for row_data in &result.data {
-                                let event = create_event_from_result(&result, row_data.clone());
-                                if let Err(e) = out.send_event(event).await {
-                                    error!(
-                                        "Failed to send event for table {}: {}",
-                                        table.source_table, e
-                                    );
-                                } else {
-                                    debug!(
-                                        "Successfully sent event for table {}",
-                                        table.source_table
-                                    );
-                                }
-                            }
                         }
                         Err(e) => {
+                            drop(permit);
                             error!(
                                 "Failed to collect data from table {} using {}: {}",
                                 table.source_table,

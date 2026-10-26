@@ -85,5 +85,6 @@ pub struct SystemTablesConfig {
 ## Performance Considerations
 
 - **Query Optimization**: Optimize system table queries
-- **Batch Collection**: Collect data in batches
+- **Streaming emit**: Collectors prefer `collect_and_emit` so rows are moved into Vector events without retaining a full cloned copy of every row. SQL uses a streaming MySQL fetch; coprocessor emits per response chunk. The upstream TiDB/coprocessor API is still a full-table pull (no LIMIT pagination).
+- **Multi-TiDB concurrency**: A shared semaphore limits concurrent collections to 1 by default, and instance collectors stagger their first pull (0–29s jitter) so N TiDB nodes do not peak RSS at the same time.
 - **Connection Pooling**: Reuse database connections

@@ -102,7 +102,7 @@ mod tls_proxy {
 }
 
 use crate::sources::system_tables::data_collector::{
-    CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
+    utils, CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
     CollectorConfigType, DataCollector,
 };
 use crate::sources::system_tables::TableConfig;
@@ -554,11 +554,11 @@ impl CoprocessorCollector {
     }
 
     /// Perform actual coprocessor collection via gRPC
-    async fn perform_coprocessor_collection(
+    async fn fetch_coprocessor_response(
         &self,
         request: &CoprocessorRequest,
         table: &TableConfig,
-    ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
+    ) -> Result<CoprocessorResponse, CollectionError> {
         // Grab current channel
         let channel = {
             let guard = self.client_channel.lock().await;
@@ -646,11 +646,18 @@ impl CoprocessorCollector {
             )));
         }
 
+        Ok(cop_response)
+    }
+
+    async fn perform_coprocessor_collection(
+        &self,
+        request: &CoprocessorRequest,
+        table: &TableConfig,
+    ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
+        let cop_response = self.fetch_coprocessor_response(request, table).await?;
         // Note: Our protobuf definition may be incomplete.
         // The TiDB CoprocessorResponse should have region_error and other fields,
         // but our current definition only has data and other_error.
-
-        // Parse the response data
         self.parse_coprocessor_response(&cop_response, table).await
     }
 
@@ -2081,6 +2088,175 @@ impl DataCollector for CoprocessorCollector {
         Ok(CollectionResult { data, metadata })
     }
 
+    async fn collect_and_emit(
+        &self,
+        table: &TableConfig,
+        out: &mut vector::SourceSender,
+    ) -> Result<usize, CollectionError> {
+        let start_time = Instant::now();
+        let timestamp = chrono::Utc::now();
+
+        let need_init = { self.client_channel.lock().await.is_none() };
+        if need_init {
+            let channel = self.create_grpc_connection().await?;
+            let mut ch = self.client_channel.lock().await;
+            *ch = Some(channel);
+        }
+
+        let table_schema = match self.get_table_schema_via_http(table).await {
+            Ok(schema) => schema,
+            Err(e) => {
+                warn!(
+                    "Failed to get schema for table {}: {}. Using fallback.",
+                    table.source_table, e
+                );
+                TableSchema {
+                    id: 0,
+                    columns: Vec::new(),
+                }
+            }
+        };
+
+        let request = match self.build_coprocessor_request(&table_schema) {
+            Ok(request) => request,
+            Err(e) => {
+                warn!(
+                    "Failed to build coprocessor request: {}. Falling back to HTTP/materialized path.",
+                    e
+                );
+                // Fall back to collect_table_data (may use HTTP fallback) then move-emit.
+                let result = self.collect_table_data(table).await?;
+                let row_count = result.data.len();
+                let CollectionResult { data, metadata } = result;
+                for row_data in data {
+                    let event = utils::create_event_from_metadata(&metadata, row_data);
+                    if out.send_event(event).await.is_err() {
+                        return Err(CollectionError::NetworkError(
+                            "Failed to send event: downstream closed".to_string(),
+                        ));
+                    }
+                }
+                return Ok(row_count);
+            }
+        };
+
+        let response = self.fetch_coprocessor_response(&request, table).await?;
+        if response.data.is_empty() {
+            warn!(
+                "Coprocessor response is empty for table {}.{}.",
+                table.source_schema, table.source_table
+            );
+            return Ok(0);
+        }
+
+        let table_schema = self.get_or_cache_table_schema(table).await?;
+        let select_response = SelectResponse::decode(&response.data[..]).map_err(|e| {
+            CollectionError::ParseError(format!(
+                "Failed to decode SelectResponse for table {}.{}: {}",
+                table.source_schema, table.source_table, e
+            ))
+        })?;
+        self.validate_select_response(&select_response, table)?;
+
+        // Drop the raw wire buffer once SelectResponse is decoded.
+        drop(response);
+
+        let time_filter = table
+            .where_clause
+            .as_deref()
+            .and_then(|clause| parse_time_filter_cutoff(clause, timestamp));
+        let summary_filter = is_current_statements_summary_table(&table.source_table)
+            .then_some(timestamp.naive_utc());
+
+        let mut extra = HashMap::new();
+        extra.insert(
+            "schema_columns".to_string(),
+            Value::Number(table_schema.columns.len().into()),
+        );
+        extra.insert(
+            "grpc_endpoint".to_string(),
+            Value::String(self.grpc_endpoint.clone()),
+        );
+        extra.insert("fallback_used".to_string(), Value::Bool(false));
+        let mut schema_metadata = serde_json::Map::new();
+        for col in &table_schema.columns {
+            if let Some(name) = &col.name {
+                let mysql_type_str = self.mysql_type_to_string(col.tp);
+                let mut obj = serde_json::Map::new();
+                obj.insert("mysql_type".to_string(), Value::String(mysql_type_str));
+                schema_metadata.insert(name.clone(), Value::Object(obj));
+            }
+        }
+        extra.insert(
+            "schema_metadata".to_string(),
+            Value::Object(schema_metadata),
+        );
+
+        // row_count unknown until stream ends; events carry 0.
+        let metadata = CollectionMetadata {
+            instance: self.config.instance.clone(),
+            table_config: table.clone(),
+            collection_method: CollectionMethod::Coprocessor,
+            timestamp,
+            row_count: 0,
+            duration_ms: 0,
+            extra,
+        };
+
+        let mut row_count = 0usize;
+        let chunk_count = select_response.chunks.len();
+        for (chunk_idx, chunk) in select_response.chunks.iter().enumerate() {
+            if chunk.rows_data.is_empty() {
+                continue;
+            }
+            info!(
+                "Streaming chunk {}/{} for table {}.{}: rows_data_size={} bytes",
+                chunk_idx + 1,
+                chunk_count,
+                table.source_schema,
+                table.source_table,
+                chunk.rows_data.len()
+            );
+
+            let chunk_rows = self.parse_data_with_schema_and_encode_type(
+                &chunk.rows_data,
+                table,
+                &table_schema,
+                select_response.encode_type,
+            )?;
+
+            for row_data in chunk_rows {
+                if let Some((ref col, cutoff)) = time_filter {
+                    if !row_passes_time_filter(&row_data, col, cutoff) {
+                        continue;
+                    }
+                }
+                if let Some(collected_at) = summary_filter {
+                    if !row_passes_current_statement_summary_filter(&row_data, collected_at) {
+                        continue;
+                    }
+                }
+
+                let event = utils::create_event_from_metadata(&metadata, row_data);
+                if out.send_event(event).await.is_err() {
+                    return Err(CollectionError::NetworkError(
+                        "Failed to send event: downstream closed".to_string(),
+                    ));
+                }
+                row_count += 1;
+            }
+        }
+
+        let duration = start_time.elapsed();
+        info!(
+            "Coprocessor streaming collection completed for table {}: {} rows in {}ms",
+            table.source_table,
+            row_count,
+            duration.as_millis()
+        );
+        Ok(row_count)
+    }
+
     async fn health_check(&self) -> Result<(), CollectionError> {
         if self.client_channel.lock().await.is_none() {
             return Err(CollectionError::ConfigurationError(
@@ -2100,69 +2276,82 @@ impl DataCollector for CoprocessorCollector {
 /// Time field values can be Unix microseconds from the coprocessor TIMESTAMP
 /// decoder or strings in `YYYY-MM-DD HH:MM:SS`/RFC 3339 format.
 /// If the clause cannot be parsed, all rows are returned unchanged.
+fn parse_time_filter_cutoff(
+    where_clause: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<(String, chrono::NaiveDateTime)> {
+    // Parse: COLUMN >= DATE_SUB(NOW(), INTERVAL N HOUR|MINUTE) (case-insensitive)
+    let upper = where_clause.to_uppercase();
+    let (_, rest) = upper.split_once(">=")?;
+    let rest = rest.trim();
+
+    let inner = rest
+        .strip_prefix("DATE_SUB(NOW(),")
+        .or_else(|| rest.strip_prefix("DATE_SUB( NOW() ,"))
+        .or_else(|| rest.strip_prefix("DATE_SUB(NOW() ,"))
+        .or_else(|| rest.strip_prefix("DATE_SUB( NOW(),"))?;
+    let inner = inner.trim().trim_end_matches(')').trim();
+    let interval_body = inner.strip_prefix("INTERVAL")?;
+    let parts: Vec<&str> = interval_body.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let n = parts[0].parse::<i64>().ok()?;
+    let cutoff = now
+        - match parts[1] {
+            "HOUR" => chrono::Duration::hours(n),
+            "MINUTE" => chrono::Duration::minutes(n),
+            _ => return None,
+        };
+    let raw_upper = where_clause.to_uppercase();
+    let col_raw = where_clause[..raw_upper.find(">=").unwrap_or(0)]
+        .trim()
+        .to_string();
+    Some((col_raw, cutoff.naive_utc()))
+}
+
+fn row_passes_time_filter(
+    row: &std::collections::HashMap<String, serde_json::Value>,
+    col: &str,
+    cutoff_naive: chrono::NaiveDateTime,
+) -> bool {
+    let Some(val) = row.get(col) else {
+        return true;
+    };
+    let Some(row_time) = parse_coprocessor_time(val) else {
+        return true;
+    };
+    row_time >= cutoff_naive
+}
+
 fn apply_time_filter(
     rows: Vec<std::collections::HashMap<String, serde_json::Value>>,
     where_clause: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<std::collections::HashMap<String, serde_json::Value>> {
-    // Parse: COLUMN >= DATE_SUB(NOW(), INTERVAL N HOUR|MINUTE) (case-insensitive)
-    let upper = where_clause.to_uppercase();
-    let Some((_, rest)) = upper.split_once(">=") else {
+    let Some((col_raw, cutoff_naive)) = parse_time_filter_cutoff(where_clause, now) else {
         return rows;
     };
-    let rest = rest.trim();
-
-    // rest should look like: DATE_SUB(NOW(), INTERVAL N HOUR|MINUTE)
-    let Some(inner) = rest
-        .strip_prefix("DATE_SUB(NOW(),")
-        .or_else(|| rest.strip_prefix("DATE_SUB( NOW() ,"))
-        .or_else(|| rest.strip_prefix("DATE_SUB(NOW() ,"))
-        .or_else(|| rest.strip_prefix("DATE_SUB( NOW(),"))
-    else {
-        return rows;
-    };
-    let inner = inner.trim().trim_end_matches(')').trim();
-    // inner: INTERVAL N HOUR|MINUTE
-    let Some(interval_body) = inner.strip_prefix("INTERVAL") else {
-        return rows;
-    };
-    let parts: Vec<&str> = interval_body.split_whitespace().collect();
-    if parts.len() < 2 {
-        return rows;
-    }
-    let Ok(n) = parts[0].parse::<i64>() else {
-        return rows;
-    };
-    let cutoff = now
-        - match parts[1] {
-            "HOUR" => chrono::Duration::hours(n),
-            "MINUTE" => chrono::Duration::minutes(n),
-            _ => return rows,
-        };
-    let cutoff_naive = cutoff.naive_utc();
-
-    // Use the original-case column name from the raw where_clause
-    let raw_upper = where_clause.to_uppercase();
-    let col_raw = where_clause[..raw_upper.find(">=").unwrap_or(0)]
-        .trim()
-        .to_string();
 
     rows.into_iter()
-        .filter(|row| {
-            let Some(val) = row.get(&col_raw) else {
-                return true;
-            };
-            let Some(row_time) = parse_coprocessor_time(val) else {
-                return true;
-            };
-            row_time >= cutoff_naive
-        })
+        .filter(|row| row_passes_time_filter(row, &col_raw, cutoff_naive))
         .collect()
 }
 
 fn is_current_statements_summary_table(table_name: &str) -> bool {
     table_name.eq_ignore_ascii_case("STATEMENTS_SUMMARY")
         || table_name.eq_ignore_ascii_case("CLUSTER_STATEMENTS_SUMMARY")
+}
+
+fn row_passes_current_statement_summary_filter(
+    row: &std::collections::HashMap<String, serde_json::Value>,
+    collected_at: chrono::NaiveDateTime,
+) -> bool {
+    row.get("SUMMARY_END_TIME")
+        .and_then(parse_coprocessor_time)
+        // Preserve rows with an unknown representation instead of
+        // silently losing data if TiDB changes the encoding.
+        .is_none_or(|end_time| end_time > collected_at)
 }
 
 /// Keep only statement-summary rows whose interval was still open when the
@@ -2174,13 +2363,7 @@ pub fn filter_current_statement_summary_rows(
 ) -> Vec<std::collections::HashMap<String, serde_json::Value>> {
     let collected_at = collected_at.naive_utc();
     rows.into_iter()
-        .filter(|row| {
-            row.get("SUMMARY_END_TIME")
-                .and_then(parse_coprocessor_time)
-                // Preserve rows with an unknown representation instead of
-                // silently losing data if TiDB changes the encoding.
-                .is_none_or(|end_time| end_time > collected_at)
-        })
+        .filter(|row| row_passes_current_statement_summary_filter(row, collected_at))
         .collect()
 }
 
