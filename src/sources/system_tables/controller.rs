@@ -379,22 +379,7 @@ impl Controller {
                 let out_clone = self.out.clone();
                 let collection_config_clone = self.collection_config.clone();
                 let collection_semaphore = self.collection_semaphore.clone();
-                // Stagger first pull so instance collectors do not align on the same second.
-                let start_jitter = {
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    let mut hasher = DefaultHasher::new();
-                    collector_key.hash(&mut hasher);
-                    Duration::from_secs(hasher.finish() % 30)
-                };
                 let handle = tokio::spawn(async move {
-                    if !start_jitter.is_zero() {
-                        info!(
-                            "Delaying collector start by {:?} to stagger multi-TiDB pulls",
-                            start_jitter
-                        );
-                        tokio::time::sleep(start_jitter).await;
-                    }
                     Self::run_collector_task(
                         collector,
                         tables,
