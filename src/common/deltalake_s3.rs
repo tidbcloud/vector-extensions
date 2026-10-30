@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use reqwest::Client;
-use serde_json::Value;
 use tracing::{error, info, warn};
 use vector::aws::{AwsAuthentication, RegionOrEndpoint};
 use vector::sinks::s3_common::{self, service::S3Service};
@@ -10,125 +8,14 @@ use vector::sinks::Healthcheck;
 use vector_lib::config::proxy::ProxyConfig;
 use vector_lib::tls::TlsConfig;
 
+use crate::common::aliyun_sts::{self, ENV_OIDC_PROVIDER_ARN};
+
 /// Shared S3 + DeltaLake helpers used by multiple sinks.
 ///
 /// This module intentionally centralizes the logic that was duplicated across:
 /// - `sinks/deltalake`
 /// - `sinks/topsql_data_deltalake`
 /// - `sinks/topsql_meta_deltalake`
-
-/// Get temporary credentials from Aliyun STS using OIDC token (RRSA).
-async fn get_aliyun_sts_credentials(
-    token_file: &str,
-    role_arn: &str,
-    region: Option<String>,
-) -> vector::Result<(String, String, String)> {
-    use url::form_urlencoded;
-
-    // Read OIDC token from file
-    let oidc_token = tokio::fs::read_to_string(token_file)
-        .await
-        .map_err(|e| vector::Error::from(format!("Failed to read OIDC token file: {}", e)))?;
-    let oidc_token = oidc_token.trim();
-
-    // Extract account ID and role name from ARN: acs:ram::123456789012:role/role-name
-    let parts: Vec<&str> = role_arn.split(':').collect();
-    if parts.len() < 5 || !parts[0].eq("acs") || !parts[1].eq("ram") {
-        return Err(vector::Error::from(format!(
-            "Invalid Aliyun role ARN format: {}",
-            role_arn
-        )));
-    }
-
-    // Get OIDC provider ARN from environment (usually set by RRSA)
-    let oidc_provider_arn = std::env::var("ALIBABA_CLOUD_OIDC_PROVIDER_ARN")
-        .map_err(|_| vector::Error::from("ALIBABA_CLOUD_OIDC_PROVIDER_ARN not set"))?;
-
-    // Determine STS endpoint region
-    let sts_region = region.as_deref().unwrap_or("cn-hangzhou");
-    let sts_endpoint = format!("https://sts.{}.aliyuncs.com", sts_region);
-
-    // Build request parameters for Aliyun STS AssumeRoleWithOIDC
-    // Aliyun STS requires ISO 8601 format timestamp (e.g., 2023-11-18T23:15:01Z)
-    let timestamp_utc = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-    let mut params = HashMap::new();
-    params.insert("Action", "AssumeRoleWithOIDC");
-    params.insert("RoleArn", role_arn);
-    params.insert("OIDCProviderArn", &oidc_provider_arn);
-    params.insert("OIDCToken", oidc_token);
-    params.insert("RoleSessionName", "vector-deltalake");
-    params.insert("Format", "JSON");
-    params.insert("Version", "2015-04-01");
-    params.insert("Timestamp", &timestamp_utc);
-
-    // Note: In production, you should sign the request properly using Aliyun signature algorithm
-    // For now, we'll use a simplified approach - you may need to implement proper signing
-    // or use an Aliyun SDK
-
-    // Create HTTP client
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| vector::Error::from(format!("Failed to create HTTP client: {}", e)))?;
-
-    // Build query string
-    let query: String = form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(params.iter())
-        .finish();
-
-    let url = format!("{}?{}", sts_endpoint, query);
-
-    info!("Calling Aliyun STS AssumeRoleWithOIDC: {}", sts_endpoint);
-
-    // Make request
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| vector::Error::from(format!("Failed to call Aliyun STS: {}", e)))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        return Err(vector::Error::from(format!(
-            "Aliyun STS returned error: {} - {}",
-            status, text
-        )));
-    }
-
-    let json: Value = response
-        .json()
-        .await
-        .map_err(|e| vector::Error::from(format!("Failed to parse STS response: {}", e)))?;
-
-    // Extract credentials from response
-    let credentials = json
-        .get("Credentials")
-        .ok_or_else(|| vector::Error::from("No Credentials in STS response"))?;
-
-    let access_key_id = credentials
-        .get("AccessKeyId")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| vector::Error::from("No AccessKeyId in response"))?
-        .to_string();
-
-    let access_key_secret = credentials
-        .get("AccessKeySecret")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| vector::Error::from("No AccessKeySecret in response"))?
-        .to_string();
-
-    let security_token = credentials
-        .get("SecurityToken")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| vector::Error::from("No SecurityToken in response"))?
-        .to_string();
-
-    info!("Successfully obtained temporary credentials from Aliyun STS");
-
-    Ok((access_key_id, access_key_secret, security_token))
-}
 
 pub async fn create_service(
     bucket: Option<&str>,
@@ -399,21 +286,39 @@ pub async fn apply_s3_storage_options(
 
                     // Get region from endpoint or use default
                     let region = region.and_then(|r| r.region()).map(|s| s.to_string());
+                    let sts_result = match std::env::var(ENV_OIDC_PROVIDER_ARN) {
+                        Ok(oidc_provider_arn) => {
+                            aliyun_sts::get_aliyun_sts_credentials(
+                                &token_file,
+                                &role_arn,
+                                &oidc_provider_arn,
+                                region.as_deref(),
+                                "vector-deltalake",
+                            )
+                            .await
+                        }
+                        Err(_) => Err(vector::Error::from(format!(
+                            "{ENV_OIDC_PROVIDER_ARN} not set"
+                        ))),
+                    };
 
-                    match get_aliyun_sts_credentials(&token_file, &role_arn, region).await {
-                        Ok((access_key_id, access_key_secret, security_token)) => {
+                    match sts_result {
+                        Ok(creds) => {
                             info!("✓ Successfully obtained temporary credentials from Aliyun STS");
-                            storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id);
                             storage_options
-                                .insert("AWS_SECRET_ACCESS_KEY".to_string(), access_key_secret);
-                            storage_options.insert("AWS_SESSION_TOKEN".to_string(), security_token);
+                                .insert("AWS_ACCESS_KEY_ID".to_string(), creds.access_key_id);
+                            storage_options.insert(
+                                "AWS_SECRET_ACCESS_KEY".to_string(),
+                                creds.access_key_secret,
+                            );
+                            storage_options
+                                .insert("AWS_SESSION_TOKEN".to_string(), creds.security_token);
                             info!("✓ Using temporary credentials for OSS authentication");
                         }
                         Err(e) => {
                             error!("Failed to get temporary credentials from Aliyun STS: {}", e);
                             warn!("Falling back to environment variable credentials");
 
-                            // Fall back to environment variables
                             if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
                                 storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
                             }

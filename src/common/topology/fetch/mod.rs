@@ -352,7 +352,7 @@ enum TopologyFetcherImpl {
 }
 
 impl TopologyFetcher {
-    /// Create a new topology fetcher based on the current feature configuration
+    /// Create a new topology fetcher based on runtime mode (`VECTOR_NEXTGEN`).
     pub async fn new(
         pd_address: Option<String>,
         manager_server_address: Option<String>,
