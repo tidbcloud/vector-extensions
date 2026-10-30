@@ -248,19 +248,48 @@ pub struct NextgenTopologyFetcher {
     tidb_group: Option<String>,
     label_k8s_instance: Option<String>,
     kube_client: kube::Client,
+    /// When set, TiDB discovery uses manager `/api/tidb/get_active_tidb`
+    /// instead of the Kubernetes `tidb_group` label selector.
+    manager_server_address: Option<String>,
+    tidb_namespace: Option<String>,
+    manager_shard_config: Option<tidb_manager::ManagerShardConfig>,
+    http_client: Option<HttpClient<hyper::Body>>,
 }
 
 impl NextgenTopologyFetcher {
     pub async fn new(
         tidb_group: Option<String>,
         label_k8s_instance: Option<String>,
+        manager_server_address: Option<String>,
+        tidb_namespace: Option<String>,
+        tls_config: Option<TlsConfig>,
+        proxy_config: &ProxyConfig,
     ) -> Result<Self, FetchError> {
         let kube_client = Self::build_kube_client().await?;
+        let manager_server_address = manager_server_address
+            .map(LegacyTopologyFetcher::polish_manager_server_address)
+            .transpose()?;
+        let tidb_namespace = LegacyTopologyFetcher::normalize_tidb_namespace(
+            manager_server_address.as_deref(),
+            tidb_namespace,
+        )?;
+        let (manager_shard_config, http_client) = if manager_server_address.is_some() {
+            let shard = tidb_manager::read_manager_shard_config_from_env()
+                .context(ReadManagerShardConfigSnafu)?;
+            let client = LegacyTopologyFetcher::build_http_client(tls_config.as_ref(), proxy_config)?;
+            (shard, Some(client))
+        } else {
+            (None, None)
+        };
 
         Ok(Self {
             tidb_group,
             label_k8s_instance,
             kube_client,
+            manager_server_address,
+            tidb_namespace,
+            manager_shard_config,
+            http_client,
         })
     }
 
@@ -268,7 +297,21 @@ impl NextgenTopologyFetcher {
         &mut self,
         components: &mut HashSet<Component>,
     ) -> Result<(), FetchError> {
-        if let Some(tidb_group) = &self.tidb_group {
+        // Prefer manager-based TiDB discovery when configured (same as legacy).
+        if let (Some(manager_server_address), Some(http_client)) = (
+            self.manager_server_address.as_deref(),
+            self.http_client.as_ref(),
+        ) {
+            tidb_manager::TiDBManagerTopologyFetcher::new(
+                manager_server_address,
+                self.tidb_namespace.as_deref(),
+                http_client,
+                self.manager_shard_config,
+            )
+            .get_up_tidbs(components)
+            .await
+            .context(FetchTiDBFromManagerServerTopologySnafu)?;
+        } else if let Some(tidb_group) = &self.tidb_group {
             tidb_nextgen::TiDBNextGenTopologyFetcher::new(
                 self.kube_client.clone(),
                 tidb_group.clone(),
@@ -309,7 +352,7 @@ enum TopologyFetcherImpl {
 }
 
 impl TopologyFetcher {
-    /// Create a new topology fetcher based on the current feature configuration
+    /// Create a new topology fetcher based on runtime mode (`VECTOR_NEXTGEN`).
     pub async fn new(
         pd_address: Option<String>,
         manager_server_address: Option<String>,
@@ -323,7 +366,15 @@ impl TopologyFetcher {
         use crate::common::features::is_nextgen_mode;
 
         if is_nextgen_mode() {
-            let fetcher = NextgenTopologyFetcher::new(tidb_group, label_k8s_instance).await?;
+            let fetcher = NextgenTopologyFetcher::new(
+                tidb_group,
+                label_k8s_instance,
+                manager_server_address,
+                tidb_namespace,
+                tls_config,
+                proxy_config,
+            )
+            .await?;
             Ok(Self {
                 inner: TopologyFetcherImpl::Nextgen(fetcher),
             })

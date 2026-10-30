@@ -22,6 +22,9 @@ ARG TARGETARCH
 COPY vector-$TARGETARCH /usr/bin/vector
 # COPY vector.toml /etc/vector/vector.toml
 
+# Nextgen vs legacy is a runtime switch (same binary). Set to "true" for -ng images.
+ARG VECTOR_NEXTGEN=false
+ENV VECTOR_NEXTGEN=${VECTOR_NEXTGEN}
 ENV VECTOR_LOG="info"
 
 RUN ["chmod", "+x", "/usr/bin/vector"]

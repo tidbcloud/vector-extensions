@@ -260,80 +260,69 @@ fn make_metric_like_log_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::features::lock_nextgen_mode_for_test;
     use vector::event::Event;
 
     #[test]
     fn test_legacy_mode_generates_log_event() {
-        // In legacy mode (without nextgen feature), should generate LogEvent with batched data
-        #[cfg(not(feature = "nextgen"))]
-        {
-            let events = Buf::default()
-                .label_name("topsql_cpu_time_ms")
-                .instance("db:10080")
-                .instance_type("tidb")
-                .sql_digest("DEAD")
-                .plan_digest("BEEF")
-                .points([(1661396787, 80.0), (1661396788, 443.0)].into_iter())
-                .build_events()
-                .unwrap();
+        let _mode = lock_nextgen_mode_for_test(false);
+        let events = Buf::default()
+            .label_name("topsql_cpu_time_ms")
+            .instance("db:10080")
+            .instance_type("tidb")
+            .sql_digest("DEAD")
+            .plan_digest("BEEF")
+            .points([(1661396787, 80.0), (1661396788, 443.0)].into_iter())
+            .build_events()
+            .unwrap();
 
-            // Should generate 1 LogEvent with batched timestamps/values
-            assert_eq!(events.len(), 1);
+        // Should generate 1 LogEvent with batched timestamps/values
+        assert_eq!(events.len(), 1);
 
-            let event = &events[0];
-            assert!(matches!(event, Event::Log(_)));
+        let event = &events[0];
+        assert!(matches!(event, Event::Log(_)));
 
-            if let Event::Log(log_event) = event {
-                // Check labels
-                assert!(log_event.contains("labels"));
-
-                // Check timestamps array
-                assert!(log_event.contains("timestamps"));
-                if let Some(Value::Array(timestamps)) = log_event.get("timestamps") {
-                    assert_eq!(timestamps.len(), 2);
-                }
-
-                // Check values array
-                assert!(log_event.contains("values"));
-                if let Some(Value::Array(values)) = log_event.get("values") {
-                    assert_eq!(values.len(), 2);
-                }
+        if let Event::Log(log_event) = event {
+            assert!(log_event.contains("labels"));
+            assert!(log_event.contains("timestamps"));
+            if let Some(Value::Array(timestamps)) = log_event.get("timestamps") {
+                assert_eq!(timestamps.len(), 2);
+            }
+            assert!(log_event.contains("values"));
+            if let Some(Value::Array(values)) = log_event.get("values") {
+                assert_eq!(values.len(), 2);
             }
         }
     }
 
     #[test]
     fn test_nextgen_mode_generates_metric_events() {
-        // In nextgen mode (with nextgen feature), should generate individual Metric events
-        #[cfg(feature = "nextgen")]
-        {
-            let events = Buf::default()
-                .label_name("topsql_cpu_time_ms")
-                .instance("db:10080")
-                .instance_type("tidb")
-                .sql_digest("DEAD")
-                .plan_digest("BEEF")
-                .points([(1661396787, 80.0), (1661396788, 443.0)].into_iter())
-                .build_events()
-                .unwrap();
+        let _mode = lock_nextgen_mode_for_test(true);
+        let events = Buf::default()
+            .label_name("topsql_cpu_time_ms")
+            .instance("db:10080")
+            .instance_type("tidb")
+            .sql_digest("DEAD")
+            .plan_digest("BEEF")
+            .points([(1661396787, 80.0), (1661396788, 443.0)].into_iter())
+            .build_events()
+            .unwrap();
 
-            // Should generate 2 Metric events (one per data point)
-            assert_eq!(events.len(), 2);
+        // Should generate 2 Metric events (one per data point)
+        assert_eq!(events.len(), 2);
 
-            for event in &events {
-                assert!(matches!(event, Event::Metric(_)));
+        for event in &events {
+            assert!(matches!(event, Event::Metric(_)));
 
-                if let Event::Metric(metric) = event {
-                    assert_eq!(metric.name(), "topsql_cpu_time_ms");
-                    assert!(metric.timestamp().is_some());
+            if let Event::Metric(metric) = event {
+                assert_eq!(metric.name(), "topsql_cpu_time_ms");
+                assert!(metric.timestamp().is_some());
 
-                    // Check tags
-                    if let Some(tags) = metric.tags() {
-                        assert!(tags.contains_key("instance"));
-                        assert!(tags.contains_key("instance_type"));
-                        assert!(tags.contains_key("sql_digest"));
-                        assert!(tags.contains_key("plan_digest"));
-                    }
+                if let Some(tags) = metric.tags() {
+                    assert!(tags.contains_key("instance"));
+                    assert!(tags.contains_key("instance_type"));
+                    assert!(tags.contains_key("sql_digest"));
+                    assert!(tags.contains_key("plan_digest"));
                 }
             }
         }
@@ -341,53 +330,42 @@ mod tests {
 
     #[test]
     fn test_label_count_by_mode() {
-        let buf = Buf::default();
-
-        #[cfg(not(feature = "nextgen"))]
         {
-            // Legacy mode: 9 labels
-            assert_eq!(buf.labels.len(), 9);
+            let _mode = lock_nextgen_mode_for_test(false);
+            assert_eq!(Buf::default().labels.len(), 9);
         }
-
-        #[cfg(feature = "nextgen")]
         {
-            // Nextgen mode: 13 labels
-            assert_eq!(buf.labels.len(), 13);
+            let _mode = lock_nextgen_mode_for_test(true);
+            assert_eq!(Buf::default().labels.len(), 13);
         }
     }
 
     #[test]
     fn test_nextgen_only_setters_safe_in_legacy_mode() {
-        // These setters should not panic in legacy mode (they become no-ops)
-        #[cfg(not(feature = "nextgen"))]
-        {
-            let mut buf = Buf::default();
-            buf.keyspace_name("test-keyspace")
-                .vm_account_id("acc-123")
-                .vm_project_id("proj-456")
-                .sharedpool_id("pool-1");
+        let _mode = lock_nextgen_mode_for_test(false);
+        let mut buf = Buf::default();
+        buf.keyspace_name("test-keyspace")
+            .vm_account_id("acc-123")
+            .vm_project_id("proj-456")
+            .sharedpool_id("pool-1");
 
-            // Should not panic, calls are simply ignored
-            assert_eq!(buf.labels.len(), 9);
-        }
+        // Setters are no-ops in legacy mode
+        assert_eq!(buf.labels.len(), 9);
     }
 
     #[test]
     fn test_nextgen_only_setters_work_in_nextgen_mode() {
-        // These setters should work in nextgen mode
-        #[cfg(feature = "nextgen")]
-        {
-            let mut buf = Buf::default();
-            buf.keyspace_name("test-keyspace")
-                .vm_account_id("acc-123")
-                .vm_project_id("proj-456")
-                .sharedpool_id("pool-1");
+        let _mode = lock_nextgen_mode_for_test(true);
+        let mut buf = Buf::default();
+        buf.keyspace_name("test-keyspace")
+            .vm_account_id("acc-123")
+            .vm_project_id("proj-456")
+            .sharedpool_id("pool-1");
 
-            assert_eq!(buf.labels.len(), 13);
-            assert_eq!(buf.labels[9].1, "test-keyspace");
-            assert_eq!(buf.labels[10].1, "acc-123");
-            assert_eq!(buf.labels[11].1, "proj-456");
-            assert_eq!(buf.labels[12].1, "pool-1");
-        }
+        assert_eq!(buf.labels.len(), 13);
+        assert_eq!(buf.labels[9].1, "test-keyspace");
+        assert_eq!(buf.labels[10].1, "acc-123");
+        assert_eq!(buf.labels[11].1, "proj-456");
+        assert_eq!(buf.labels[12].1, "pool-1");
     }
 }

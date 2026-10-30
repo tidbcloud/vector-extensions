@@ -16,6 +16,9 @@ ARG TARGETARCH
 COPY vector-$TARGETARCH /vector
 
 # Use static binary for scratch compatibility
+# Nextgen vs legacy is a runtime switch (same binary). Set to "true" for -ng images.
+ARG VECTOR_NEXTGEN=false
+ENV VECTOR_NEXTGEN=${VECTOR_NEXTGEN}
 ENV VECTOR_LOG="info"
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 

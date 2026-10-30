@@ -31,8 +31,8 @@ trap cleanup EXIT
 #  linux/amd64 -> amd64
 #  linux/arm64 -> arm64
 #  linux/arm/v7 -> arm
-BINARY_NAME="${NEXTGEN:+vector-nextgen}"
-BINARY_NAME="${BINARY_NAME:-vector}"
+# One binary serves both legacy and nextgen; NEXTGEN only sets VECTOR_NEXTGEN in the image.
+BINARY_NAME="vector"
 cp target/x86_64-unknown-linux-gnu/release/${BINARY_NAME} "$WORK_DIR"/vector-amd64
 cp target/aarch64-unknown-linux-gnu/release/${BINARY_NAME} "$WORK_DIR"/vector-arm64
 # cp target/armv7-unknown-linux-gnueabihf/release/${BINARY_NAME} "$WORK_DIR"/vector-arm
@@ -54,7 +54,13 @@ debian)
 	;;
 esac
 
+BUILD_ARGS=()
+if [ -n "${NEXTGEN:-}" ]; then
+	BUILD_ARGS+=(--build-arg "VECTOR_NEXTGEN=true")
+	echo "Nextgen image: baking VECTOR_NEXTGEN=true into the image"
+fi
+
 #PLATFORMS="linux/amd64,linux/arm64,linux/arm/v7"
 PLATFORMS="linux/amd64,linux/arm64"
 echo "Building docker image: $TAG for $PLATFORMS"
-docker buildx build --push --platform="$PLATFORMS" -t "$TAG" -f "$DOCKERFILE" "$WORK_DIR"
+docker buildx build --push --platform="$PLATFORMS" -t "$TAG" -f "$DOCKERFILE" "${BUILD_ARGS[@]}" "$WORK_DIR"

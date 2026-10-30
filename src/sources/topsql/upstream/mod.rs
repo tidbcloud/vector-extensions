@@ -286,7 +286,7 @@ trait InstanceEventHandler: Send + Sync {
     async fn handle_instance_event(&self, base: &mut BaseTopSQLSource);
 }
 
-// Unified implementation - uses is_nextgen_mode() for compile-time branching
+// Unified implementation - uses is_nextgen_mode() for runtime branching
 struct UnifiedInstanceEventHandler;
 
 #[async_trait::async_trait]
