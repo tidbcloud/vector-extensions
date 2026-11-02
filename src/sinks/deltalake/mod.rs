@@ -211,13 +211,18 @@ impl DeltaLakeConfig {
 
         let mut storage_options = self.storage_options.clone().unwrap_or_default();
 
-        // Add S3 storage options if S3 service is available
-        if let Some(service) = s3_service {
-            info!("Applying S3 storage options - S3 service found");
-            self.apply_s3_storage_options(&mut storage_options, service)
-                .await?;
+        // Always apply S3/OSS storage options for cloud paths.
+        // Vector's AWS SDK create_service often fails under Alicloud RRSA (no static
+        // AK/SK), but Delta Lake auth still needs apply_s3_storage_options to run so
+        // Aliyun OIDC→STS credentials are injected.
+        if self.bucket.is_some() || self.base_path.starts_with("s3://") {
+            info!(
+                "Applying S3/OSS storage options (s3_service present: {})",
+                s3_service.is_some()
+            );
+            self.apply_s3_storage_options(&mut storage_options).await?;
         } else {
-            info!("No S3 service available - using default storage options only");
+            info!("No S3/OSS path configured - using default storage options only");
         }
 
         let sink = DeltaLakeSink::new(
@@ -245,7 +250,6 @@ impl DeltaLakeConfig {
     async fn apply_s3_storage_options(
         &self,
         storage_options: &mut HashMap<String, String>,
-        _service: &S3Service,
     ) -> vector::Result<()> {
         deltalake_s3::apply_s3_storage_options(
             storage_options,

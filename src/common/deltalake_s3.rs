@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use vector::aws::{AwsAuthentication, RegionOrEndpoint};
 use vector::sinks::s3_common::{self, service::S3Service};
 use vector::sinks::Healthcheck;
 use vector_lib::config::proxy::ProxyConfig;
 use vector_lib::tls::TlsConfig;
 
-use crate::common::aliyun_sts::{self, ENV_OIDC_PROVIDER_ARN};
+use crate::common::aliyun_sts::{self, ENV_OIDC_TOKEN_FILE, ENV_ROLE_ARN};
 
 /// Shared S3 + DeltaLake helpers used by multiple sinks.
 ///
@@ -16,6 +16,35 @@ use crate::common::aliyun_sts::{self, ENV_OIDC_PROVIDER_ARN};
 /// - `sinks/deltalake`
 /// - `sinks/topsql_data_deltalake`
 /// - `sinks/topsql_meta_deltalake`
+
+/// Exchange Aliyun RRSA/OIDC for temporary credentials and put them into
+/// Delta Lake `storage_options` (object_store reads static AWS_* keys).
+async fn insert_aliyun_rrsa_credentials(
+    storage_options: &mut HashMap<String, String>,
+    role_arn: &str,
+    region: Option<&str>,
+) -> vector::Result<()> {
+    info!("Detected Aliyun RRSA; exchanging OIDC token for STS credentials");
+    let (resolved_role, token_file, oidc_provider_arn) =
+        aliyun_sts::resolve_rrsa_config(Some(role_arn))?;
+    let creds = aliyun_sts::get_aliyun_sts_credentials(
+        &token_file,
+        &resolved_role,
+        &oidc_provider_arn,
+        region,
+        "vector-deltalake",
+    )
+    .await?;
+
+    storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), creds.access_key_id);
+    storage_options.insert(
+        "AWS_SECRET_ACCESS_KEY".to_string(),
+        creds.access_key_secret,
+    );
+    storage_options.insert("AWS_SESSION_TOKEN".to_string(), creds.security_token);
+    info!("✓ Delta Lake using Aliyun RRSA temporary credentials for OSS");
+    Ok(())
+}
 
 pub async fn create_service(
     bucket: Option<&str>,
@@ -164,15 +193,24 @@ pub async fn apply_s3_storage_options(
     info!("Configuring AWS authentication for Delta Lake (storage_options approach)");
 
     // Check Vector's auth configuration and map to Delta Lake storage_options
+    let region_str = region.and_then(|r| r.region()).map(|s| s.to_string());
     match auth {
         AwsAuthentication::Role {
             assume_role,
             external_id,
             ..
         } => {
-            // Check if Web Identity Token is available (for RRSA/OIDC)
-            if let Ok(token_file) = std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
-                // Use Web Identity Token authentication (RRSA)
+            // Aliyun RRSA: auth.assume_role is an acs:ram:: ARN.
+            // Must not fall through to AWS AssumeRole, which still needs base AK/SK.
+            if assume_role.starts_with("acs:ram::") {
+                insert_aliyun_rrsa_credentials(
+                    storage_options,
+                    assume_role,
+                    region_str.as_deref(),
+                )
+                .await?;
+            } else if let Ok(token_file) = std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
+                // Use Web Identity Token authentication (AWS IRSA/RRSA)
                 info!("Using Web Identity Token authentication (RRSA)");
                 info!("Token file: {}", token_file);
                 info!("Role ARN: {}", assume_role);
@@ -268,92 +306,43 @@ pub async fn apply_s3_storage_options(
         }
         AwsAuthentication::Default { .. } => {
             // Use default AWS credential chain (environment variables, instance roles, etc.)
-            // Check environment variables and pass them to Delta Lake
             info!("Using default AWS credential chain");
 
-            // Check for Web Identity Token (RRSA/OIDC) - support both AWS and Aliyun formats
-            let token_file = std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE")
-                .or_else(|_| std::env::var("ALIBABA_CLOUD_OIDC_TOKEN_FILE"));
-            let role_arn =
-                std::env::var("AWS_ROLE_ARN").or_else(|_| std::env::var("ALIBABA_CLOUD_ROLE_ARN"));
+            let aliyun_role = std::env::var(ENV_ROLE_ARN).ok();
+            let aws_token = std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE").ok();
+            let aws_role = std::env::var("AWS_ROLE_ARN").ok();
 
-            if let (Ok(token_file), Ok(role_arn)) = (token_file, role_arn) {
-                // Check if this is Aliyun format ARN (acs:ram::)
-                if role_arn.starts_with("acs:ram::") {
-                    // For Aliyun RRSA, call Aliyun STS to get temporary credentials
-                    warn!("Detected Aliyun RRSA (acs:ram:: ARN format)");
-                    info!("Attempting to get temporary credentials from Aliyun STS...");
+            if std::env::var(ENV_OIDC_TOKEN_FILE).is_ok()
+                && aliyun_role
+                    .as_deref()
+                    .is_some_and(|r| r.starts_with("acs:ram::"))
+            {
+                insert_aliyun_rrsa_credentials(
+                    storage_options,
+                    aliyun_role.as_deref().unwrap(),
+                    region_str.as_deref(),
+                )
+                .await?;
+            } else if let (Some(token_file), Some(role_arn)) = (aws_token, aws_role) {
+                info!("Using Web Identity Token authentication (AWS RRSA)");
+                info!("Token file: {}", token_file);
+                info!("Role ARN: {}", role_arn);
 
-                    // Get region from endpoint or use default
-                    let region = region.and_then(|r| r.region()).map(|s| s.to_string());
-                    let sts_result = match std::env::var(ENV_OIDC_PROVIDER_ARN) {
-                        Ok(oidc_provider_arn) => {
-                            aliyun_sts::get_aliyun_sts_credentials(
-                                &token_file,
-                                &role_arn,
-                                &oidc_provider_arn,
-                                region.as_deref(),
-                                "vector-deltalake",
-                            )
-                            .await
-                        }
-                        Err(_) => Err(vector::Error::from(format!(
-                            "{ENV_OIDC_PROVIDER_ARN} not set"
-                        ))),
-                    };
+                storage_options.insert("AWS_WEB_IDENTITY_TOKEN_FILE".to_string(), token_file);
+                storage_options.insert("AWS_ROLE_ARN".to_string(), role_arn);
 
-                    match sts_result {
-                        Ok(creds) => {
-                            info!("✓ Successfully obtained temporary credentials from Aliyun STS");
-                            storage_options
-                                .insert("AWS_ACCESS_KEY_ID".to_string(), creds.access_key_id);
-                            storage_options.insert(
-                                "AWS_SECRET_ACCESS_KEY".to_string(),
-                                creds.access_key_secret,
-                            );
-                            storage_options
-                                .insert("AWS_SESSION_TOKEN".to_string(), creds.security_token);
-                            info!("✓ Using temporary credentials for OSS authentication");
-                        }
-                        Err(e) => {
-                            error!("Failed to get temporary credentials from Aliyun STS: {}", e);
-                            warn!("Falling back to environment variable credentials");
-
-                            if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
-                                storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key);
-                            }
-                            if let Ok(secret_key) = std::env::var("AWS_SECRET_ACCESS_KEY") {
-                                storage_options
-                                    .insert("AWS_SECRET_ACCESS_KEY".to_string(), secret_key);
-                            }
-                            if let Ok(session_token) = std::env::var("AWS_SESSION_TOKEN") {
-                                storage_options
-                                    .insert("AWS_SESSION_TOKEN".to_string(), session_token);
-                            }
-                        }
-                    }
+                if let Ok(session_name) = std::env::var("AWS_ROLE_SESSION_NAME")
+                    .or_else(|_| std::env::var("ALIBABA_CLOUD_ROLE_SESSION_NAME"))
+                {
+                    storage_options.insert("AWS_ROLE_SESSION_NAME".to_string(), session_name);
                 } else {
-                    // AWS format ARN - use Web Identity Token
-                    info!("Using Web Identity Token authentication (AWS RRSA)");
-                    info!("Token file: {}", token_file);
-                    info!("Role ARN: {}", role_arn);
-
-                    storage_options.insert("AWS_WEB_IDENTITY_TOKEN_FILE".to_string(), token_file);
-                    storage_options.insert("AWS_ROLE_ARN".to_string(), role_arn);
-
-                    if let Ok(session_name) = std::env::var("AWS_ROLE_SESSION_NAME")
-                        .or_else(|_| std::env::var("ALIBABA_CLOUD_ROLE_SESSION_NAME"))
-                    {
-                        storage_options.insert("AWS_ROLE_SESSION_NAME".to_string(), session_name);
-                    } else {
-                        storage_options.insert(
-                            "AWS_ROLE_SESSION_NAME".to_string(),
-                            "vector-deltalake".to_string(),
-                        );
-                    }
-
-                    info!("✓ Delta Lake will use Web Identity Token (RRSA) authentication");
+                    storage_options.insert(
+                        "AWS_ROLE_SESSION_NAME".to_string(),
+                        "vector-deltalake".to_string(),
+                    );
                 }
+
+                info!("✓ Delta Lake will use Web Identity Token (RRSA) authentication");
             } else {
                 // Fall back to other credential methods
                 if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
