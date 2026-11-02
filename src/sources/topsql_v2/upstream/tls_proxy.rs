@@ -14,7 +14,10 @@ pub async fn tls_proxy(
     mut shutdown_subscriber: ShutdownSubscriber,
 ) -> vector::Result<u16> {
     let outbound = tls_connect(tls_config, address).await?;
-    let listener = TcpListener::bind("0.0.0.0:0").await?;
+    // Bind loopback only: the cleartext side is spliced into an already-authenticated
+    // mTLS stream. Consumers dial 127.0.0.1; binding 0.0.0.0 would expose the agent's
+    // identity to any peer that can reach the ephemeral port.
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local_address = listener.local_addr()?;
 
     tokio::spawn(
@@ -59,8 +62,13 @@ async fn accept_and_proxy(
     listener: TcpListener,
     outbound: SslStream<TcpStream>,
 ) -> vector::Result<()> {
-    let (inbound, _) = listener.accept().await?;
+    let (inbound, peer) = listener.accept().await?;
     drop(listener);
+    if !peer.ip().is_loopback() {
+        return Err(vector::Error::from(format!(
+            "rejected non-loopback TLS proxy peer: {peer}"
+        )));
+    }
     transfer(inbound, outbound).await?;
     Ok(())
 }

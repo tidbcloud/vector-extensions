@@ -16,7 +16,7 @@ mod tls_proxy {
     use tokio::io::AsyncWriteExt;
     use tokio::net::{TcpListener, TcpStream};
     use tokio_openssl::SslStream;
-    use tracing::{error, info};
+    use tracing::{debug, error, info};
     use vector_lib::tls::{tls_connector_builder, MaybeTlsSettings, TlsConfig};
 
     /// Create a TLS proxy for gRPC connections, similar to topsql implementation
@@ -27,10 +27,13 @@ mod tls_proxy {
         info!("Creating TLS proxy for address: {}", address);
 
         let outbound = tls_connect(tls_config, address).await?;
-        let listener = TcpListener::bind("0.0.0.0:0").await?;
+        // Bind loopback only: the cleartext side is spliced into an already-authenticated
+        // mTLS stream. Consumers dial 127.0.0.1; binding 0.0.0.0 would expose the agent's
+        // identity to any peer that can reach the ephemeral port.
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
         let local_address = listener.local_addr()?;
 
-        info!("TLS proxy listening on port: {}", local_address.port());
+        debug!("TLS proxy listening on loopback port: {}", local_address.port());
 
         tokio::spawn(async move {
             let res = accept_and_proxy(listener, outbound).await;
@@ -72,8 +75,11 @@ mod tls_proxy {
         listener: TcpListener,
         outbound: SslStream<TcpStream>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let (inbound, _) = listener.accept().await?;
+        let (inbound, peer) = listener.accept().await?;
         drop(listener);
+        if !peer.ip().is_loopback() {
+            return Err(format!("rejected non-loopback TLS proxy peer: {peer}").into());
+        }
         transfer(inbound, outbound).await?;
         Ok(())
     }
@@ -227,7 +233,7 @@ impl CoprocessorCollector {
                         ))
                     })?;
 
-            info!("TLS proxy created on local port: {}", proxy_port);
+            debug!("TLS proxy created on loopback port: {}", proxy_port);
 
             // Connect to local proxy instead of remote endpoint
             let proxy_endpoint = format!("http://127.0.0.1:{}", proxy_port);
