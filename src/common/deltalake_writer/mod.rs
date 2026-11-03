@@ -144,26 +144,29 @@ impl DeltaLakeWriter {
         };
 
         // -------------------------------------------------------------------
-        // Schema evolution: detect compatible new-column additions and reset
-        // the cached schemas so the next RecordBatch includes them.
+        // Schema evolution (opt-in): detect compatible new-column additions and
+        // reset the cached schemas so the next RecordBatch includes them.
+        // Defaults to off (`schema_evolution: false` / unset).
         // Drops and type changes are blocked inside check_schema_evolution.
         // -------------------------------------------------------------------
-        if let (Some(Event::Log(log_event)), Some(ref fixed_schema)) =
-            (events.first(), &self.fixed_arrow_schema)
-        {
-            if let schema::EvolutionResult::Compatible {
-                incoming_count,
-                fixed_count,
-            } = self
-                .schema_manager
-                .check_schema_evolution(log_event, fixed_schema)
+        if self.table_config.schema_evolution.unwrap_or(false) {
+            if let (Some(Event::Log(log_event)), Some(ref fixed_schema)) =
+                (events.first(), &self.fixed_arrow_schema)
             {
-                info!(
-                    "Compatible schema evolution detected for table {}: {} data fields incoming, {} in fixed cache. New columns will be merged.",
-                    table_name, incoming_count, fixed_count
-                );
-                self.fixed_arrow_schema = None;
-                self.schema_manager.reset_schema_cache(&table_name);
+                if let schema::EvolutionResult::Compatible {
+                    incoming_count,
+                    fixed_count,
+                } = self
+                    .schema_manager
+                    .check_schema_evolution(log_event, fixed_schema)
+                {
+                    info!(
+                        "Compatible schema evolution detected for table {}: {} data fields incoming, {} in fixed cache. New columns will be merged.",
+                        table_name, incoming_count, fixed_count
+                    );
+                    self.fixed_arrow_schema = None;
+                    self.schema_manager.reset_schema_cache(&table_name);
+                }
             }
         }
 

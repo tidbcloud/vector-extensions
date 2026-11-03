@@ -108,6 +108,28 @@ impl DeltaLakeSink {
         table_name: &str,
         events: &[Event],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // When `tables` is non-empty it is an allow-list: unknown names are rejected.
+        // Empty `tables` opts into dynamic discovery (schema_evolution off by default).
+        let table_config = match self.tables.iter().find(|t| t.name == table_name).cloned() {
+            Some(cfg) => cfg,
+            None if self.tables.is_empty() => {
+                info!(
+                    "Creating default table config for {} (dynamic discovery; schema_evolution=false)",
+                    table_name
+                );
+                DeltaTableConfig {
+                    name: table_name.to_string(),
+                    schema_evolution: Some(false),
+                }
+            }
+            None => {
+                return Err(format!(
+                    "Rejected Delta Lake write for unknown table '{table_name}' (not in configured tables allow-list)"
+                )
+                .into());
+            }
+        };
+
         // Get or create writer for this table
         let mut writers = self.writers.lock().await;
         let writer = writers.entry(table_name.to_string()).or_insert_with(|| {
@@ -126,20 +148,7 @@ impl DeltaLakeSink {
             };
 
             // Partition columns come from event _schema_metadata._partition_by,
-            // set by the system_tables source via TableConfig.partition_by
-            let table_config = self
-                .tables
-                .iter()
-                .find(|t| t.name == table_name)
-                .cloned()
-                .unwrap_or_else(|| {
-                    info!("Creating default table config for {}", table_name);
-                    DeltaTableConfig {
-                        name: table_name.to_string(),
-                        schema_evolution: Some(true),
-                    }
-                });
-
+            // set by the system_tables source via TableConfig.partition_by.
             DeltaLakeWriter::new(
                 table_path,
                 table_config,

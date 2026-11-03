@@ -49,7 +49,8 @@ pub struct VMImportDefaultBatchSettings;
 
 impl SinkBatchSettings for VMImportDefaultBatchSettings {
     const MAX_EVENTS: Option<usize> = Some(1_000);
-    const MAX_BYTES: Option<usize> = None;
+    // Secure-by-default: bound batch payload size (1 MiB); override via sink `batch.max_bytes`.
+    const MAX_BYTES: Option<usize> = Some(1_048_576);
     const TIMEOUT_SECS: f64 = 1.0;
 }
 

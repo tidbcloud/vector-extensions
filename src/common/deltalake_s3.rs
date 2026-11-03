@@ -104,10 +104,6 @@ pub async fn apply_s3_storage_options(
     deltalake::aws::register_handlers(None);
     debug!("Delta Lake S3 handlers registered");
 
-    // Set AWS storage options for Delta Lake
-    // Note: deltalake-aws uses AWS_ALLOW_HTTP (defined in deltalake_aws::constants::AWS_ALLOW_HTTP)
-    storage_options.insert("AWS_ALLOW_HTTP".to_string(), "true".to_string());
-
     // Explicitly set bucket if configured - this helps object_store correctly parse S3 URLs
     if let Some(bucket) = bucket {
         // For OSS with virtual hosted style, the bucket should be in the hostname
@@ -118,6 +114,7 @@ pub async fn apply_s3_storage_options(
     }
 
     // Set region from configuration
+    let mut allow_http = false;
     if let Some(region) = region {
         if let Some(region_str) = region.region() {
             storage_options.insert("AWS_REGION".to_string(), region_str.to_string());
@@ -137,9 +134,17 @@ pub async fn apply_s3_storage_options(
                         format!("https://{}", endpoint)
                     }
                 };
+            allow_http = endpoint_url.starts_with("http://");
             info!("Setting OSS endpoint URL: {}", endpoint_url);
             storage_options.insert("AWS_ENDPOINT_URL".to_string(), endpoint_url);
         }
+    }
+
+    // Only allow cleartext object-store access when the configured endpoint is HTTP
+    // (e.g. Alicloud OSS internal). HTTPS / default AWS S3 stays TLS-only.
+    if allow_http {
+        storage_options.insert("AWS_ALLOW_HTTP".to_string(), "true".to_string());
+        info!("AWS_ALLOW_HTTP enabled because endpoint uses http://");
     }
 
     // Determine if we're using OSS (Alibaba Cloud Object Storage Service)

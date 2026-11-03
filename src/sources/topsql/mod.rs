@@ -1,5 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
+use tracing::warn;
 use vector::config::{GenerateConfig, SourceConfig, SourceContext};
 use vector_lib::{
     config::{DataType, LogNamespace, SourceOutput},
@@ -72,7 +73,8 @@ pub const fn default_topology_fetch_interval() -> f64 {
 }
 
 pub const fn default_top_n() -> usize {
-    0
+    // Secure-by-default: bound TopSQL fan-out unless the operator opts into 0 (unlimited).
+    10
 }
 
 pub const fn default_downsampling_interval() -> u32 {
@@ -176,6 +178,9 @@ impl SourceConfig for TopSQLConfig {
 impl TopSQLConfig {
     fn validate_tls(&self) -> vector::Result<()> {
         if self.tls.is_none() {
+            warn!(
+                "topsql TLS is not configured; connections will use cleartext. Set `tls` to enable mTLS."
+            );
             return Ok(());
         }
 

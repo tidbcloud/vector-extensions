@@ -6,6 +6,11 @@ use vector::tls::{TlsConfig, TlsSettings};
 
 /// Builds a standardized reqwest::Client with consistent configuration
 /// for use throughout the project.
+///
+/// TLS verification defaults to **on** (`verify_certificate` /
+/// `verify_hostname` default to `true` when unset). Operators must
+/// explicitly set those fields to `false` to disable verification —
+/// matching `keyspace_cluster` and Vector's own TLS defaults.
 pub async fn build_reqwest_client(
     tls: Option<TlsConfig>,
     timeout: Option<Duration>,
@@ -15,6 +20,13 @@ pub async fn build_reqwest_client(
 
     // Configure TLS if provided
     if let Some(tls) = tls {
+        // Secure-by-default: verify unless the operator opts out.
+        let accept_invalid_certs = !tls.verify_certificate.unwrap_or(true);
+        let accept_invalid_hostnames = !tls.verify_hostname.unwrap_or(true);
+        builder = builder
+            .danger_accept_invalid_certs(accept_invalid_certs)
+            .danger_accept_invalid_hostnames(accept_invalid_hostnames);
+
         if let Some(ca_file) = tls.ca_file.clone() {
             let ca = match tokio::fs::read(ca_file).await {
                 Ok(v) => v,
@@ -24,23 +36,23 @@ pub async fn build_reqwest_client(
                 }
             };
 
+            builder = builder.add_root_certificate(
+                Certificate::from_pem(&ca)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+            );
+        }
+
+        if tls.crt_file.is_some() || tls.key_file.is_some() {
             let settings = TlsSettings::from_options(Some(&tls.clone()))
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
             let (crt, key) = settings
                 .identity_pem()
                 .ok_or_else(|| "Invalid identity PEM")?;
 
-            builder = builder
-                .add_root_certificate(
-                    Certificate::from_pem(&ca)
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
-                )
-                .identity(
-                    Identity::from_pkcs8_pem(&crt, &key)
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
-                )
-                .danger_accept_invalid_certs(true)
-                .danger_accept_invalid_hostnames(true);
+            builder = builder.identity(
+                Identity::from_pkcs8_pem(&crt, &key)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+            );
         }
     }
 
