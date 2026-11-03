@@ -255,6 +255,26 @@ pub mod utils {
         let mut event = Event::Log(LogEvent::default());
         let log = event.as_mut_log();
 
+        // Insert collected row columns first. Agent provenance/routing metadata is
+        // stamped afterwards so it cannot be overwritten by a colliding column
+        // name from the monitored cluster (e.g. forged `/schema` JSON).
+        for (key, value) in row_data {
+            if is_reserved_event_key(&key) {
+                warn!(
+                    message = "Skipping collected column that collides with reserved agent field",
+                    column = %key,
+                    table = %metadata.table_config.dest_table
+                );
+                continue;
+            }
+            log.insert(key.as_str(), value);
+        }
+
+        // For non-cluster tables, add instance column to the actual data
+        if !metadata.table_config.source_table.starts_with("CLUSTER_") {
+            log.insert("instance", metadata.instance.clone());
+        }
+
         // Generate unique incremental ID
         let unique_id = GLOBAL_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         log.insert(
@@ -262,7 +282,7 @@ pub mod utils {
             Value::Number(serde_json::Number::from(unique_id)),
         );
 
-        // Add standard metadata
+        // Add standard metadata (must win over any row column of the same name)
         log.insert("_vector_table", metadata.table_config.dest_table.clone());
         log.insert(
             "_vector_source_table",
@@ -323,17 +343,12 @@ pub mod utils {
             }
         }
 
-        // Add the actual row data
-        for (key, value) in row_data {
-            log.insert(key.as_str(), value);
-        }
-
-        // For non-cluster tables, add instance column to the actual data
-        if !metadata.table_config.source_table.starts_with("CLUSTER_") {
-            log.insert("instance", metadata.instance.clone());
-        }
-
         event
+    }
+
+    /// Keys reserved for agent routing/provenance; collected columns must not set them.
+    fn is_reserved_event_key(key: &str) -> bool {
+        key == "_schema_metadata" || key.starts_with("_vector_")
     }
 
     /// Parse collection interval
@@ -448,5 +463,65 @@ mod tests {
         assert!(log_event.get("_vector_table").is_some());
         assert!(log_event.get("_vector_instance").is_some());
         assert!(log_event.get("DIGEST").is_some());
+    }
+
+    #[test]
+    fn test_reserved_columns_cannot_overwrite_agent_metadata() {
+        let mut row_data = HashMap::new();
+        row_data.insert(
+            "_vector_table".to_string(),
+            serde_json::Value::String("../evil".to_string()),
+        );
+        row_data.insert(
+            "_vector_instance".to_string(),
+            serde_json::Value::String("forged".to_string()),
+        );
+        row_data.insert(
+            "DIGEST".to_string(),
+            serde_json::Value::String("ok".to_string()),
+        );
+
+        let metadata = CollectionMetadata {
+            instance: "real_instance".to_string(),
+            table_config: TableConfig {
+                source_schema: "information_schema".to_string(),
+                source_table: "CLUSTER_STATEMENTS_SUMMARY".to_string(),
+                dest_table: "persisted_statements_summary".to_string(),
+                collection_interval: "short".to_string(),
+                where_clause: None,
+                enabled: true,
+                partition_by: None,
+            },
+            collection_method: CollectionMethod::Coprocessor,
+            timestamp: chrono::Utc::now(),
+            row_count: 1,
+            duration_ms: 1,
+            extra: HashMap::new(),
+        };
+
+        let event = utils::create_event_from_metadata(&metadata, row_data);
+        let log_event = match event {
+            Event::Log(log_event) => log_event,
+            _ => panic!("Expected Log event"),
+        };
+
+        assert_eq!(
+            log_event
+                .get("_vector_table")
+                .and_then(|v| v.as_str())
+                .as_deref(),
+            Some("persisted_statements_summary")
+        );
+        assert_eq!(
+            log_event
+                .get("_vector_instance")
+                .and_then(|v| v.as_str())
+                .as_deref(),
+            Some("real_instance")
+        );
+        assert_eq!(
+            log_event.get("DIGEST").and_then(|v| v.as_str()).as_deref(),
+            Some("ok")
+        );
     }
 }
