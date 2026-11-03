@@ -207,6 +207,29 @@ pub trait DataCollector: Send + Sync + 'static {
         table: &TableConfig,
     ) -> Result<CollectionResult, CollectionError>;
 
+    /// Collect and emit rows without retaining a full in-memory copy of every
+    /// row after it has been sent. Default implementation still materializes
+    /// the full result first, then moves rows into events (no per-row clone).
+    /// Collectors that can stream should override this for lower peak memory.
+    async fn collect_and_emit(
+        &self,
+        table: &TableConfig,
+        out: &mut vector::SourceSender,
+    ) -> Result<usize, CollectionError> {
+        let result = self.collect_table_data(table).await?;
+        let row_count = result.data.len();
+        let CollectionResult { data, metadata } = result;
+        for row_data in data {
+            let event = utils::create_event_from_metadata(&metadata, row_data);
+            if out.send_event(event).await.is_err() {
+                return Err(CollectionError::NetworkError(
+                    "Failed to send event: downstream closed".to_string(),
+                ));
+            }
+        }
+        Ok(row_count)
+    }
+
     /// Get collector health status
     async fn health_check(&self) -> Result<(), CollectionError>;
 }
@@ -216,9 +239,17 @@ pub mod utils {
     use super::*;
     use vector_lib::event::{Event, LogEvent};
 
-    /// Create a Vector event from collection result
+    /// Create a Vector event from collection result (moves `row_data`, no clone).
     pub fn create_event_from_result(
         result: &CollectionResult,
+        row_data: HashMap<String, Value>,
+    ) -> Event {
+        create_event_from_metadata(&result.metadata, row_data)
+    }
+
+    /// Create a Vector event from metadata and an owned row (moves the row).
+    pub fn create_event_from_metadata(
+        metadata: &CollectionMetadata,
         row_data: HashMap<String, Value>,
     ) -> Event {
         let mut event = Event::Log(LogEvent::default());
@@ -232,38 +263,35 @@ pub mod utils {
         );
 
         // Add standard metadata
-        log.insert(
-            "_vector_table",
-            result.metadata.table_config.dest_table.clone(),
-        );
+        log.insert("_vector_table", metadata.table_config.dest_table.clone());
         log.insert(
             "_vector_source_table",
-            result.metadata.table_config.source_table.clone(),
+            metadata.table_config.source_table.clone(),
         );
         log.insert(
             "_vector_source_schema",
-            result.metadata.table_config.source_schema.clone(),
+            metadata.table_config.source_schema.clone(),
         );
-        log.insert("_vector_instance", result.metadata.instance.clone());
-        log.insert("_vector_timestamp", result.metadata.timestamp.to_rfc3339());
+        log.insert("_vector_instance", metadata.instance.clone());
+        log.insert("_vector_timestamp", metadata.timestamp.to_rfc3339());
         log.insert(
             "_vector_collection_method",
-            result.metadata.collection_method.to_string(),
+            metadata.collection_method.to_string(),
         );
 
         // Add performance metadata
         log.insert(
             "_vector_collection_duration_ms",
-            result.metadata.duration_ms as i64,
+            metadata.duration_ms as i64,
         );
-        log.insert("_vector_row_count", result.metadata.row_count as i64);
+        log.insert("_vector_row_count", metadata.row_count as i64);
 
         // Add extra metadata
-        for (key, value) in &result.metadata.extra {
+        for (key, value) in &metadata.extra {
             if key == "schema_metadata" {
                 let mut schema_meta = value.clone();
                 // Inject partition_by from table config into schema metadata
-                if let Some(partition_by) = &result.metadata.table_config.partition_by {
+                if let Some(partition_by) = &metadata.table_config.partition_by {
                     let partition_value = Value::String(partition_by.join(","));
                     if let Some(obj) = schema_meta.as_object_mut() {
                         obj.insert("_partition_by".to_string(), partition_value);
@@ -272,7 +300,7 @@ pub mod utils {
                         // schema_metadata exists but is not an object; build a fresh one
                         warn!(
                             "schema_metadata for table {} is not a JSON object, creating new object for partition_by",
-                            result.metadata.table_config.dest_table
+                            metadata.table_config.dest_table
                         );
                         let mut new_meta = serde_json::Map::new();
                         new_meta.insert("_partition_by".to_string(), partition_value);
@@ -286,8 +314,8 @@ pub mod utils {
         }
 
         // If partition_by is configured but no schema_metadata came from extra, create one
-        if !result.metadata.extra.contains_key("schema_metadata") {
-            if let Some(partition_by) = &result.metadata.table_config.partition_by {
+        if !metadata.extra.contains_key("schema_metadata") {
+            if let Some(partition_by) = &metadata.table_config.partition_by {
                 let partition_value = Value::String(partition_by.join(","));
                 let mut schema_meta = serde_json::Map::new();
                 schema_meta.insert("_partition_by".to_string(), partition_value);
@@ -301,13 +329,8 @@ pub mod utils {
         }
 
         // For non-cluster tables, add instance column to the actual data
-        if !result
-            .metadata
-            .table_config
-            .source_table
-            .starts_with("CLUSTER_")
-        {
-            log.insert("instance", result.metadata.instance.clone());
+        if !metadata.table_config.source_table.starts_with("CLUSTER_") {
+            log.insert("instance", metadata.instance.clone());
         }
 
         event

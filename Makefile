@@ -53,11 +53,10 @@ build:
 	@cargo build --no-default-features --features default
 	@echo "Done building."
 
+# Nextgen is a runtime mode (VECTOR_NEXTGEN=true); same binary as legacy.
 .PHONY: build-nextgen
-build-nextgen:
-	@echo "Building nextgen mode..."
-	@cargo build --no-default-features --features default,nextgen
-	@echo "Done building nextgen mode."
+build-nextgen: build
+	@echo "Note: nextgen is enabled at runtime via VECTOR_NEXTGEN=true (same binary)."
 
 .PHONY: build-release
 build-release:
@@ -66,57 +65,31 @@ build-release:
 	@echo "Done building release."
 
 .PHONY: build-release-nextgen
-build-release-nextgen:
-	@echo "Building release nextgen mode..."
-	@cargo build --release --no-default-features --features default,nextgen
-	@echo "Done building release nextgen mode."
+build-release-nextgen: build-release
+	@echo "Note: nextgen is enabled at runtime via VECTOR_NEXTGEN=true (same binary)."
 
 .PHONY: build-x86_64-unknown-linux-gnu
 build-x86_64-unknown-linux-gnu: target/x86_64-unknown-linux-gnu/release/vector
-	@echo "Output to ${<}"
-
-.PHONY: build-x86_64-unknown-linux-gnu-nextgen
-build-x86_64-unknown-linux-gnu-nextgen: target/x86_64-unknown-linux-gnu/release/vector-nextgen
 	@echo "Output to ${<}"
 
 .PHONY: build-aarch64-unknown-linux-gnu
 build-aarch64-unknown-linux-gnu: target/aarch64-unknown-linux-gnu/release/vector
 	@echo "Output to ${<}"
 
-.PHONY: build-aarch64-unknown-linux-gnu-nextgen
-build-aarch64-unknown-linux-gnu-nextgen: target/aarch64-unknown-linux-gnu/release/vector-nextgen
-	@echo "Output to ${<}"
-
 .PHONY: build-armv7-unknown-linux-gnueabihf
 build-armv7-unknown-linux-gnueabihf: target/armv7-unknown-linux-gnueabihf/release/vector
-	@echo "Output to ${<}"
-
-.PHONY: build-armv7-unknown-linux-gnueabihf-nextgen
-build-armv7-unknown-linux-gnueabihf-nextgen: target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
 	@echo "Output to ${<}"
 
 .PHONY: build-x86_64-unknown-linux-musl
 build-x86_64-unknown-linux-musl: target/x86_64-unknown-linux-musl/release/vector
 	@echo "Output to ${<}"
 
-.PHONY: build-x86_64-unknown-linux-musl-nextgen
-build-x86_64-unknown-linux-musl-nextgen: target/x86_64-unknown-linux-musl/release/vector-nextgen
-	@echo "Output to ${<}"
-
 .PHONY: build-aarch64-unknown-linux-musl
 build-aarch64-unknown-linux-musl: target/aarch64-unknown-linux-musl/release/vector
 	@echo "Output to ${<}"
 
-.PHONY: build-aarch64-unknown-linux-musl-nextgen
-build-aarch64-unknown-linux-musl-nextgen: target/aarch64-unknown-linux-musl/release/vector-nextgen
-	@echo "Output to ${<}"
-
 .PHONY: build-armv7-unknown-linux-musleabihf
 build-armv7-unknown-linux-musleabihf: target/armv7-unknown-linux-musleabihf/release/vector
-	@echo "Output to ${<}"
-
-.PHONY: build-armv7-unknown-linux-musleabihf-nextgen
-build-armv7-unknown-linux-musleabihf-nextgen: target/armv7-unknown-linux-musleabihf/release/vector-nextgen
 	@echo "Output to ${<}"
 
 # Auto-detect Docker platform for cross-compilation
@@ -160,24 +133,6 @@ target/%/vector: cargo-install-cross
 		--no-default-features \
 		--features ${FEATURES}
 
-target/%/vector-nextgen: export PAIR =$(subst /, ,$(@:target/%/vector-nextgen=%))
-target/%/vector-nextgen: export TRIPLE ?=$(word 1,${PAIR})
-target/%/vector-nextgen: export PROFILE ?=$(word 2,${PAIR})
-target/%/vector-nextgen: export FEATURES =default,nextgen
-target/%/vector-nextgen: export CFLAGS += -g0 -O3
-target/%/vector-nextgen: cargo-install-cross
-	$(MAKE) -k cross-image-${TRIPLE}
-	cross build \
-		$(if $(findstring release,$(PROFILE)),--release,) \
-		--target ${TRIPLE} \
-		--no-default-features \
-		--features ${FEATURES}
-	@# Rename vector to vector-nextgen after build
-	@if [ -f target/${TRIPLE}/${PROFILE}/vector ] && [ ! -f target/${TRIPLE}/${PROFILE}/vector-nextgen ]; then \
-		mv target/${TRIPLE}/${PROFILE}/vector target/${TRIPLE}/${PROFILE}/vector-nextgen; \
-		echo "Renamed vector to vector-nextgen"; \
-	fi
-
 .PHONY: cargo-install-%
 cargo-install-%: override TOOL = $(@:cargo-install-%=%)
 cargo-install-%:
@@ -205,18 +160,18 @@ release-docker-minimal: target/aarch64-unknown-linux-musl/release/vector
 	@DOCKER_BASE=minimal scripts/release-docker.sh
 	@echo "Done releasing minimal scratch docker image."
 
+# Same binary as release-docker; image bakes VECTOR_NEXTGEN=true for drop-in -ng tags.
 .PHONY: release-docker-nextgen
-release-docker-nextgen: target/x86_64-unknown-linux-gnu/release/vector-nextgen
-release-docker-nextgen: target/aarch64-unknown-linux-gnu/release/vector-nextgen
-# release-docker-nextgen: target/armv7-unknown-linux-gnueabihf/release/vector-nextgen
-	@echo "Releasing docker image (nextgen mode)..."
+release-docker-nextgen: target/x86_64-unknown-linux-gnu/release/vector
+release-docker-nextgen: target/aarch64-unknown-linux-gnu/release/vector
+	@echo "Releasing docker image (nextgen mode via VECTOR_NEXTGEN=true)..."
 	@NEXTGEN=true scripts/release-docker.sh
 	@echo "Done releasing docker image (nextgen mode)."
 
 .PHONY: release-docker-nextgen-alpine
-release-docker-nextgen-alpine: target/x86_64-unknown-linux-musl/release/vector-nextgen
-release-docker-nextgen-alpine: target/aarch64-unknown-linux-musl/release/vector-nextgen
-	@echo "Releasing Alpine docker image (nextgen mode)..."
+release-docker-nextgen-alpine: target/x86_64-unknown-linux-musl/release/vector
+release-docker-nextgen-alpine: target/aarch64-unknown-linux-musl/release/vector
+	@echo "Releasing Alpine docker image (nextgen mode via VECTOR_NEXTGEN=true)..."
 	@NEXTGEN=true DOCKER_BASE=alpine scripts/release-docker.sh
 	@echo "Done releasing Alpine docker image (nextgen mode)."
 

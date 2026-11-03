@@ -33,7 +33,7 @@ TopSQL v2 Source
 2. **Improved Error Recovery**: More robust error handling and recovery
 3. **Better Performance**: Optimized data collection and processing
 4. **Next-gen Features**: Support for new TiDB/TiKV features
-5. **Manager-based TiDB Discovery**: In legacy mode, active TiDB instances can be discovered from a manager service via `manager_server_address` and `tidb_namespace`
+5. **Manager-based TiDB Discovery**: Active TiDB instances can be discovered from a manager service via `manager_server_address` and `tidb_namespace` in both legacy and nextgen modes
 
 ## Configuration
 
@@ -46,11 +46,12 @@ pub struct TopSQLV2Config {
 }
 ```
 
-Legacy mode discovery options:
+Discovery options:
 
-- `pd_address`: used for PD/store discovery and schema management
-- `manager_server_address`: optional manager endpoint used to fetch active TiDB instances
-- `tidb_namespace`: manager namespace list used when calling `/api/tidb/get_active_tidb`
+- `pd_address`: used for PD/store discovery and schema management (legacy mode)
+- `manager_server_address`: optional manager endpoint used to fetch active TiDB instances (legacy and nextgen)
+- `tidb_namespace`: manager namespace list used when calling `/api/tidb/get_active_tidb` (required when manager is set)
+- `tidb_group` / `label_k8s_instance`: Kubernetes discovery in nextgen when manager is not set
 - `enable_tikv_topsql`: whether to collect `tikv_topsql` and `tikv_topregion`; defaults to `true`
 - `topru`: TiDB TopRU subscription options (`enable`, `report_interval_seconds`, `item_interval_seconds`)
 

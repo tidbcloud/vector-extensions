@@ -53,12 +53,12 @@ Components (Sources/Sinks)
 - **TiKV**: Discovers TiKV store instances
 - **TiFlash**: Discovers TiFlash instances
 - **Store**: Discovers store information
-- **Manager-based TiDB discovery**: In legacy mode, TiDB instances can be fetched from manager `/api/tidb/get_active_tidb`
+- **Manager-based TiDB discovery**: TiDB instances can be fetched from manager `/api/tidb/get_active_tidb` in both legacy and nextgen modes
 
 ### Next-Gen Support
 
-- **TiDB Nextgen**: Support for next-gen TiDB features
-- **TiKV Nextgen**: Support for next-gen TiKV features
+- **TiDB Nextgen**: Kubernetes label-based TiDB discovery via `tidb_group`, or manager-based discovery when `manager_server_address` is set
+- **TiKV Nextgen**: Support for next-gen TiKV features via `label_k8s_instance`
 
 ## Configuration
 
@@ -72,9 +72,9 @@ pub struct TopologyFetcher {
 }
 ```
 
-Legacy manager-based TiDB discovery also supports keyspace-aware sharding:
+Manager-based TiDB discovery (legacy and nextgen) also supports keyspace-aware sharding:
 
-- `manager_server_address`: fetch active TiDB instances from manager instead of etcd
+- `manager_server_address`: fetch active TiDB instances from manager (legacy: instead of etcd; nextgen: instead of `tidb_group` k8s discovery)
 - `tidb_namespace`: namespace list sent to `/api/tidb/get_active_tidb?namespace=...`; required when `manager_server_address` is set
 - `VECTOR_STS_REPLICA_COUNT`: total number of Vector StatefulSet replicas
 - `VECTOR_STS_ID`: current Vector StatefulSet ordinal

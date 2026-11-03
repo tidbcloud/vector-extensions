@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use futures::TryStreamExt;
 use serde_json::Value;
 use sqlx::{Column, Row};
 use tracing::{debug, info, warn};
 
 use crate::sources::system_tables::data_collector::{
-    CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
+    utils, CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
     CollectorConfigType, DataCollector,
 };
 use crate::sources::system_tables::TableConfig;
@@ -149,15 +150,8 @@ impl SqlCollector {
         Ok(column_types)
     }
 
-    /// Query data from a TiDB table
-    async fn query_table_data(
-        &self,
-        table: &TableConfig,
-        pool: &sqlx::mysql::MySqlPool,
-        column_types: &HashMap<String, (String, bool)>,
-    ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
-        // Build SQL query
-        let sql = if let Some(where_clause) = &table.where_clause {
+    fn build_select_sql(&self, table: &TableConfig) -> String {
+        if let Some(where_clause) = &table.where_clause {
             format!(
                 "SELECT * FROM {}.{} WHERE {}",
                 table.source_schema, table.source_table, where_clause
@@ -167,37 +161,53 @@ impl SqlCollector {
                 "SELECT * FROM {}.{}",
                 table.source_schema, table.source_table
             )
-        };
+        }
+    }
 
+    fn row_to_map(
+        &self,
+        row: &sqlx::mysql::MySqlRow,
+        column_types: &HashMap<String, (String, bool)>,
+    ) -> Result<HashMap<String, Value>, CollectionError> {
+        let mut map = HashMap::new();
+        for (i, column) in row.columns().iter().enumerate() {
+            let column_name = column.name().to_string();
+            let value = self.convert_mysql_value(row, i, &column_name, column_types)?;
+            map.insert(column_name, value);
+        }
+        Ok(map)
+    }
+
+    /// Query data from a TiDB table.
+    ///
+    /// Uses a streaming fetch so MySQL wire rows are not all buffered before
+    /// conversion. Callers that need lower peak memory should use
+    /// [`DataCollector::collect_and_emit`] instead of materializing the Vec.
+    async fn query_table_data(
+        &self,
+        table: &TableConfig,
+        pool: &sqlx::mysql::MySqlPool,
+        column_types: &HashMap<String, (String, bool)>,
+    ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
+        let sql = self.build_select_sql(table);
         debug!("Executing query: {}", sql);
 
-        // Execute query
-        let rows = sqlx::query(&sql)
-            .fetch_all(pool)
+        let mut stream = sqlx::query(&sql).fetch(pool);
+        let mut result = Vec::new();
+        while let Some(row) = stream
+            .try_next()
             .await
-            .map_err(|e| CollectionError::QueryError(format!("Data query failed: {}", e)))?;
+            .map_err(|e| CollectionError::QueryError(format!("Data query failed: {}", e)))?
+        {
+            result.push(self.row_to_map(&row, column_types)?);
+        }
 
         debug!(
             "Query returned {} rows for {}.{}",
-            rows.len(),
+            result.len(),
             table.source_schema,
             table.source_table
         );
-
-        // Convert rows to HashMap format using schema information
-        let mut result = Vec::new();
-        for row in rows.iter() {
-            let mut map = HashMap::new();
-
-            for (i, column) in row.columns().iter().enumerate() {
-                let column_name = column.name().to_string();
-
-                // Convert value based on MySQL schema
-                let value = self.convert_mysql_value(&row, i, &column_name, column_types)?;
-                map.insert(column_name, value);
-            }
-            result.push(map);
-        }
 
         Ok(result)
     }
@@ -423,6 +433,68 @@ impl DataCollector for SqlCollector {
         );
 
         Ok(CollectionResult { data, metadata })
+    }
+
+    async fn collect_and_emit(
+        &self,
+        table: &TableConfig,
+        out: &mut vector::SourceSender,
+    ) -> Result<usize, CollectionError> {
+        let start_time = Instant::now();
+        let timestamp = chrono::Utc::now();
+
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            CollectionError::ConfigurationError("Pool not initialized".to_string())
+        })?;
+
+        let column_types = self.get_table_schema(table, pool).await?;
+        let sql = self.build_select_sql(table);
+        debug!("Executing streaming query: {}", sql);
+
+        // row_count is unknown until the stream ends; events carry 0 here.
+        // Peak memory stays near one converted row + the current event.
+        let mut extra = HashMap::new();
+        extra.insert(
+            "schema_columns".to_string(),
+            Value::Number(column_types.len().into()),
+        );
+        let metadata = CollectionMetadata {
+            instance: self.config.instance.clone(),
+            table_config: table.clone(),
+            collection_method: CollectionMethod::Sql,
+            timestamp,
+            row_count: 0,
+            duration_ms: 0,
+            extra,
+        };
+
+        let mut stream = sqlx::query(&sql).fetch(pool);
+        let mut row_count = 0usize;
+        while let Some(row) = stream
+            .try_next()
+            .await
+            .map_err(|e| CollectionError::QueryError(format!("Data query failed: {}", e)))?
+        {
+            let row_data = self.row_to_map(&row, &column_types)?;
+            // Drop the MySQL row before building/sending the event.
+            drop(row);
+            let event = utils::create_event_from_metadata(&metadata, row_data);
+            if out.send_event(event).await.is_err() {
+                return Err(CollectionError::NetworkError(
+                    "Failed to send event: downstream closed".to_string(),
+                ));
+            }
+            row_count += 1;
+        }
+
+        let duration = start_time.elapsed();
+        info!(
+            "SQL streaming collection completed for table {}: {} rows in {}ms",
+            table.source_table,
+            row_count,
+            duration.as_millis()
+        );
+        Ok(row_count)
     }
 
     async fn health_check(&self) -> Result<(), CollectionError> {

@@ -1,3 +1,4 @@
+pub mod alicloud_oss;
 pub mod aws_s3_upload_file;
 pub mod azure_blob_upload_file;
 pub mod s3_content_partitioned;

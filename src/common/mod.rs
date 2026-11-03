@@ -1,3 +1,4 @@
+pub mod aliyun_sts;
 pub mod checkpointer;
 pub mod deltalake_s3;
 pub mod deltalake_writer;
