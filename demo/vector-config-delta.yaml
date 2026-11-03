@@ -36,7 +36,7 @@ data:
     [sinks.tidb_sink]
     type = "tidb"
     inputs = [ "delta_lake_source",]
-    connection_string = "mysql://4CXN88WA4NSFaoQ.root:6Avts99mIaPmOBuZ@gateway01.ap-southeast-1.prod.aws.tidbcloud.com:4000/test"
+    connection_string = "mysql://${TIDB_USER}:${TIDB_PASSWORD}@${TIDB_HOST}:4000/${TIDB_DATABASE}"
     table = "slowlogs1"
     batch_size = 1000
     max_connections = 10
