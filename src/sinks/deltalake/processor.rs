@@ -136,6 +136,8 @@ impl DeltaLakeSink {
                     info!("Creating default table config for {}", table_name);
                     DeltaTableConfig {
                         name: table_name.to_string(),
+                        // Kept enabled: system_tables relies on dynamic discovery + evolution
+                        // with an empty sink `tables` list. Tightening this would break that path.
                         schema_evolution: Some(true),
                     }
                 });

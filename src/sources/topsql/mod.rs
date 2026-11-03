@@ -1,5 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
+use tracing::warn;
 use vector::config::{GenerateConfig, SourceConfig, SourceContext};
 use vector_lib::{
     config::{DataType, LogNamespace, SourceOutput},
@@ -176,6 +177,9 @@ impl SourceConfig for TopSQLConfig {
 impl TopSQLConfig {
     fn validate_tls(&self) -> vector::Result<()> {
         if self.tls.is_none() {
+            warn!(
+                "topsql TLS is not configured; connections will use cleartext. Set `tls` to enable mTLS."
+            );
             return Ok(());
         }
 

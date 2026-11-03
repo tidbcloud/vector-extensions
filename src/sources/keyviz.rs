@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
+use tracing::warn;
 use vector::{
     config::{GenerateConfig, SourceConfig, SourceContext},
     event::LogEvent,
@@ -207,6 +208,9 @@ impl KeyvizConfig {
 
     fn validate_tls(&self) -> vector::Result<()> {
         if self.tls.is_none() {
+            warn!(
+                "keyviz TLS is not configured; connections will use cleartext. Set `tls` to enable mTLS."
+            );
             return Ok(());
         }
         let tls = self.tls.as_ref().unwrap();

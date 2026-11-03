@@ -10,6 +10,7 @@ The Checkpointer module provides checkpoint management functionality for ensurin
 - Enable fault tolerance
 - Support data recovery
 - Ensure exactly-once or at-least-once semantics
+- Authorize upload paths: `UploadKey::from_event` validates event-derived local paths / object keys (absolute, no `..`, regular file, sensitive-prefix denylist, optional `allowed_path_prefixes`) before sinks call `File::open`
 
 ## Architecture
 

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use vector::config::{GenerateConfig, SourceConfig, SourceContext};
 use vector_config::Configurable;
 use vector_lib::{
@@ -206,6 +207,9 @@ impl SourceConfig for TopSQLConfig {
 impl TopSQLConfig {
     fn validate_tls(&self) -> vector::Result<()> {
         if self.tls.is_none() {
+            warn!(
+                "topsql_v2 TLS is not configured; connections will use cleartext. Set `tls` to enable mTLS."
+            );
             return Ok(());
         }
 

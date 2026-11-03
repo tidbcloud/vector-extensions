@@ -75,6 +75,14 @@ pub struct S3UploadFileConfig {
     /// This controls if the bucket name is in the hostname or part of the URL.
     #[serde(default = "default_force_path_style")]
     pub force_path_style: Option<bool>,
+
+    /// Local filesystem path prefixes that event-derived `message` paths may upload from.
+    ///
+    /// When non-empty, the canonical file path must sit under one of these prefixes.
+    /// Set this to the same roots as the paired `filename` source `include` globs so the
+    /// sink re-enforces that allow-list (paths are otherwise only structurally validated).
+    #[serde(default)]
+    pub allowed_path_prefixes: Vec<PathBuf>,
 }
 
 pub fn default_delay_upload_secs() -> u64 {
@@ -103,6 +111,7 @@ impl GenerateConfig for S3UploadFileConfig {
             delay_upload_secs: default_delay_upload_secs(),
             expire_after_secs: default_expire_after_secs(),
             force_path_style: None,
+            allowed_path_prefixes: Vec::new(),
         })
         .unwrap()
     }
@@ -146,6 +155,7 @@ impl S3UploadFileConfig {
             Duration::from_secs(self.expire_after_secs),
             service,
             checkpointer,
+            self.allowed_path_prefixes.clone(),
         );
 
         Ok(VectorSink::from_event_streamsink(sink))

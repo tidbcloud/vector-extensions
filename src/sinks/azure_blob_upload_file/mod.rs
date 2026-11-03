@@ -82,6 +82,14 @@ pub struct AzureBlobUploadFileConfig {
     /// The expire time of uploaded file records which used to prevent duplicate uploads.
     #[serde(alias = "expire_after", default = "default_expire_after_secs")]
     pub expire_after_secs: u64,
+
+    /// Local filesystem path prefixes that event-derived `message` paths may upload from.
+    ///
+    /// When non-empty, the canonical file path must sit under one of these prefixes.
+    /// Set this to the same roots as the paired `filename` source `include` globs so the
+    /// sink re-enforces that allow-list (paths are otherwise only structurally validated).
+    #[serde(default)]
+    pub allowed_path_prefixes: Vec<PathBuf>,
 }
 
 pub const fn default_delay_upload_secs() -> u64 {
@@ -103,6 +111,7 @@ impl GenerateConfig for AzureBlobUploadFileConfig {
             data_dir: None,
             delay_upload_secs: default_delay_upload_secs(),
             expire_after_secs: default_expire_after_secs(),
+            allowed_path_prefixes: Vec::new(),
         })
         .unwrap()
     }
@@ -150,6 +159,7 @@ impl AzureBlobUploadFileConfig {
             Duration::from_secs(self.delay_upload_secs),
             Duration::from_secs(self.expire_after_secs),
             checkpointer,
+            self.allowed_path_prefixes.clone(),
         );
         Ok(VectorSink::from_event_streamsink(sink))
     }
