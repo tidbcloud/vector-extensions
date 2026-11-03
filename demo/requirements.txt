@@ -1,5 +1,5 @@
 flask==3.0.0
-flask-cors==4.0.0
+flask-cors==4.0.2
 psutil==5.9.6
 toml==0.10.2
 pymysql==1.1.0
