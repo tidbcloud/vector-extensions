@@ -73,8 +73,7 @@ pub const fn default_topology_fetch_interval() -> f64 {
 }
 
 pub const fn default_top_n() -> usize {
-    // Secure-by-default: bound TopSQL fan-out unless the operator opts into 0 (unlimited).
-    10
+    0
 }
 
 pub const fn default_downsampling_interval() -> u32 {

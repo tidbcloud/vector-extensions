@@ -16,8 +16,6 @@ FROM alpine:3.19
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
-    && addgroup -g 1000 vector \
-    && adduser -D -u 1000 -G vector -s /sbin/nologin vector \
     && rm -rf /var/cache/apk/*
 
 ARG TARGETARCH
@@ -32,8 +30,5 @@ ENV VECTOR_LOG="info"
 RUN ["chmod", "+x", "/usr/bin/vector"]
 # Smoke test
 RUN ["vector", "--version"]
-
-# Secure-by-default: non-root (matches helm runAsUser/runAsGroup 1000).
-USER 1000:1000
 
 ENTRYPOINT ["/usr/bin/vector"]

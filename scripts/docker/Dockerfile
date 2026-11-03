@@ -19,9 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     systemd \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean \
-    && groupadd --gid 1000 vector \
-    && useradd --uid 1000 --gid 1000 --shell /usr/sbin/nologin --create-home vector
+    && apt-get clean
 
 ARG TARGETARCH
 COPY vector-$TARGETARCH /usr/bin/vector
@@ -35,8 +33,5 @@ ENV VECTOR_LOG="info"
 RUN ["chmod", "+x", "/usr/bin/vector"]
 # Smoke test
 RUN ["vector", "--version"]
-
-# Secure-by-default: non-root (matches helm runAsUser/runAsGroup 1000).
-USER 1000:1000
 
 ENTRYPOINT ["/usr/bin/vector"]

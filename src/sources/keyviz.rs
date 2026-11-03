@@ -44,8 +44,7 @@ pub const fn default_max_regions_per_pd_request() -> usize {
 }
 
 pub const fn default_max_requests_per_round() -> usize {
-    // Secure-by-default: finite paging budget (0 still means unlimited if set explicitly).
-    100
+    0
 }
 
 impl GenerateConfig for KeyvizConfig {
