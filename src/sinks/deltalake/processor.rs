@@ -246,6 +246,9 @@ mod tests {
         assert!(!is_safe_table_path_segment("foo\\bar"));
         assert!(!is_safe_table_path_segment(".."));
         assert!(!is_safe_table_path_segment(""));
+        // Absolute path would make PathBuf::join replace base_path entirely.
+        assert!(!is_safe_table_path_segment("/etc/cron.d"));
+        assert!(!is_safe_table_path_segment("/othertenant/table"));
     }
 
     #[test]
