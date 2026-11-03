@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -24,6 +25,7 @@ pub struct AzureBlobUploadFileSink {
     pub delay_upload: Duration,
     pub expire_after: Duration,
     pub checkpointer: Checkpointer,
+    pub allowed_path_prefixes: Vec<PathBuf>,
 }
 
 impl AzureBlobUploadFileSink {
@@ -33,6 +35,7 @@ impl AzureBlobUploadFileSink {
         delay_upload: Duration,
         expire_after: Duration,
         checkpointer: Checkpointer,
+        allowed_path_prefixes: Vec<PathBuf>,
     ) -> Self {
         Self {
             client,
@@ -40,6 +43,7 @@ impl AzureBlobUploadFileSink {
             delay_upload,
             expire_after,
             checkpointer,
+            allowed_path_prefixes,
         }
     }
 
@@ -57,6 +61,7 @@ impl StreamSink<Event> for AzureBlobUploadFileSink {
             delay_upload,
             expire_after,
             mut checkpointer,
+            allowed_path_prefixes,
         } = *self;
 
         let mut delay_queue = DelayQueue::new();
@@ -73,7 +78,11 @@ impl StreamSink<Event> for AzureBlobUploadFileSink {
                     };
 
                     let finalizers = event.take_finalizers();
-                    if let Some(upload_key) = UploadKey::from_event(&event, &container_name) {
+                    if let Some(upload_key) = UploadKey::from_event_with_allowed_prefixes(
+                        &event,
+                        &container_name,
+                        &allowed_path_prefixes,
+                    ) {
                         let modified_time = match Self::file_modified_time(&upload_key.filename).await {
                             Ok(modified_time) => modified_time,
                             Err(err) => {

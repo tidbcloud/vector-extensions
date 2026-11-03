@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::io;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use futures::stream::BoxStream;
@@ -24,6 +25,7 @@ pub struct S3UploadFileSink {
     pub delay_upload: Duration,
     pub expire_after: Duration,
     pub checkpointer: Checkpointer,
+    pub allowed_path_prefixes: Vec<PathBuf>,
 }
 
 impl S3UploadFileSink {
@@ -34,6 +36,7 @@ impl S3UploadFileSink {
         expire_after: Duration,
         service: S3Service,
         checkpointer: Checkpointer,
+        allowed_path_prefixes: Vec<PathBuf>,
     ) -> Self {
         Self {
             bucket,
@@ -42,6 +45,7 @@ impl S3UploadFileSink {
             expire_after,
             service,
             checkpointer,
+            allowed_path_prefixes,
         }
     }
 
@@ -60,6 +64,7 @@ impl StreamSink<Event> for S3UploadFileSink {
             delay_upload,
             expire_after,
             mut checkpointer,
+            allowed_path_prefixes,
         } = *self;
 
         let mut delay_queue = DelayQueue::new();
@@ -76,7 +81,11 @@ impl StreamSink<Event> for S3UploadFileSink {
                     };
 
                     let finalizers = event.take_finalizers();
-                    if let Some(upload_key) = UploadKey::from_event(&event, &bucket) {
+                    if let Some(upload_key) = UploadKey::from_event_with_allowed_prefixes(
+                        &event,
+                        &bucket,
+                        &allowed_path_prefixes,
+                    ) {
                         let modified_time = match Self::file_modified_time(&upload_key.filename).await {
                             Ok(modified_time) => modified_time,
                             Err(err) => {

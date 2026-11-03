@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::io;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use futures_util::stream::BoxStream;
@@ -25,6 +26,7 @@ pub struct GcsUploadFileSink {
     expire_after: Duration,
     checkpointer: Checkpointer,
     request_settings: RequestSettings,
+    allowed_path_prefixes: Vec<PathBuf>,
 }
 
 impl GcsUploadFileSink {
@@ -36,6 +38,7 @@ impl GcsUploadFileSink {
         expire_after: Duration,
         checkpointer: Checkpointer,
         request_settings: RequestSettings,
+        allowed_path_prefixes: Vec<PathBuf>,
     ) -> Self {
         Self {
             client,
@@ -45,6 +48,7 @@ impl GcsUploadFileSink {
             expire_after,
             checkpointer,
             request_settings,
+            allowed_path_prefixes,
         }
     }
 
@@ -64,6 +68,7 @@ impl StreamSink<Event> for GcsUploadFileSink {
             expire_after,
             mut checkpointer,
             request_settings,
+            allowed_path_prefixes,
         } = *self;
 
         let mut delay_queue = DelayQueue::new();
@@ -80,7 +85,11 @@ impl StreamSink<Event> for GcsUploadFileSink {
                     };
 
                     let finalizers = event.take_finalizers();
-                    if let Some(upload_key) = UploadKey::from_event(&event, &bucket) {
+                    if let Some(upload_key) = UploadKey::from_event_with_allowed_prefixes(
+                        &event,
+                        &bucket,
+                        &allowed_path_prefixes,
+                    ) {
                         let modified_time = match Self::file_modified_time(&upload_key.filename).await {
                             Ok(modified_time) => modified_time,
                             Err(err) => {

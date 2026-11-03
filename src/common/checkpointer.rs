@@ -1,10 +1,11 @@
 use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use std::{fs, io};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use vector_lib::event::Event;
 
 const TMP_FILE_NAME: &str = "checkpoints.new.json";
@@ -130,7 +131,26 @@ pub struct UploadKey {
 }
 
 impl UploadKey {
+    /// Build an [`UploadKey`] from an event.
+    ///
+    /// `bucket` comes from sink configuration. `message` (local path) and `key`
+    /// (remote object name) are event-derived and therefore validated before use:
+    /// absolute path, no `..`, regular file after canonicalisation, not under a
+    /// sensitive root, and optionally under one of `allowed_path_prefixes`.
     pub fn from_event(event: &Event, bucket: &str) -> Option<Self> {
+        Self::from_event_with_allowed_prefixes(event, bucket, &[])
+    }
+
+    /// Like [`from_event`], but also requires the canonical local path to sit
+    /// under one of `allowed_path_prefixes` when that slice is non-empty.
+    ///
+    /// Operators should set prefixes to match the `filename` source `include`
+    /// roots so the sink re-enforces the same allow-list.
+    pub fn from_event_with_allowed_prefixes(
+        event: &Event,
+        bucket: &str,
+        allowed_path_prefixes: &[PathBuf],
+    ) -> Option<Self> {
         let log = event.maybe_as_log()?;
         let filename_val = log.get("message")?;
         let filename = String::from_utf8_lossy(filename_val.as_bytes()?);
@@ -138,12 +158,113 @@ impl UploadKey {
         let object_key_val = log.get("key")?;
         let object_key = String::from_utf8_lossy(object_key_val.as_bytes()?);
 
+        let filename = validate_local_upload_path(filename.as_ref(), allowed_path_prefixes)?;
+        let object_key = validate_object_key(object_key.as_ref())?;
+
         Some(UploadKey {
             bucket: bucket.to_owned(),
-            object_key: object_key.to_string(),
-            filename: filename.to_string(),
+            object_key,
+            filename,
         })
     }
+}
+
+/// Roots that must never be uploaded even when no allow-list is configured.
+const SENSITIVE_PATH_PREFIXES: &[&str] = &[
+    "/proc",
+    "/sys",
+    "/dev",
+    "/var/run/secrets",
+    "/run/secrets",
+];
+
+fn validate_local_upload_path(
+    filename: &str,
+    allowed_path_prefixes: &[PathBuf],
+) -> Option<String> {
+    if filename.is_empty() || filename.contains('\0') {
+        warn!(message = "Rejected upload path: empty or contains NUL.", %filename);
+        return None;
+    }
+
+    let path = Path::new(filename);
+    if !path.is_absolute() {
+        warn!(message = "Rejected upload path: must be absolute.", %filename);
+        return None;
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        warn!(message = "Rejected upload path: contains '..'.", %filename);
+        return None;
+    }
+
+    let canonical = match path.canonicalize() {
+        Ok(p) => p,
+        Err(error) => {
+            warn!(message = "Rejected upload path: canonicalize failed.", %filename, %error);
+            return None;
+        }
+    };
+
+    let meta = match fs::metadata(&canonical) {
+        Ok(m) => m,
+        Err(error) => {
+            warn!(message = "Rejected upload path: metadata failed.", path = %canonical.display(), %error);
+            return None;
+        }
+    };
+    if !meta.is_file() {
+        warn!(message = "Rejected upload path: not a regular file.", path = %canonical.display());
+        return None;
+    }
+
+    let canon_str = canonical.to_string_lossy();
+    for prefix in SENSITIVE_PATH_PREFIXES {
+        if path_under_prefix(&canon_str, prefix) {
+            warn!(
+                message = "Rejected upload path: under sensitive prefix.",
+                path = %canon_str,
+                %prefix
+            );
+            return None;
+        }
+    }
+
+    if !allowed_path_prefixes.is_empty() {
+        let allowed = allowed_path_prefixes.iter().any(|prefix| {
+            let prefix = prefix.as_path();
+            // Prefer canonical prefix when it exists so symlink bases still match.
+            let prefix_canon = prefix.canonicalize().unwrap_or_else(|_| prefix.to_path_buf());
+            canonical.starts_with(&prefix_canon) || canonical.starts_with(prefix)
+        });
+        if !allowed {
+            warn!(
+                message = "Rejected upload path: outside allowed_path_prefixes.",
+                path = %canon_str
+            );
+            return None;
+        }
+    }
+
+    Some(canon_str.into_owned())
+}
+
+fn path_under_prefix(path: &str, prefix: &str) -> bool {
+    path == prefix || path.starts_with(&format!("{prefix}/"))
+}
+
+fn validate_object_key(object_key: &str) -> Option<String> {
+    if object_key.is_empty() || object_key.contains('\0') {
+        warn!(message = "Rejected object key: empty or contains NUL.");
+        return None;
+    }
+    if object_key.split('/').any(|part| part == "..") {
+        warn!(message = "Rejected object key: contains '..'.", %object_key);
+        return None;
+    }
+    Some(object_key.to_owned())
 }
 
 #[derive(Default)]
@@ -227,4 +348,74 @@ struct Checkpoint {
     upload_key: UploadKey,
     upload_at: DateTime<Utc>,
     expire_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use vector_lib::event::LogEvent;
+
+    fn event_with(message: &str, key: &str) -> Event {
+        let mut log = LogEvent::default();
+        log.insert("message", message);
+        log.insert("key", key);
+        Event::Log(log)
+    }
+
+    #[test]
+    fn rejects_relative_and_parent_dir_paths() {
+        assert!(UploadKey::from_event(&event_with("relative/file", "k"), "b").is_none());
+        assert!(UploadKey::from_event(&event_with("/tmp/../etc/passwd", "k"), "b").is_none());
+        assert!(UploadKey::from_event(&event_with("/etc/../proc/self/environ", "k"), "b").is_none());
+    }
+
+    #[test]
+    fn rejects_sensitive_prefixes() {
+        // These paths may or may not exist; when missing canonicalize fails → None.
+        // When present (typical Linux), denylist must reject.
+        let _ = UploadKey::from_event(&event_with("/proc/self/environ", "k"), "b");
+        assert!(UploadKey::from_event(&event_with("/proc/self/environ", "k"), "b").is_none());
+    }
+
+    #[test]
+    fn rejects_unsafe_object_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("ok.bin");
+        File::create(&file_path).unwrap().write_all(b"x").unwrap();
+        let path = file_path.to_str().unwrap();
+
+        assert!(UploadKey::from_event(&event_with(path, "a/../b"), "bucket").is_none());
+        assert!(UploadKey::from_event(&event_with(path, ""), "bucket").is_none());
+    }
+
+    #[test]
+    fn accepts_safe_absolute_file_and_enforces_allow_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("ok.bin");
+        File::create(&file_path).unwrap().write_all(b"x").unwrap();
+        let path = file_path.to_str().unwrap();
+
+        let key = UploadKey::from_event(&event_with(path, "prefix/ok.bin"), "bucket").unwrap();
+        assert_eq!(key.object_key, "prefix/ok.bin");
+        assert_eq!(key.bucket, "bucket");
+        assert!(Path::new(&key.filename).is_absolute());
+
+        let allowed = [dir.path().to_path_buf()];
+        assert!(UploadKey::from_event_with_allowed_prefixes(
+            &event_with(path, "prefix/ok.bin"),
+            "bucket",
+            &allowed
+        )
+        .is_some());
+
+        let other = tempfile::tempdir().unwrap();
+        assert!(UploadKey::from_event_with_allowed_prefixes(
+            &event_with(path, "prefix/ok.bin"),
+            "bucket",
+            &[other.path().to_path_buf()]
+        )
+        .is_none());
+    }
 }
