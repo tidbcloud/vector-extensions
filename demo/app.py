@@ -22,6 +22,7 @@ Features:
 """
 import os
 import json
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -65,10 +66,10 @@ def find_vector_binary() -> str:
     if release_vector.exists() and os.access(release_vector, os.X_OK):
         return str(release_vector.resolve())
     
-    # Check system PATH
-    if os.system(f"which {VECTOR_BINARY} > /dev/null 2>&1") == 0:
+    # Check system PATH (no shell — avoid command injection via VECTOR_BINARY)
+    if shutil.which(VECTOR_BINARY):
         return VECTOR_BINARY
-    
+
     return VECTOR_BINARY
 
 
