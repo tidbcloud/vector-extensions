@@ -1,7 +1,8 @@
-//! Alicloud OSS sink — Vector `aws_s3`-compatible surface with RRSA/OIDC STS auth.
+//! Alicloud OSS sink — Vector `aws_s3`-compatible surface with keyless STS auth.
 //!
-//! Uses the S3-compatible PutObject API against OSS endpoints, but authenticates
-//! via Aliyun `AssumeRoleWithOIDC` (ACK RRSA) so long-lived static AK/SK are not required.
+//! Uses the S3-compatible PutObject API against OSS endpoints. Authenticates via
+//! Aliyun STS temporary credentials: ACK RRSA (`AssumeRoleWithOIDC`) when OIDC
+//! env is present, otherwise ECS/ACK node RAM role (IMDS) → signed `AssumeRole`.
 
 mod request_builder;
 
@@ -33,7 +34,7 @@ use vector_lib::sink::VectorSink;
 use vector_lib::tls::TlsConfig;
 use vector_lib::TimeZone;
 
-use crate::common::aliyun_sts::AliyunOidcCredentialsProvider;
+use crate::common::aliyun_sts::AliyunRoleCredentialsProvider;
 use crate::sinks::alicloud_oss::request_builder::OssRequestOptions;
 
 fn default_key_prefix() -> String {
@@ -49,14 +50,19 @@ fn default_force_path_style() -> bool {
     false
 }
 
-/// Optional auth overrides for RRSA. Defaults come from `ALIBABA_CLOUD_*` env vars.
+/// Optional auth overrides for Aliyun STS role assumption.
+///
+/// Defaults to `ALIBABA_CLOUD_ROLE_ARN` when omitted. Accepts both
+/// `assume_role` (preferred, matches Vector AWS / app-delivery templates) and
+/// legacy `role_arn`.
 #[configurable_component]
 #[derive(Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
 pub struct AlicloudOssAuthConfig {
     /// RAM role ARN (`acs:ram::...:role/...`). Defaults to `ALIBABA_CLOUD_ROLE_ARN`.
+    #[serde(default, alias = "role_arn")]
     #[configurable(metadata(docs::examples = "acs:ram::123456789012:role/o11y-vector"))]
-    pub role_arn: Option<String>,
+    pub assume_role: Option<String>,
 }
 
 /// Configuration for the `alicloud_oss` sink.
@@ -117,7 +123,8 @@ pub struct AlicloudOssSinkConfig {
     #[configurable(derived)]
     pub tls: Option<TlsConfig>,
 
-    /// RRSA auth overrides. When omitted, uses `ALIBABA_CLOUD_*` environment variables.
+    /// Aliyun STS auth. When omitted, uses `ALIBABA_CLOUD_ROLE_ARN` (+ RRSA OIDC
+    /// env if present, otherwise node RAM role IMDS).
     #[configurable(derived)]
     #[serde(default)]
     pub auth: AlicloudOssAuthConfig,
@@ -249,8 +256,8 @@ impl AlicloudOssSinkConfig {
             .map(|r| r.to_string())
             .unwrap_or_else(|| "cn-hangzhou".to_string());
 
-        let provider = AliyunOidcCredentialsProvider::from_rrsa_env(
-            self.auth.role_arn.as_deref(),
+        let provider = AliyunRoleCredentialsProvider::from_env(
+            self.auth.assume_role.as_deref(),
             Some(region_str.clone()),
             "vector-alicloud-oss",
         )?;
@@ -289,5 +296,24 @@ mod tests {
     #[test]
     fn generate_config() {
         vector::test_util::test_generate_config::<AlicloudOssSinkConfig>();
+    }
+
+    #[test]
+    fn auth_accepts_assume_role_and_role_arn_alias() {
+        let via_assume: AlicloudOssAuthConfig = serde_json::from_str(
+            r#"{"assume_role":"acs:ram::123:role/writer"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            via_assume.assume_role.as_deref(),
+            Some("acs:ram::123:role/writer")
+        );
+
+        let via_alias: AlicloudOssAuthConfig =
+            serde_json::from_str(r#"{"role_arn":"acs:ram::456:role/legacy"}"#).unwrap();
+        assert_eq!(
+            via_alias.assume_role.as_deref(),
+            Some("acs:ram::456:role/legacy")
+        );
     }
 }
