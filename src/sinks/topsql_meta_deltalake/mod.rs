@@ -251,8 +251,8 @@ impl DeltaLakeConfig {
 
         let mut storage_options = self.storage_options.clone().unwrap_or_default();
 
-        // Always apply S3/OSS options for cloud paths (Alicloud RRSA does not need
-        // Vector's AWS S3Service — auth is injected via storage_options).
+        // Always apply S3/OSS options for cloud paths (Alicloud keyless STS does not
+        // need Vector's AWS S3Service — auth is injected via storage_options).
         if self.bucket.is_some() || self.base_path.starts_with("s3://") {
             info!(
                 "Applying S3/OSS storage options (s3_service present: {})",
