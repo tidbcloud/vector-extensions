@@ -212,9 +212,9 @@ impl DeltaLakeConfig {
         let mut storage_options = self.storage_options.clone().unwrap_or_default();
 
         // Always apply S3/OSS storage options for cloud paths.
-        // Vector's AWS SDK create_service often fails under Alicloud RRSA (no static
-        // AK/SK), but Delta Lake auth still needs apply_s3_storage_options to run so
-        // Aliyun OIDC→STS credentials are injected.
+        // Vector's AWS SDK create_service often fails under Alicloud keyless auth
+        // (no static AK/SK), but Delta Lake auth still needs apply_s3_storage_options
+        // so Aliyun STS credentials (RRSA OIDC or node-role AssumeRole) are injected.
         if self.bucket.is_some() || self.base_path.starts_with("s3://") {
             info!(
                 "Applying S3/OSS storage options (s3_service present: {})",

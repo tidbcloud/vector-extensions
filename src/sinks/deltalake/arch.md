@@ -63,7 +63,7 @@ pub struct DeltaLakeConfig {
 - **timeout_secs**: Write timeout in seconds
 - **delta_table_config**: Delta table specific configuration
 - **write_config**: Write operation configuration
-- **auth.assume_role**: For Alicloud OSS use an `acs:ram::...:role/...` ARN; credentials come from ACK RRSA (`ALIBABA_CLOUD_*`) via STS, not static AK/SK. AWS IRSA continues to use `arn:aws:iam::...` + web identity.
+- **auth.assume_role**: For Alicloud OSS use an `acs:ram::...:role/...` ARN. Credentials are temporary STS tokens (no static AK/SK): prefer ACK RRSA (`ALIBABA_CLOUD_OIDC_*` → `AssumeRoleWithOIDC`); otherwise use the ECS/ACK **node RAM role** from IMDS → signed STS `AssumeRole`. AWS IRSA continues to use `arn:aws:iam::...` + web identity.
 
 ## Data Processing
 

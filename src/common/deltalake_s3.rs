@@ -8,7 +8,7 @@ use vector::sinks::Healthcheck;
 use vector_lib::config::proxy::ProxyConfig;
 use vector_lib::tls::TlsConfig;
 
-use crate::common::aliyun_sts::{self, ENV_OIDC_TOKEN_FILE, ENV_ROLE_ARN};
+use crate::common::aliyun_sts::{self, ENV_ROLE_ARN};
 
 /// Shared S3 + DeltaLake helpers used by multiple sinks.
 ///
@@ -17,24 +17,21 @@ use crate::common::aliyun_sts::{self, ENV_OIDC_TOKEN_FILE, ENV_ROLE_ARN};
 /// - `sinks/topsql_data_deltalake`
 /// - `sinks/topsql_meta_deltalake`
 
-/// Exchange Aliyun RRSA/OIDC for temporary credentials and put them into
+/// Exchange an Aliyun RAM role ARN for temporary credentials and put them into
 /// Delta Lake `storage_options` (object_store reads static AWS_* keys).
-async fn insert_aliyun_rrsa_credentials(
+///
+/// Uses ACK RRSA (`AssumeRoleWithOIDC`) when `ALIBABA_CLOUD_OIDC_TOKEN_FILE` is
+/// set; otherwise uses the ECS/ACK node RAM role from IMDS and STS `AssumeRole`.
+async fn insert_aliyun_role_credentials(
     storage_options: &mut HashMap<String, String>,
     role_arn: &str,
     region: Option<&str>,
 ) -> vector::Result<()> {
-    info!("Detected Aliyun RRSA; exchanging OIDC token for STS credentials");
-    let (resolved_role, token_file, oidc_provider_arn) =
-        aliyun_sts::resolve_rrsa_config(Some(role_arn))?;
-    let creds = aliyun_sts::get_aliyun_sts_credentials(
-        &token_file,
-        &resolved_role,
-        &oidc_provider_arn,
-        region,
-        "vector-deltalake",
-    )
-    .await?;
+    info!(
+        "Detected Aliyun RAM role ARN; obtaining STS temporary credentials for OSS"
+    );
+    let creds =
+        aliyun_sts::get_aliyun_role_credentials(role_arn, region, "vector-deltalake").await?;
 
     storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), creds.access_key_id);
     storage_options.insert(
@@ -42,7 +39,7 @@ async fn insert_aliyun_rrsa_credentials(
         creds.access_key_secret,
     );
     storage_options.insert("AWS_SESSION_TOKEN".to_string(), creds.security_token);
-    info!("✓ Delta Lake using Aliyun RRSA temporary credentials for OSS");
+    info!("✓ Delta Lake using Aliyun STS temporary credentials for OSS");
     Ok(())
 }
 
@@ -205,10 +202,11 @@ pub async fn apply_s3_storage_options(
             external_id,
             ..
         } => {
-            // Aliyun RRSA: auth.assume_role is an acs:ram:: ARN.
-            // Must not fall through to AWS AssumeRole, which still needs base AK/SK.
+            // Aliyun: auth.assume_role is an acs:ram:: ARN.
+            // Prefer RRSA OIDC when present; otherwise node RAM role → AssumeRole.
+            // Must not fall through to AWS AssumeRole (wrong STS endpoint).
             if assume_role.starts_with("acs:ram::") {
-                insert_aliyun_rrsa_credentials(
+                insert_aliyun_role_credentials(
                     storage_options,
                     assume_role,
                     region_str.as_deref(),
@@ -317,14 +315,14 @@ pub async fn apply_s3_storage_options(
             let aws_token = std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE").ok();
             let aws_role = std::env::var("AWS_ROLE_ARN").ok();
 
-            if std::env::var(ENV_OIDC_TOKEN_FILE).is_ok()
-                && aliyun_role
-                    .as_deref()
-                    .is_some_and(|r| r.starts_with("acs:ram::"))
+            // Aliyun role from env: RRSA OIDC if present, else node RAM role AssumeRole.
+            if let Some(role_arn) = aliyun_role
+                .as_deref()
+                .filter(|r| r.starts_with("acs:ram::"))
             {
-                insert_aliyun_rrsa_credentials(
+                insert_aliyun_role_credentials(
                     storage_options,
-                    aliyun_role.as_deref().unwrap(),
+                    role_arn,
                     region_str.as_deref(),
                 )
                 .await?;
