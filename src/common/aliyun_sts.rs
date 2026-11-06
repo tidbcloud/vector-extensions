@@ -541,6 +541,98 @@ impl ProvideCredentials for AliyunOidcCredentialsProvider {
     }
 }
 
+/// Refreshable AWS SDK credentials provider for Aliyun RAM roles.
+///
+/// Uses RRSA OIDC when `ALIBABA_CLOUD_OIDC_TOKEN_FILE` is set; otherwise uses
+/// the ECS/ACK node RAM role from IMDS and STS `AssumeRole`.
+#[derive(Debug, Clone)]
+pub struct AliyunRoleCredentialsProvider {
+    role_arn: String,
+    region: Option<String>,
+    session_name: String,
+    cache: Arc<Mutex<Option<AliyunStsCredentials>>>,
+}
+
+impl AliyunRoleCredentialsProvider {
+    pub fn new(
+        role_arn: impl Into<String>,
+        region: Option<String>,
+        session_name: impl Into<String>,
+    ) -> vector::Result<Self> {
+        let role_arn = role_arn.into();
+        validate_aliyun_role_arn(&role_arn)?;
+        Ok(Self {
+            role_arn,
+            region,
+            session_name: session_name.into(),
+            cache: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Resolve role ARN from explicit override or `ALIBABA_CLOUD_ROLE_ARN`.
+    pub fn from_env(
+        role_arn_override: Option<&str>,
+        region: Option<String>,
+        session_name: impl Into<String>,
+    ) -> vector::Result<Self> {
+        let role_arn = role_arn_override
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var(ENV_ROLE_ARN).ok())
+            .ok_or_else(|| {
+                vector::Error::from(format!(
+                    "{ENV_ROLE_ARN} is not set and auth.assume_role / auth.role_arn was not configured"
+                ))
+            })?;
+        Self::new(role_arn, region, session_name)
+    }
+
+    async fn load(
+        &self,
+    ) -> Result<Credentials, aws_credential_types::provider::error::CredentialsError> {
+        let mut guard = self.cache.lock().await;
+        let now = SystemTime::now();
+        let needs_refresh = match guard.as_ref() {
+            Some(cached) => cached
+                .expires_at
+                .checked_sub(REFRESH_SKEW)
+                .map(|t| now >= t)
+                .unwrap_or(true),
+            None => true,
+        };
+
+        if needs_refresh {
+            let creds = get_aliyun_role_credentials(
+                &self.role_arn,
+                self.region.as_deref(),
+                &self.session_name,
+            )
+            .await
+            .map_err(|e| {
+                aws_credential_types::provider::error::CredentialsError::provider_error(e)
+            })?;
+            *guard = Some(creds);
+        }
+
+        let cached = guard.as_ref().expect("credentials cache populated");
+        Ok(Credentials::new(
+            cached.access_key_id.clone(),
+            cached.access_key_secret.clone(),
+            Some(cached.security_token.clone()),
+            Some(cached.expires_at),
+            "aliyun-role-sts",
+        ))
+    }
+}
+
+impl ProvideCredentials for AliyunRoleCredentialsProvider {
+    fn provide_credentials<'a>(&'a self) -> future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        future::ProvideCredentials::new(self.load())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
