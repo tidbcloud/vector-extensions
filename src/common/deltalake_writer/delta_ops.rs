@@ -35,20 +35,10 @@ impl DeltaOpsManager {
         table_uri: &Url,
     ) -> Result<DeltaOps, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(storage_options) = &self.storage_options {
-            // Create redacted version for logging
-            let mut redacted_options = storage_options.clone();
-            if let Some(access_key) = redacted_options.get_mut("AWS_ACCESS_KEY_ID") {
-                *access_key = "***".to_string();
-            }
-            if let Some(secret_key) = redacted_options.get_mut("AWS_SECRET_ACCESS_KEY") {
-                *secret_key = "***REDACTED***".to_string();
-            }
-            if let Some(session_token) = redacted_options.get_mut("AWS_SESSION_TOKEN") {
-                *session_token = "***REDACTED***".to_string();
-            }
+            // Log a redacted clone only; pass the original map to Delta Lake.
             info!(
                 "Using storage options: {:?}",
-                redacted_options
+                crate::common::deltalake_s3::redact_storage_options_for_log(storage_options)
             );
             Ok(DeltaOps::try_from_uri_with_storage_options(
                 table_uri.clone(),

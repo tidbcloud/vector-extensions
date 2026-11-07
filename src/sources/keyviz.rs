@@ -331,7 +331,14 @@ async fn fetch_regions_part(
         "{}/pd/api/v1/regions/key?end_key={}&key={}&limit={}",
         pd_address, encoded_end_key, encoded_key, limit
     );
-    info!("sending pd request: {}", url);
+    // Do not log raw key/end_key (tenant key-range layout); keep them on the wire only.
+    info!(
+        "sending pd request: {}/pd/api/v1/regions/key?limit={} (key/end_key redacted, key_len={}, end_key_len={})",
+        pd_address,
+        limit,
+        key.len(),
+        end_key.len()
+    );
     client.get(url).send().await?.json().await
 }
 
