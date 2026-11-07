@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use vector::aws::{AwsAuthentication, RegionOrEndpoint};
 use vector::sinks::s3_common::{self, service::S3Service};
 use vector::sinks::Healthcheck;
@@ -16,6 +16,49 @@ use crate::common::aliyun_sts::{self, ENV_OIDC_TOKEN_FILE, ENV_ROLE_ARN};
 /// - `sinks/deltalake`
 /// - `sinks/topsql_data_deltalake`
 /// - `sinks/topsql_meta_deltalake`
+
+const REDACTED: &str = "***REDACTED***";
+
+/// Clone `storage_options` for logging with credential values masked.
+///
+/// Does not mutate the map used for actual Delta Lake / object_store auth.
+/// Covers AWS static keys and Aliyun STS temps (inserted under the same AWS_* names).
+pub fn redact_storage_options_for_log(
+    storage_options: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut redacted = storage_options.clone();
+    for (key, value) in redacted.iter_mut() {
+        if is_sensitive_storage_option_key(key) {
+            if key.eq_ignore_ascii_case("AWS_ACCESS_KEY_ID") {
+                *value = if value.len() > 8 {
+                    format!("{}...", &value[..8])
+                } else {
+                    "***".to_string()
+                };
+            } else {
+                *value = REDACTED.to_string();
+            }
+        }
+    }
+    redacted
+}
+
+fn is_sensitive_storage_option_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "AWS_ACCESS_KEY_ID"
+            | "AWS_SECRET_ACCESS_KEY"
+            | "AWS_SESSION_TOKEN"
+            | "ACCESS_KEY_SECRET"
+            | "SECURITY_TOKEN"
+            | "SECRET_ACCESS_KEY"
+            | "SESSION_TOKEN"
+    ) || upper.contains("SECRET")
+        || (upper.contains("TOKEN")
+            && !upper.contains("TOKEN_FILE")
+            && !upper.contains("SESSION_NAME"))
+}
 
 /// Exchange Aliyun RRSA/OIDC for temporary credentials and put them into
 /// Delta Lake `storage_options` (object_store reads static AWS_* keys).
@@ -98,7 +141,10 @@ pub async fn apply_s3_storage_options(
     force_path_style: Option<bool>,
 ) -> vector::Result<()> {
     info!("=== Applying S3 storage options (aws_s3_upload_file style) ===");
-    debug!("Initial storage_options: {:?}", storage_options);
+    debug!(
+        "Initial storage_options: {:?}",
+        redact_storage_options_for_log(storage_options)
+    );
 
     // Initialize S3 handlers for Delta Lake
     deltalake::aws::register_handlers(None);
@@ -382,27 +428,12 @@ pub async fn apply_s3_storage_options(
     info!("✓ AWS authentication configured for Delta Lake via storage_options");
 
     debug!("=== Completed apply_s3_storage_options ===");
-    debug!("Final storage_options: {:?}", storage_options);
+    let redacted_options = redact_storage_options_for_log(storage_options);
+    debug!("Final storage_options: {:?}", redacted_options);
     info!("✓ S3 storage options applied successfully");
-
-    // Log final storage options for debugging (redact sensitive values)
-    let mut debug_options = storage_options.clone();
-    if let Some(access_key) = debug_options.get_mut("AWS_ACCESS_KEY_ID") {
-        if access_key.len() > 8 {
-            *access_key = format!("{}...", &access_key[..8]);
-        } else {
-            *access_key = "***".to_string();
-        }
-    }
-    if let Some(secret_key) = debug_options.get_mut("AWS_SECRET_ACCESS_KEY") {
-        *secret_key = "***REDACTED***".to_string();
-    }
-    if let Some(session_token) = debug_options.get_mut("AWS_SESSION_TOKEN") {
-        *session_token = "***REDACTED***".to_string();
-    }
     info!(
         "Final Delta Lake storage options configured: {:?}",
-        debug_options
+        redacted_options
     );
 
     Ok(())
@@ -484,4 +515,72 @@ pub fn build_healthcheck(
     });
 
     Ok(healthcheck)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redact_storage_options_masks_secrets_without_mutating_original() {
+        let mut original = HashMap::new();
+        original.insert("AWS_ACCESS_KEY_ID".to_string(), "AKIATEST123456".to_string());
+        original.insert(
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            "super-secret-key".to_string(),
+        );
+        original.insert(
+            "AWS_SESSION_TOKEN".to_string(),
+            "aliyun-sts-session-token".to_string(),
+        );
+        original.insert("AWS_REGION".to_string(), "us-west-2".to_string());
+        original.insert(
+            "AWS_ENDPOINT_URL".to_string(),
+            "https://oss-example.aliyuncs.com".to_string(),
+        );
+
+        let redacted = redact_storage_options_for_log(&original);
+
+        assert_eq!(
+            redacted.get("AWS_ACCESS_KEY_ID").map(String::as_str),
+            Some("AKIATEST...")
+        );
+        assert_eq!(
+            redacted.get("AWS_SECRET_ACCESS_KEY").map(String::as_str),
+            Some(REDACTED)
+        );
+        assert_eq!(
+            redacted.get("AWS_SESSION_TOKEN").map(String::as_str),
+            Some(REDACTED)
+        );
+        assert_eq!(
+            redacted.get("AWS_REGION").map(String::as_str),
+            Some("us-west-2")
+        );
+        assert_eq!(
+            redacted.get("AWS_ENDPOINT_URL").map(String::as_str),
+            Some("https://oss-example.aliyuncs.com")
+        );
+
+        // Operational map stays intact for Delta Lake.
+        assert_eq!(
+            original.get("AWS_SECRET_ACCESS_KEY").map(String::as_str),
+            Some("super-secret-key")
+        );
+        assert_eq!(
+            original.get("AWS_SESSION_TOKEN").map(String::as_str),
+            Some("aliyun-sts-session-token")
+        );
+    }
+
+    #[test]
+    fn sensitive_key_detection_covers_aliyun_aliases() {
+        assert!(is_sensitive_storage_option_key("AWS_SECRET_ACCESS_KEY"));
+        assert!(is_sensitive_storage_option_key("AWS_SESSION_TOKEN"));
+        assert!(is_sensitive_storage_option_key("access_key_secret"));
+        assert!(is_sensitive_storage_option_key("security_token"));
+        assert!(!is_sensitive_storage_option_key("AWS_WEB_IDENTITY_TOKEN_FILE"));
+        assert!(!is_sensitive_storage_option_key("AWS_ROLE_SESSION_NAME"));
+        assert!(!is_sensitive_storage_option_key("AWS_REGION"));
+    }
 }
