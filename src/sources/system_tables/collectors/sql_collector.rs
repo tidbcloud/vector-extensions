@@ -11,7 +11,80 @@ use crate::sources::system_tables::data_collector::{
     utils, CollectionError, CollectionMetadata, CollectionMethod, CollectionResult, CollectorConfig,
     CollectorConfigType, DataCollector,
 };
-use crate::sources::system_tables::TableConfig;
+use crate::sources::system_tables::{DatabaseConfig, TableConfig};
+use vector_lib::tls::TlsConfig;
+
+/// Percent-encode a MySQL URL component so `?`, `&`, `@`, `/`, etc. cannot
+/// break out of userinfo / path and inject `ssl-mode=` ahead of the TLS query.
+fn encode_mysql_url_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Build a MySQL DSN with encoded credentials/db name and TLS query params.
+fn build_mysql_connection_url(database_config: &DatabaseConfig) -> String {
+    let mut url = format!(
+        "mysql://{}:{}@{}:{}/{}",
+        encode_mysql_url_component(&database_config.username),
+        encode_mysql_url_component(&database_config.password),
+        database_config.host,
+        database_config.port,
+        encode_mysql_url_component(&database_config.database)
+    );
+
+    if let Some(ref tls_config) = database_config.tls {
+        let tls_params = mysql_tls_query_params(tls_config);
+        if !tls_params.is_empty() {
+            url.push('?');
+            url.push_str(&tls_params.join("&"));
+        }
+    }
+
+    url
+}
+
+fn mysql_tls_query_params(tls_config: &TlsConfig) -> Vec<String> {
+    let mut tls_params = Vec::new();
+
+    if tls_config.verify_certificate.unwrap_or(true) {
+        if tls_config.verify_hostname.unwrap_or(true) {
+            tls_params.push("ssl-mode=VERIFY_IDENTITY".to_string());
+        } else {
+            tls_params.push("ssl-mode=VERIFY_CA".to_string());
+        }
+    } else {
+        tls_params.push("ssl-mode=REQUIRED".to_string());
+    }
+
+    if let Some(ref ca_file) = tls_config.ca_file {
+        tls_params.push(format!(
+            "ssl-ca={}",
+            encode_mysql_url_component(&ca_file.display().to_string())
+        ));
+    }
+    if let Some(ref crt_file) = tls_config.crt_file {
+        tls_params.push(format!(
+            "ssl-cert={}",
+            encode_mysql_url_component(&crt_file.display().to_string())
+        ));
+    }
+    if let Some(ref key_file) = tls_config.key_file {
+        tls_params.push(format!(
+            "ssl-key={}",
+            encode_mysql_url_component(&key_file.display().to_string())
+        ));
+    }
+
+    tls_params
+}
 
 /// SQL-based data collector using MySQL protocol
 pub struct SqlCollector {
@@ -46,50 +119,8 @@ impl SqlCollector {
             }
         };
 
-        let mut url = format!(
-            "mysql://{}:{}@{}:{}/{}",
-            database_config.username,
-            database_config.password,
-            database_config.host,
-            database_config.port,
-            database_config.database
-        );
-
-        // Add TLS parameters if database TLS is configured
-        if let Some(ref tls_config) = database_config.tls {
-            let mut tls_params = Vec::new();
-
-            // Set SSL mode based on verification settings
-            if tls_config.verify_certificate.unwrap_or(true) {
-                if tls_config.verify_hostname.unwrap_or(true) {
-                    tls_params.push("ssl-mode=VERIFY_IDENTITY".to_string());
-                } else {
-                    tls_params.push("ssl-mode=VERIFY_CA".to_string());
-                }
-            } else {
-                tls_params.push("ssl-mode=REQUIRED".to_string());
-            }
-
-            // Add CA certificate if provided
-            if let Some(ref ca_file) = tls_config.ca_file {
-                tls_params.push(format!("ssl-ca={}", ca_file.display()));
-            }
-
-            // Add client certificate if provided
-            if let Some(ref crt_file) = tls_config.crt_file {
-                tls_params.push(format!("ssl-cert={}", crt_file.display()));
-            }
-
-            // Add client key if provided
-            if let Some(ref key_file) = tls_config.key_file {
-                tls_params.push(format!("ssl-key={}", key_file.display()));
-            }
-
-            if !tls_params.is_empty() {
-                url.push('?');
-                url.push_str(&tls_params.join("&"));
-            }
-
+        let url = build_mysql_connection_url(database_config);
+        if database_config.tls.is_some() {
             info!("Creating SQL connection pool with TLS enabled");
         } else {
             info!("Creating SQL connection pool without TLS");
@@ -508,5 +539,52 @@ impl DataCollector for SqlCollector {
                 "Pool not initialized".to_string(),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn sample_db_config(password: &str, database: &str, tls: Option<TlsConfig>) -> DatabaseConfig {
+        DatabaseConfig {
+            username: "root".to_string(),
+            password: password.to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 4000,
+            database: database.to_string(),
+            max_connections: Some(10),
+            connect_timeout: Some(30),
+            tls,
+        }
+    }
+
+    #[test]
+    fn mysql_url_encodes_special_chars_in_password_and_database() {
+        let tls = TlsConfig {
+            verify_certificate: Some(true),
+            verify_hostname: Some(true),
+            ca_file: Some(PathBuf::from("/etc/certs/ca.pem")),
+            ..Default::default()
+        };
+        // Unencoded, `?ssl-mode=DISABLED` in the password/db would break out of the DSN.
+        let url = build_mysql_connection_url(&sample_db_config(
+            "p?ssl-mode=DISABLED&x=",
+            "db&ssl-mode=DISABLED",
+            Some(tls),
+        ));
+
+        assert!(url.starts_with("mysql://root:p%3Fssl-mode%3DDISABLED%26x%3D@127.0.0.1:4000/"));
+        assert!(url.contains("/db%26ssl-mode%3DDISABLED?"));
+        assert!(url.contains("ssl-mode=VERIFY_IDENTITY"));
+        assert!(!url.contains("p?ssl-mode=DISABLED"));
+        assert!(!url.contains("/db&ssl-mode=DISABLED?"));
+    }
+
+    #[test]
+    fn mysql_url_without_tls_has_no_query() {
+        let url = build_mysql_connection_url(&sample_db_config("secret", "test", None));
+        assert_eq!(url, "mysql://root:secret@127.0.0.1:4000/test");
     }
 }
