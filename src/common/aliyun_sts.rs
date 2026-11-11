@@ -24,12 +24,23 @@ pub const ENV_OIDC_PROVIDER_ARN: &str = "ALIBABA_CLOUD_OIDC_PROVIDER_ARN";
 const REFRESH_SKEW: Duration = Duration::from_secs(5 * 60);
 
 /// Temporary credentials returned by Aliyun STS.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AliyunStsCredentials {
     pub access_key_id: String,
     pub access_key_secret: String,
     pub security_token: String,
     pub expires_at: SystemTime,
+}
+
+impl std::fmt::Debug for AliyunStsCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AliyunStsCredentials")
+            .field("access_key_id", &"**REDACTED**")
+            .field("access_key_secret", &"**REDACTED**")
+            .field("security_token", &"**REDACTED**")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Resolve RRSA role / token paths from the environment, with optional overrides.
@@ -105,10 +116,10 @@ pub async fn get_aliyun_sts_credentials(
         .build()
         .map_err(|e| vector::Error::from(format!("Failed to create HTTP client: {e}")))?;
 
-    let query: String = form_urlencoded::Serializer::new(String::new())
+    // POST form body keeps OIDCToken out of the request URL (proxy/access logs).
+    let body: String = form_urlencoded::Serializer::new(String::new())
         .extend_pairs(params.iter())
         .finish();
-    let url = format!("{sts_endpoint}?{query}");
 
     info!(
         message = "Calling Aliyun STS AssumeRoleWithOIDC",
@@ -116,7 +127,12 @@ pub async fn get_aliyun_sts_credentials(
     );
 
     let response = client
-        .get(&url)
+        .post(&sts_endpoint)
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .body(body)
         .send()
         .await
         .map_err(|e| vector::Error::from(format!("Failed to call Aliyun STS: {e}")))?;

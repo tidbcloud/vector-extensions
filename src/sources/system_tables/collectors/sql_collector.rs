@@ -34,7 +34,7 @@ fn build_mysql_connection_url(database_config: &DatabaseConfig) -> String {
     let mut url = format!(
         "mysql://{}:{}@{}:{}/{}",
         encode_mysql_url_component(&database_config.username),
-        encode_mysql_url_component(&database_config.password),
+        encode_mysql_url_component(database_config.password.inner()),
         database_config.host,
         database_config.port,
         encode_mysql_url_component(&database_config.database)
@@ -550,7 +550,7 @@ mod tests {
     fn sample_db_config(password: &str, database: &str, tls: Option<TlsConfig>) -> DatabaseConfig {
         DatabaseConfig {
             username: "root".to_string(),
-            password: password.to_string(),
+            password: password.to_string().into(),
             host: "127.0.0.1".to_string(),
             port: 4000,
             database: database.to_string(),
@@ -558,6 +558,14 @@ mod tests {
             connect_timeout: Some(30),
             tls,
         }
+    }
+
+    #[test]
+    fn database_config_debug_redacts_password() {
+        let cfg = sample_db_config("super-secret", "test", None);
+        let debug = format!("{cfg:?}");
+        assert!(debug.contains("**REDACTED**"));
+        assert!(!debug.contains("super-secret"));
     }
 
     #[test]

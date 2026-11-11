@@ -41,7 +41,7 @@ mod tests {
     async fn test_create_sql_collector() {
         let database_config = DatabaseConfig {
             username: "root".to_string(),
-            password: "".to_string(),
+            password: "".to_string().into(),
             host: "127.0.0.1".to_string(),
             port: 4000,
             database: "test".to_string(),

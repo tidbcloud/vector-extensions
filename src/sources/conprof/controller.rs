@@ -9,7 +9,7 @@ use crate::sources::conprof::shutdown::{pair, ShutdownNotifier, ShutdownSubscrib
 use crate::sources::conprof::topology::fetch::{TopologyFetcher, TopologyFetcherKind, TopologyFetcherTrait};
 use crate::sources::conprof::topology::{Component, FetchError};
 use crate::sources::conprof::upstream::ConprofSource;
-use crate::sources::conprof::{ComponentsProfileTypes, JeprofFetchMode};
+use crate::sources::conprof::ComponentsProfileTypes;
 
 pub struct Controller {
     topo_fetch_interval: Duration,
@@ -26,7 +26,6 @@ pub struct Controller {
     out: SourceSender,
 
     components_profile_types: ComponentsProfileTypes,
-    jeprof_fetch_mode: JeprofFetchMode,
 }
 
 impl Controller {
@@ -36,7 +35,6 @@ impl Controller {
         pd_address: String,
         topo_fetch_interval: Duration,
         components_profile_types: ComponentsProfileTypes,
-        jeprof_fetch_mode: JeprofFetchMode,
         tls_config: Option<TlsConfig>,
         proxy_config: &ProxyConfig,
         out: SourceSender,
@@ -47,7 +45,6 @@ impl Controller {
             TopologyFetcherKind::Pd(topo_fetcher),
             topo_fetch_interval,
             components_profile_types,
-            jeprof_fetch_mode,
             tls_config,
             out,
         )
@@ -58,7 +55,6 @@ impl Controller {
         topo_fetcher: TopologyFetcherKind,
         topo_fetch_interval: Duration,
         components_profile_types: ComponentsProfileTypes,
-        jeprof_fetch_mode: JeprofFetchMode,
         tls_config: Option<TlsConfig>,
         out: SourceSender,
     ) -> vector::Result<Self> {
@@ -73,7 +69,6 @@ impl Controller {
             tls: tls_config,
             out,
             components_profile_types,
-            jeprof_fetch_mode,
         })
     }
 
@@ -89,7 +84,6 @@ impl Controller {
             TopologyFetcherKind::Pd(topo_fetcher),
             topo_fetch_interval,
             components_profile_types,
-            JeprofFetchMode::Perl,
             tls_config,
             out,
         )
@@ -130,7 +124,6 @@ impl Controller {
             tls: tls_config,
             out,
             components_profile_types,
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
         })
     }
 
@@ -249,7 +242,6 @@ impl Controller {
             self.tls.clone(),
             self.out.clone(),
             self.components_profile_types,
-            self.jeprof_fetch_mode,
         )
         .await;
         let source = match source {
@@ -572,7 +564,6 @@ mod tests {
             pd_address,
             topo_fetch_interval,
             components_profile_types,
-            JeprofFetchMode::Perl,
             tls_config,
             &proxy_config,
             out,
@@ -642,7 +633,6 @@ mod tests {
             None,
             out.clone(),
             crate::sources::conprof::default_components_profile_types(),
-            JeprofFetchMode::Perl,
         )
         .await;
         assert!(result.is_some());
@@ -763,7 +753,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            JeprofFetchMode::Perl,
         )
         .await;
         assert!(result.is_some());
@@ -786,7 +775,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            JeprofFetchMode::Perl,
         )
         .await;
         assert!(result.is_some());
@@ -1085,7 +1073,6 @@ mod tests {
             tls.clone(),
             out.clone(),
             components_profile_types,
-            JeprofFetchMode::Perl,
         )
         .await;
 
@@ -1142,7 +1129,6 @@ mod tests {
                     TopologyFetcherKind::Pd(topo_fetcher),
                     Duration::from_secs(30),
                     crate::sources::conprof::default_components_profile_types(),
-                    JeprofFetchMode::Perl,
                     None,
                     out.clone(),
                 )
@@ -1165,7 +1151,6 @@ mod tests {
                     None,
                     out,
                     crate::sources::conprof::default_components_profile_types(),
-                    JeprofFetchMode::Perl,
                 )
                 .await;
                 let source = match source {
@@ -1272,7 +1257,6 @@ mod tests {
                 None,
                 out,
                 crate::sources::conprof::default_components_profile_types(),
-                JeprofFetchMode::Perl,
             )
             .await;
             if let Some(source) = source {
@@ -1399,7 +1383,6 @@ mod tests {
             pd_address,
             Duration::from_secs(30),
             crate::sources::conprof::default_components_profile_types(),
-            JeprofFetchMode::Perl,
             None,
             &proxy_config,
             out.clone(),
@@ -1476,7 +1459,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            JeprofFetchMode::Perl,
         )
         .await;
 

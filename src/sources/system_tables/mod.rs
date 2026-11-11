@@ -6,6 +6,7 @@ use vector::config::{GenerateConfig, SourceConfig, SourceContext};
 use vector_lib::{
     config::{DataType, LogNamespace, SourceOutput},
     configurable::configurable_component,
+    sensitive_string::SensitiveString,
     source::Source,
     tls::TlsConfig,
 };
@@ -75,7 +76,7 @@ pub struct SystemTablesConfig {
     /// Database username (required for SQL collection method, optional for coprocessor)
     pub database_username: Option<String>,
     /// Database password (required for SQL collection method, optional for coprocessor)
-    pub database_password: Option<String>,
+    pub database_password: Option<SensitiveString>,
     /// Database host (required for SQL collection method, optional for coprocessor)
     pub database_host: Option<String>,
     /// Database port (required for SQL collection method, optional for coprocessor)
@@ -116,7 +117,7 @@ pub struct SystemTablesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     pub username: String,
-    pub password: String,
+    pub password: SensitiveString,
     pub host: String,
     pub port: u16,
     pub database: String,
@@ -296,7 +297,7 @@ impl SystemTablesConfig {
             self.database_username = Some(val);
         }
         if let Ok(val) = env::var(DatabaseEnvVars::PASSWORD) {
-            self.database_password = Some(val);
+            self.database_password = Some(val.into());
         }
         if let Ok(val) = env::var(DatabaseEnvVars::HOST) {
             self.database_host = Some(val);
@@ -371,7 +372,7 @@ impl GenerateConfig for SystemTablesConfig {
             tidb_group: None,
             label_k8s_instance: None,
             database_username: Some("root".to_owned()),
-            database_password: Some("".to_owned()),
+            database_password: Some(String::new().into()),
             database_host: Some("127.0.0.1".to_owned()),
             database_port: Some(4000),
             database_name: Some("test".to_owned()),
@@ -457,7 +458,7 @@ impl SourceConfig for SystemTablesConfig {
             // This config won't be used but is required by the Controller constructor
             DatabaseConfig {
                 username: "unused".to_string(),
-                password: "unused".to_string(),
+                password: SensitiveString::from("unused".to_string()),
                 host: "unused".to_string(),
                 port: 0,
                 database: "unused".to_string(),
