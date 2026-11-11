@@ -219,35 +219,64 @@ impl SystemTablesConfig {
         }
         Ok(())
     }
-    /// Helper function to build TLS configuration from environment variables
-    fn build_tls_config_from_env(
+    /// Field-merge TLS settings into an existing config.
+    ///
+    /// Only overrides fields that are `Some`, so a partial env (e.g. only
+    /// `*_TLS_CA_FILE`) cannot wipe TOML cert/key/verify.
+    fn apply_tls_field_overrides(
+        existing: &mut Option<TlsConfig>,
+        ca_file: Option<std::path::PathBuf>,
+        crt_file: Option<std::path::PathBuf>,
+        key_file: Option<std::path::PathBuf>,
+        verify_certificate: Option<bool>,
+        verify_hostname: Option<bool>,
+    ) {
+        let any_set = ca_file.is_some()
+            || crt_file.is_some()
+            || key_file.is_some()
+            || verify_certificate.is_some()
+            || verify_hostname.is_some();
+        if !any_set {
+            return;
+        }
+
+        let tls = existing.get_or_insert_with(TlsConfig::default);
+        if let Some(path) = ca_file {
+            tls.ca_file = Some(path);
+        }
+        if let Some(path) = crt_file {
+            tls.crt_file = Some(path);
+        }
+        if let Some(path) = key_file {
+            tls.key_file = Some(path);
+        }
+        if let Some(verify) = verify_certificate {
+            tls.verify_certificate = Some(verify);
+        }
+        if let Some(verify) = verify_hostname {
+            tls.verify_hostname = Some(verify);
+        }
+    }
+
+    /// Field-merge TLS settings from environment into an existing config.
+    fn merge_tls_config_from_env(
+        existing: &mut Option<TlsConfig>,
         ca_file_env: &str,
         cert_file_env: &str,
         key_file_env: &str,
         verify_cert_env: &str,
         verify_hostname_env: &str,
-    ) -> Option<TlsConfig> {
-        let ca_file = env::var(ca_file_env).ok().map(|p| p.into());
-        let crt_file = env::var(cert_file_env).ok().map(|p| p.into());
-        let key_file = env::var(key_file_env).ok().map(|p| p.into());
-        let verify_certificate = env::var(verify_cert_env).ok().and_then(|s| s.parse().ok());
-        let verify_hostname = env::var(verify_hostname_env)
-            .ok()
-            .and_then(|s| s.parse().ok());
-
-        // Only create TLS config if at least one TLS-related env var is set
-        if ca_file.is_some() || crt_file.is_some() || key_file.is_some() {
-            Some(TlsConfig {
-                ca_file,
-                crt_file,
-                key_file,
-                verify_certificate,
-                verify_hostname,
-                ..Default::default()
-            })
-        } else {
-            None
-        }
+    ) {
+        Self::apply_tls_field_overrides(
+            existing,
+            env::var(ca_file_env).ok().map(|p| p.into()),
+            env::var(cert_file_env).ok().map(|p| p.into()),
+            env::var(key_file_env).ok().map(|p| p.into()),
+            env::var(verify_cert_env).ok().and_then(|s| s.parse().ok()),
+            env::var(verify_hostname_env)
+                .ok()
+                .and_then(|s| s.parse().ok()),
+        );
     }
 
     /// Merge configuration with values from environment variables
@@ -314,26 +343,24 @@ impl SystemTablesConfig {
             self.collection_method = val;
         }
 
-        // Merge TLS configurations
-        if let Some(env_tls) = Self::build_tls_config_from_env(
+        // Field-merge TLS configurations (do not replace the whole struct).
+        Self::merge_tls_config_from_env(
+            &mut self.database_tls,
             DatabaseEnvVars::TLS_CA_FILE,
             DatabaseEnvVars::TLS_CERT_FILE,
             DatabaseEnvVars::TLS_KEY_FILE,
             DatabaseEnvVars::TLS_VERIFY_CERTIFICATE,
             DatabaseEnvVars::TLS_VERIFY_HOSTNAME,
-        ) {
-            self.database_tls = Some(env_tls);
-        }
+        );
 
-        if let Some(env_pd_tls) = Self::build_tls_config_from_env(
+        Self::merge_tls_config_from_env(
+            &mut self.pd_tls,
             DatabaseEnvVars::PD_TLS_CA_FILE,
             DatabaseEnvVars::PD_TLS_CERT_FILE,
             DatabaseEnvVars::PD_TLS_KEY_FILE,
             DatabaseEnvVars::PD_TLS_VERIFY_CERTIFICATE,
             DatabaseEnvVars::PD_TLS_VERIFY_HOSTNAME,
-        ) {
-            self.pd_tls = Some(env_pd_tls);
-        }
+        );
     }
 }
 
@@ -529,5 +556,43 @@ enabled = true
         .expect("Failed to deserialize TableConfig without partition_by");
 
         assert_eq!(without_partition.partition_by, None);
+    }
+
+    #[test]
+    fn merge_tls_from_env_preserves_toml_fields() {
+        let mut database_tls = Some(TlsConfig {
+            ca_file: Some("/toml/ca.pem".into()),
+            crt_file: Some("/toml/cert.pem".into()),
+            key_file: Some("/toml/key.pem".into()),
+            verify_certificate: Some(true),
+            verify_hostname: Some(true),
+            ..Default::default()
+        });
+
+        // Partial override of only the CA path must not wipe cert/key/verify.
+        SystemTablesConfig::apply_tls_field_overrides(
+            &mut database_tls,
+            Some("/env/ca.pem".into()),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let tls = database_tls.expect("tls present");
+        assert_eq!(
+            tls.ca_file.as_deref(),
+            Some(std::path::Path::new("/env/ca.pem"))
+        );
+        assert_eq!(
+            tls.crt_file.as_deref(),
+            Some(std::path::Path::new("/toml/cert.pem"))
+        );
+        assert_eq!(
+            tls.key_file.as_deref(),
+            Some(std::path::Path::new("/toml/key.pem"))
+        );
+        assert_eq!(tls.verify_certificate, Some(true));
+        assert_eq!(tls.verify_hostname, Some(true));
     }
 }
