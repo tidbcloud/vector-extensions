@@ -12,6 +12,7 @@ use vector_config::NamedComponent;
 use vector_lib::{
     config::{AcknowledgementsConfig, DataType, Input},
     configurable::configurable_component,
+    sensitive_string::SensitiveString,
     sink::VectorSink,
 };
 
@@ -31,7 +32,7 @@ pub struct AzureBlobUploadFileConfig {
     /// Authentication with access key is the only supported authentication method.
     ///
     /// Either `storage_account`, or this field, must be specified.
-    pub connection_string: Option<String>,
+    pub connection_string: Option<SensitiveString>,
 
     /// The Azure Blob Storage Account name.
     ///
@@ -122,7 +123,7 @@ impl GenerateConfig for AzureBlobUploadFileConfig {
 impl SinkConfig for AzureBlobUploadFileConfig {
     async fn build(&self, cx: SinkContext) -> vector::Result<(VectorSink, Healthcheck)> {
         let client = azure_common::config::build_client(
-            self.connection_string.clone(),
+            self.connection_string.clone().map(Into::into),
             self.storage_account.clone(),
             self.container_name.clone(),
             self.endpoint.clone(),

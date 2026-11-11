@@ -8,6 +8,7 @@ use vector::{
 use vector_lib::{
     config::{AcknowledgementsConfig, Input},
     configurable::configurable_component,
+    sensitive_string::SensitiveString,
     sink::VectorSink,
     tls::TlsConfig,
 };
@@ -23,7 +24,7 @@ mod sink;
 pub struct TiDBConfig {
     /// Connection string for TiDB/MySQL database
     /// Format: mysql://user:password@host:port/database
-    pub connection_string: String,
+    pub connection_string: SensitiveString,
 
     /// Table name to insert data into
     pub table: String,
@@ -75,7 +76,9 @@ fn default_auto_create_table() -> bool {
 impl GenerateConfig for TiDBConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
-            connection_string: "mysql://user:password@localhost:4000/testdb".to_owned(),
+            connection_string: "mysql://user:password@localhost:4000/testdb"
+                .to_owned()
+                .into(),
             table: "logs".to_owned(),
             max_connections: default_max_connections(),
             connection_timeout: default_connection_timeout(),
@@ -95,8 +98,9 @@ impl SinkConfig for TiDBConfig {
         &self,
         _cx: SinkContext,
     ) -> vector::Result<(Sink, Healthcheck)> {
+        let connection_string: String = self.connection_string.clone().into();
         let sink = TiDBSink::new(
-            self.connection_string.clone(),
+            connection_string.clone(),
             self.table.clone(),
             self.max_connections,
             Duration::from_secs(self.connection_timeout),
@@ -106,7 +110,7 @@ impl SinkConfig for TiDBConfig {
         .await?;
 
         let healthcheck = healthcheck(
-            self.connection_string.clone(),
+            connection_string,
             Duration::from_secs(self.connection_timeout),
         )
         .boxed();
