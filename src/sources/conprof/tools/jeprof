@@ -522,8 +522,17 @@ sub Init() {
   $main::prog = "";
   @main::pfile_args = ();
 
-  # Override url_fetcher variable if URL_FETCHER environment variable is set
-  if ($ENV{URL_FETCHER}) {
+  # Override url_fetcher variable if URL_FETCHER environment variable is set.
+  # Prefer discrete JEPROF_CURL_* vars so cert/key/cacert paths with spaces are
+  # not whitespace-split (URL_FETCHER is space-joined and lossy).
+  if ($ENV{JEPROF_CURL_CERT} && $ENV{JEPROF_CURL_KEY} && $ENV{JEPROF_CURL_CACERT}) {
+    @URL_FETCHER = (
+      "curl", "-s", "--fail",
+      "--cert", $ENV{JEPROF_CURL_CERT},
+      "--key", $ENV{JEPROF_CURL_KEY},
+      "--cacert", $ENV{JEPROF_CURL_CACERT},
+    );
+  } elsif ($ENV{URL_FETCHER}) {
     @URL_FETCHER = split(' ', $ENV{URL_FETCHER});
   }
 
@@ -5312,7 +5321,9 @@ sub ShellEscape {
   foreach my $word (@_) {
     my $escaped_word = $word;
     if ($word =~ m![^a-zA-Z0-9/.,_=-]!) {  # check for anything not in whitelist
-      $escaped_word =~ s/'/'\\''/;
+      # Global replace: without /g only the first quote is escaped, which
+      # leaves later quotes able to break out of the shell quoting.
+      $escaped_word =~ s/'/'\\''/g;
       $escaped_word = "'$escaped_word'";
     }
     push(@escaped_words, $escaped_word);
