@@ -10,9 +10,8 @@ use crate::sources::conprof::{
     shutdown::ShutdownSubscriber,
     topology::{Component, InstanceType},
     ComponentsProfileTypes,
-    JeprofFetchMode,
 };
-use crate::sources::conprof::tools::{fetch_raw, fetch_raw_native};
+use crate::sources::conprof::tools::fetch_raw_native;
 use crate::utils::http::build_reqwest_client;
 
 pub struct ConprofSource {
@@ -22,10 +21,8 @@ pub struct ConprofSource {
     instance_type: InstanceType,
     uri: String,
 
-    tls: Option<TlsConfig>,
     out: SourceSender,
     components_profile_types: ComponentsProfileTypes,
-    jeprof_fetch_mode: JeprofFetchMode,
 }
 
 impl ConprofSource {
@@ -34,7 +31,6 @@ impl ConprofSource {
         tls: Option<TlsConfig>,
         out: SourceSender,
         components_profile_types: ComponentsProfileTypes,
-        jeprof_fetch_mode: JeprofFetchMode,
     ) -> Option<Self> {
         let client = match build_reqwest_client(tls.clone(), None, None).await {
             Ok(client) => client,
@@ -56,10 +52,8 @@ impl ConprofSource {
                     format!("http://{}", address)
                 },
 
-                tls,
                 out,
                 components_profile_types,
-                jeprof_fetch_mode,
             }),
             None => None,
         }
@@ -313,19 +307,9 @@ impl ConprofSource {
         // Use ?debug=1 so TiKV/Go pprof returns text format; required for jeprof native to parse PCs and symbolize.
         let url = format!("{}/debug/pprof/heap?debug=1", self.uri);
         info!(message = "Fetching jeheap (jeprof)", instance_type = %self.instance_type, %url);
-        let resp = match self.jeprof_fetch_mode {
-            JeprofFetchMode::Perl => {
-                tokio::select! {
-                    _ = shutdown.done() => return,
-                    r = fetch_raw(url, self.tls.clone()) => r,
-                }
-            }
-            JeprofFetchMode::Rust => {
-                tokio::select! {
-                    _ = shutdown.done() => return,
-                    r = fetch_raw_native(&self.client, &url) => r,
-                }
-            }
+        let resp = tokio::select! {
+            _ = shutdown.done() => return,
+            r = fetch_raw_native(&self.client, &url) => r,
         };
         match resp {
             Ok(body) => {
@@ -338,7 +322,7 @@ impl ConprofSource {
                 }
             }
             Err(err) => {
-                error!(message = "Failed to fetch jeheap (heap with jeprof)", instance_type = %self.instance_type, mode = ?self.jeprof_fetch_mode, %err);
+                error!(message = "Failed to fetch jeheap (heap with jeprof)", instance_type = %self.instance_type, %err);
             }
         }
     }
@@ -447,7 +431,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         ).await;
         // Should succeed
         assert!(result.is_some());
@@ -470,7 +453,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         ).await;
         // TiFlash has conprof address, so it should succeed
         assert!(result.is_some());
@@ -495,7 +477,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -532,7 +513,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -567,7 +547,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -602,7 +581,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -637,7 +615,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -668,7 +645,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -703,7 +679,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -738,7 +713,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -773,7 +747,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -808,7 +781,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         ).await;
         assert!(result.is_some());
     }
@@ -829,7 +801,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         ).await;
         assert!(result.is_some());
     }
@@ -850,7 +821,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         ).await;
         assert!(result.is_some());
     }
@@ -871,7 +841,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         ).await;
         assert!(result.is_some());
         let source = result.unwrap();
@@ -895,7 +864,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -911,7 +879,7 @@ mod tests {
         let (_, shutdown) = pair();
         let filename = "test-heap-jeprof".to_string();
 
-        // Note: fetch_heap_with_jeprof uses fetch_raw which calls perl
+        // Note: fetch_heap_with_jeprof uses native jeprof fetch
         // This will fail in test environment, but we can test the code path
         source
             .fetch_heap_with_jeprof(filename, shutdown.clone())
@@ -934,7 +902,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -980,7 +947,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -1020,7 +986,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -1060,7 +1025,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -1100,7 +1064,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -1140,7 +1103,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();
@@ -1173,7 +1135,6 @@ mod tests {
             None,
             out,
             crate::sources::conprof::default_components_profile_types(),
-            crate::sources::conprof::JeprofFetchMode::Perl,
         )
             .await
             .unwrap();

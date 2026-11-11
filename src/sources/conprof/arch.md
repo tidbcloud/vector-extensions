@@ -49,7 +49,7 @@ pub struct ConprofConfig {
     pub topology_k8s: Option<TopologyK8sConfig>,  // required when topology_mode = "k8s"
     pub topology_fetch_interval_seconds: f64,
     pub components_profile_types: ComponentsProfileTypes,
-    pub jeprof_fetch_mode: JeprofFetchMode,  // "perl" (default) | "rust", for jeheap fetch only
+    pub jeprof_fetch_mode: JeprofFetchMode,  // deprecated/ignored; jeheap always uses native Rust
 }
 ```
 
@@ -107,7 +107,7 @@ pub struct ComponentsProfileTypes {
 
 - **cpu**: CPU profiling
 - **heap**: Collect heap via HTTP (pprof).
-- **jeheap**: TiKV only. Collect heap via jeprof (jemalloc). Fetch mode: `jeprof_fetch_mode` = `perl` (default) or `rust`. Both produce the same output (symbol header + raw heap) for offline `jeprof --text`; **rust** does not require Perl/curl. See `doc/conprof-jeprof-fetch-modes.md`.
+- **jeheap**: TiKV only. Collect heap via native jeprof (jemalloc): symbol header + raw heap for offline `jeprof --text`. No Perl/curl. See `doc/conprof-jeprof-fetch-modes.md`.
 - **mutex**: Mutex profiling
 - **goroutine**: Goroutine profiling
 
@@ -124,7 +124,7 @@ pub struct ComponentsProfileTypes {
 - **vector**: Vector core library
 - **reqwest**: HTTP client for profiling endpoints
 - **tonic**: gRPC for some component communication
-- **jeprof**: Profiling data processing tools
+- **jeprof_native**: In-process jeheap fetch (symbolize + raw heap)
 
 ## Error Handling
 

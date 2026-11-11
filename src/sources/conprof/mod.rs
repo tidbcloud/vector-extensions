@@ -19,22 +19,18 @@ mod tools;
 pub mod topology;
 mod upstream;
 
-/// How to fetch jeprof/jeheap raw profile.
+/// Deprecated config value for `jeprof_fetch_mode`.
 ///
-/// **Perl** (default): runs `jeprof --raw <url>`. Full flow: GET heap → parse PCs → POST
-/// `/pprof/symbol` → output symbol header + raw heap body. Self-contained for offline analysis.
-///
-/// **Rust**: same behavior as Perl but in-process (no Perl/curl): GET heap → parse text format
-/// for PCs → POST symbol, GET cmdline → build same symbol header + raw body. Output is
-/// compatible with `jeprof --raw`. See `doc/conprof-jeprof-fetch-modes.md`.
+/// Retained so existing configs keep loading. jeheap always uses the native Rust fetch path;
+/// both `rust` and `perl` are accepted and ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Configurable)]
 #[serde(rename_all = "lowercase")]
 pub enum JeprofFetchMode {
-    /// Full jeprof --raw flow: symbol fetch + header + raw heap (original behavior).
+    /// Native Rust jeprof fetch (only supported path).
     #[default]
-    Perl,
-    /// Same as Perl output: symbol header + raw heap (no Perl dependency).
     Rust,
+    /// Accepted for backward compatibility only; Perl fetch has been removed and this is ignored.
+    Perl,
 }
 
 /// Topology discovery mode: PD+etcd (default) or Kubernetes pod labels (for quick rollback).
@@ -95,7 +91,8 @@ pub struct ConprofConfig {
     #[serde(default = "default_components_profile_types")]
     pub components_profile_types: ComponentsProfileTypes,
 
-    /// How to fetch jeprof/jeheap: `perl` (default, full symbolized --raw format) or `rust` (raw heap body only). See `doc/conprof-jeprof-fetch-modes.md`.
+    /// Deprecated and ignored. jeheap always uses native Rust fetch.
+    /// Kept so existing configs with `jeprof_fetch_mode: rust|perl` continue to load.
     #[serde(default)]
     pub jeprof_fetch_mode: JeprofFetchMode,
 }
@@ -152,7 +149,7 @@ pub struct ProfileTypes {
     /// Collect heap via HTTP (pprof). Omit to default to false.
     #[serde(default)]
     pub heap: bool,
-    /// TiKV only: collect heap via perl+jeprof (jemalloc). Can be used with or without heap; typically one of heap or jeheap for TiKV.
+    /// TiKV only: collect heap via native jeprof (jemalloc). Can be used with or without heap; typically one of heap or jeheap for TiKV.
     #[serde(default)]
     pub jeheap: bool,
     /// PLACEHOLDER
@@ -228,7 +225,7 @@ impl GenerateConfig for ConprofConfig {
             topology_k8s: None,
             topology_fetch_interval_seconds: default_topology_fetch_interval(),
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         })
         .unwrap()
     }
@@ -246,7 +243,6 @@ impl SourceConfig for ConprofConfig {
         let topology_k8s = self.topology_k8s.clone();
         let topology_fetch_interval = Duration::from_secs_f64(self.topology_fetch_interval_seconds);
         let components_profile_types = self.components_profile_types;
-        let jeprof_fetch_mode = self.jeprof_fetch_mode;
         let proxy = cx.proxy.clone();
         let out = cx.out;
         let shutdown = cx.shutdown;
@@ -294,7 +290,6 @@ impl SourceConfig for ConprofConfig {
                 topo_fetcher,
                 topology_fetch_interval,
                 components_profile_types,
-                jeprof_fetch_mode,
                 tls,
                 out,
             ) {
@@ -326,6 +321,11 @@ impl ConprofConfig {
     fn validate(&self) -> vector::Result<()> {
         if self.topology_mode == TopologyMode::K8s && self.topology_k8s.is_none() {
             return Err("topology_k8s is required when topology_mode = \"k8s\".".into());
+        }
+        if self.jeprof_fetch_mode == JeprofFetchMode::Perl {
+            warn!(
+                "jeprof_fetch_mode=perl is deprecated and ignored; jeheap always uses native Rust fetch"
+            );
         }
         self.validate_tls()?;
         Ok(())
@@ -399,7 +399,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         let outputs = config.outputs(LogNamespace::Legacy);
         assert_eq!(outputs.len(), 1);
@@ -416,7 +416,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         assert_eq!(config.can_acknowledge(), false);
     }
@@ -430,7 +430,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         assert!(config.validate_tls().is_ok());
     }
@@ -444,7 +444,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         assert!(config.validate_tls().is_ok());
     }
@@ -472,7 +472,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         assert!(config.validate_tls().is_ok());
     }
@@ -495,7 +495,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         assert!(config.validate_tls().is_err());
         let err = config.validate_tls().unwrap_err();
@@ -522,7 +522,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         assert!(config.validate_tls().is_err());
     }
@@ -545,7 +545,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         assert!(config.validate_tls().is_err());
     }
@@ -570,7 +570,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         assert!(config.validate_tls().is_err());
     }
@@ -589,7 +589,7 @@ mod tests {
             topology_k8s: None,
             topology_fetch_interval_seconds: 30.0,
             components_profile_types: default_components_profile_types(),
-            jeprof_fetch_mode: JeprofFetchMode::Perl,
+            jeprof_fetch_mode: JeprofFetchMode::Rust,
         };
         assert!(config.validate_tls().is_err());
         let err = config.validate_tls().unwrap_err();
