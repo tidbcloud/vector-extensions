@@ -174,7 +174,7 @@ https://o11y-prod-shared-us-east-1.s3.us-east-1.amazonaws.com/0/1372813089209061
 
 #### 1.3.1 REST API Server
 
-**Technology**: Python Flask (existing `demo/app.py` as reference)
+**Technology**: Python Flask (reference implementation removed; design only)
 
 **Endpoints:**
 
@@ -677,7 +677,7 @@ s3://my-backup-bucket/
 ### 1.6 Implementation Plan
 
 #### Phase 1.1: API Server Foundation
-- [ ] Extend `demo/app.py` with task management endpoints
+- [ ] Add task management API endpoints (demo app removed)
 - [ ] Implement task creation endpoint
 - [ ] Implement task status endpoint
 - [ ] Implement task list endpoint

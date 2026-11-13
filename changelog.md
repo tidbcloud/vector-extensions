@@ -2,19 +2,20 @@
 
 This document records issues and resolutions during sync-logs / file_list / S3 partitioning development for maintenance and troubleshooting.
 
+Note: The former Flask `demo/` app (including unauthenticated sync-logs routes) was removed; keep this changelog for historical context of the Vector `file_list` / aws_s3 path.
+
 ---
 
 ## I. sync-logs Full Flow in Vector
 
-**Issue**: Demo used boto3 to copy objects from source to dest bucket; logic in Python overlapped with Vector and could not reuse Vector's encoding, batch, compression.
+**Issue**: An early demo used boto3 to copy objects from source to dest bucket; logic in Python overlapped with Vector and could not reuse Vector's encoding, batch, compression.
 
 **Resolution**:
 
 - **file_list source**: Fetches object list, downloads content on demand, decompresses gzip by path or content, puts file content in event `message`.
 - **Official aws_s3 sink**: Batch aggregation, `max_bytes` sharding, encoding (text/json), compression (gzip) upload.
-- Demo only generates Vector config and starts Vector; no S3 copy logic.
 
-**Files**: `demo/app.py` (`generate_sync_logs_vector_config`, `sync_logs`), file_list `emit_content`, `decompress_gzip`.
+**Files**: file_list `emit_content`, `decompress_gzip`.
 
 ---
 
@@ -30,7 +31,7 @@ This document records issues and resolutions during sync-logs / file_list / S3 p
 
 No need for a custom "read local file/content and upload" sink; reduces maintenance and aligns with upstream Vector.
 
-**Files**: `demo/app.py` sink config `type = "aws_s3"`, with `encoding`, `batch`, `compression`.
+**Files**: aws_s3 sink config with `encoding`, `batch`, `compression`.
 
 ---
 
@@ -72,7 +73,7 @@ No need for a custom "read local file/content and upload" sink; reduces maintena
    - **RawLogsDiscover branch**: `hour_prefix` and subdir name `comp` known; last segment of `hour_prefix` → `hour_partition`, `comp` → `component`.
 2. **S3 path by partition**: Use official aws_s3 sink **key_prefix template**, e.g. `key_prefix = "your_prefix/{{ component }}/{{ hour_partition }}/"`. Sink batches by rendered key; same prefix writes under same path; filenames still from sink rules. Path then shows "which component, which hour".
 
-**Files**: `controller.rs` (write `component` / `hour_partition`), `path_resolver.rs` raw_logs path convention, `demo/app.py` aws_s3 `key_prefix`.
+**Files**: `controller.rs` (write `component` / `hour_partition`), `path_resolver.rs` raw_logs path convention, aws_s3 `key_prefix`.
 
 ---
 

@@ -251,5 +251,4 @@ curl -s http://127.0.0.1:8686/api/v1/metrics
 
 - Vector documentation: [vector.dev/docs](https://vector.dev/docs/)
 - Project: `AGENTS.md`, `src/sources/file_list/arch.md`, `src/sinks/tidb/arch.md`
-- Demo (checkpoint + acknowledgements): `demo/app.py` (delta_lake_watermark flow)
 - Delta Lake watermark source: `src/sources/delta_lake_watermark/` (checkpoint, acknowledgements)
