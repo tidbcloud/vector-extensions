@@ -34,16 +34,8 @@ vector-extensions/
 │   ├── utils/                    # Utility modules
 │   ├── lib.rs                    # Library entry point
 │   └── main.rs                   # Binary entry point
-├── demo/                         # Demo cases for data synchronization
-│   ├── app.py                   # Flask API server for demo
-│   ├── scripts/                 # Setup and test scripts
-│   ├── config/                  # Configuration files
-│   └── tests/                   # Test scripts
 ├── spec/                         # Specifications
-├── doc/v1/                       # Documentation
-│   ├── readme.md                # User guide for demo
-│   ├── arch.md                  # Architecture doc for demo
-│   └── agent.md                 # Agent guide for demo
+├── doc/                          # Design and product documentation
 └── Cargo.toml                    # Rust project configuration
 ```
 
@@ -137,15 +129,6 @@ All components have architecture documentation in their respective directories:
 - **Common**: Shared code in `src/common/` for reuse across components
 - **Utils**: General utilities in `src/utils/`
 
-## Demo Directory
-
-The `demo/` directory contains demonstration cases showing how to use Vector for data synchronization:
-
-- **Purpose**: Showcase data synchronization use cases
-- **Technology**: Python Flask API server
-- **Use Case**: Slowlog backup from S3 to MySQL
-- **Documentation**: See `doc/v1/` for detailed documentation
-
 ## Building and Testing
 
 ### Build Commands
@@ -217,7 +200,7 @@ Each component should have:
 
 - `README.md` - Project overview and build instructions
 - `AGENTS.md` - This file, AI agent control guide
-- `doc/v1/` - Demo documentation
+- `doc/` - Design and product documentation
 
 ## Common Tasks for AI Agents
 
@@ -283,7 +266,7 @@ Each component should have:
 ## Related Documentation
 
 - **Component Architecture**: See `src/{sources|sinks}/{component}/arch.md`
-- **Demo Documentation**: See `doc/v1/` directory
+- **Design docs**: See `doc/` directory
 - **Vector Documentation**: https://vector.dev/docs/
 
 ## Maintenance Notes
@@ -298,4 +281,3 @@ Each component should have:
 - Review component `arch.md` files
 - Check Vector documentation
 - Review existing component implementations as examples
-- Check demo directory for usage examples

@@ -419,7 +419,7 @@ max_bytes = 33554432
 timeout_secs = 10
 ```
 
-The demo sync-logs API uses **output_format** to control S3 write encoding (same as official aws_s3 encoding.codec): `text` (default), `json`, `csv`, `logfmt`, `raw_message`, `syslog`, `gelf`; `dest_bucket` and `dest_prefix` are always required. Formats that need extra schema (avro/cef/protobuf) are not supported; parquet is not supported by the official sink.
+When writing file_list output with the official aws_s3 sink, use `encoding.codec` for the write format: `text` (default), `json`, `csv`, `logfmt`, `raw_message`, `syslog`, `gelf`. Formats that need extra schema (avro/cef/protobuf) are not supported; parquet is not supported by the official sink.
 
 - **To keep maximum information** (e.g. multi-line/mixed logs like o11ydiagnosis-deltalake): use **json**. Each event has full `message` (raw log content) and metadata such as `file_path`, `component`, `hour_partition`, `file_size`, `last_modified`, `@timestamp` for downstream query and parsing.
 
