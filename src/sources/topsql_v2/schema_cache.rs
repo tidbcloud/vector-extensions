@@ -229,13 +229,18 @@ impl SchemaCache {
 
         // Check status first without consuming body
         if let Err(err) = response.error_for_status_ref() {
-            // Status is non-success. Log body and return the error.
+            // Status is non-success. Do not log response body (may contain tenant schema names).
             let status = err.status().unwrap_or_default();
-            let body_text = response
-                .text() // Consume body for logging
-                .await
-                .unwrap_or_else(|_| "Failed to read body".to_string());
-            error!(message = "Received non-success status code", %url, %status, body = %body_text);
+            let body_len = match response.bytes().await {
+                Ok(bytes) => bytes.len(),
+                Err(_) => 0,
+            };
+            error!(
+                message = "Received non-success status code",
+                %url,
+                %status,
+                body_len
+            );
             // Return the original error captured by error_for_status_ref
             return Err(err);
         }

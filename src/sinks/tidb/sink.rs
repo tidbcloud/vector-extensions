@@ -201,7 +201,13 @@ impl TiDBSink {
             table.replace('`', "``"),
             col_defs.join(", ")
         );
-        info!(message = "Creating table from first event", table = %table, sql = %create_sql);
+        // Log table name only; full DDL may include column names from tenant data.
+        info!(
+            message = "Creating table from first event",
+            table = %table,
+            column_count = col_defs.len()
+        );
+        debug!(message = "Auto-create table DDL", table = %table, sql = %create_sql);
 
         sqlx::query(&create_sql)
             .execute(pool)

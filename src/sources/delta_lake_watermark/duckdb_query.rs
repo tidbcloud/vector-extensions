@@ -8,6 +8,24 @@ use tracing::{debug, info, warn};
 
 use crate::sources::delta_lake_watermark::checkpoint::Checkpoint;
 
+/// Mask credential literals in a DuckDB `CREATE SECRET` SQL string for logging/errors.
+fn mask_create_secret_sql(
+    sql: &str,
+    access_key_id: &str,
+    secret_access_key: &str,
+    session_token: Option<&str>,
+) -> String {
+    let mut masked = sql
+        .replace(access_key_id, "***")
+        .replace(secret_access_key, "***");
+    if let Some(token) = session_token {
+        if !token.is_empty() {
+            masked = masked.replace(token, "***");
+        }
+    }
+    masked
+}
+
 /// DuckDB query executor for Delta Lake tables
 pub struct DuckDBQueryExecutor {
     connection: Arc<Mutex<Connection>>,
@@ -180,19 +198,34 @@ impl DuckDBQueryExecutor {
                         }
                         
                         // Add session token if present (for temporary credentials)
-                        if let Ok(session_token) = std::env::var("AWS_SESSION_TOKEN") {
-                            let session_token_escaped = session_token.replace("'", "''");
-                            secret_sql.push_str(&format!(", SESSION_TOKEN '{}'", session_token_escaped));
+                        let session_token_escaped =
+                            std::env::var("AWS_SESSION_TOKEN").ok().map(|t| t.replace('\'', "''"));
+                        if let Some(ref session_token_escaped) = session_token_escaped {
+                            secret_sql
+                                .push_str(&format!(", SESSION_TOKEN '{}'", session_token_escaped));
                             info!("Including AWS_SESSION_TOKEN in SECRET");
                         }
-                        
+
                         secret_sql.push_str(");");
-                        
+
+                        let masked_secret_sql = mask_create_secret_sql(
+                            &secret_sql,
+                            &access_key_id_escaped,
+                            &secret_access_key_escaped,
+                            session_token_escaped.as_deref(),
+                        );
                         info!("Executing CREATE SECRET for AWS S3 credentials...");
-                        debug!("CREATE SECRET SQL (credentials masked): {}", secret_sql.replace(&access_key_id_escaped, "***").replace(&secret_access_key_escaped, "***"));
-                        
-                        conn.execute(&secret_sql, [])
-                            .map_err(|e| format!("Failed to create AWS S3 secret: {}. SQL: {}", e, secret_sql.replace(&access_key_id_escaped, "***").replace(&secret_access_key_escaped, "***")))?;
+                        debug!(
+                            "CREATE SECRET SQL (credentials masked): {}",
+                            masked_secret_sql
+                        );
+
+                        conn.execute(&secret_sql, []).map_err(|e| {
+                            format!(
+                                "Failed to create AWS S3 secret: {}. SQL: {}",
+                                e, masked_secret_sql
+                            )
+                        })?;
                         
                         // Also set s3_region via SET command for DuckDB's native S3 functions
                         if let Some(ref region) = region {
@@ -489,6 +522,16 @@ impl DuckDBQueryExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_create_secret_sql_redacts_session_token() {
+        let sql = "CREATE SECRET s3_credentials (TYPE S3, KEY_ID 'AKIAEXAMPLE', SECRET 'wJalrX', SESSION_TOKEN 'temporary-token');";
+        let masked = mask_create_secret_sql(sql, "AKIAEXAMPLE", "wJalrX", Some("temporary-token"));
+        assert!(!masked.contains("AKIAEXAMPLE"));
+        assert!(!masked.contains("wJalrX"));
+        assert!(!masked.contains("temporary-token"));
+        assert!(masked.contains("SESSION_TOKEN '***'"));
+    }
 
     // TC-013: Test query building - basic
     #[test]

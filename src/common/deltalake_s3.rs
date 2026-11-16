@@ -29,15 +29,7 @@ pub fn redact_storage_options_for_log(
     let mut redacted = storage_options.clone();
     for (key, value) in redacted.iter_mut() {
         if is_sensitive_storage_option_key(key) {
-            if key.eq_ignore_ascii_case("AWS_ACCESS_KEY_ID") {
-                *value = if value.len() > 8 {
-                    format!("{}...", &value[..8])
-                } else {
-                    "***".to_string()
-                };
-            } else {
-                *value = REDACTED.to_string();
-            }
+            *value = REDACTED.to_string();
         }
     }
     redacted
@@ -309,13 +301,7 @@ pub async fn apply_s3_storage_options(
             let access_key_id_str = access_key_id.inner();
             let secret_access_key_str = secret_access_key.inner();
 
-            // Log access key ID (first few chars only for security)
-            let access_key_preview = if access_key_id_str.len() > 8 {
-                format!("{}...", &access_key_id_str[..8])
-            } else {
-                "***".to_string()
-            };
-            info!("Using AccessKey ID: {}", access_key_preview);
+            info!("Using static AccessKey authentication (credentials redacted)");
 
             storage_options.insert(
                 "AWS_ACCESS_KEY_ID".to_string(),
@@ -543,7 +529,7 @@ mod tests {
 
         assert_eq!(
             redacted.get("AWS_ACCESS_KEY_ID").map(String::as_str),
-            Some("AKIATEST...")
+            Some(REDACTED)
         );
         assert_eq!(
             redacted.get("AWS_SECRET_ACCESS_KEY").map(String::as_str),
