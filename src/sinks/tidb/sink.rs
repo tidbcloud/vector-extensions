@@ -176,14 +176,15 @@ impl TiDBSink {
                 }
                 fields_seen.insert(name.to_string());
 
+                let inferred = Self::infer_mysql_type(value);
                 let mysql_type = schema_meta
                     .as_ref()
                     .and_then(|m| m.get(name))
                     .and_then(|info| info.as_object())
                     .and_then(|obj| obj.get("mysql_type"))
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| Self::infer_mysql_type(value));
+                    .and_then(|s| Self::sanitize_mysql_type(s.as_ref()))
+                    .unwrap_or(inferred);
 
                 let col_def = format!("`{}` {}", Self::escape_ident(name), mysql_type);
                 col_defs.push(col_def);
@@ -239,6 +240,66 @@ impl TiDBSink {
             Value::Regex(_) => "TEXT",
         }
         .to_string()
+    }
+
+    /// Allow only a single MySQL type token (optional precision / UNSIGNED).
+    /// Event-supplied `mysql_type` is otherwise free-form and would be spliced into DDL.
+    fn sanitize_mysql_type(raw: &str) -> Option<String> {
+        let s = raw.trim();
+        if s.is_empty() || s.len() > 64 {
+            return None;
+        }
+
+        let bytes = s.as_bytes();
+        let mut i = 0;
+
+        // Base type name: letters only (BIGINT, VARCHAR, DATETIME, ...).
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+            i += 1;
+        }
+        if i == start {
+            return None;
+        }
+
+        // Optional (n) or (n,m).
+        if i < bytes.len() && bytes[i] == b'(' {
+            i += 1;
+            let dig_start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == dig_start {
+                return None;
+            }
+            if i < bytes.len() && bytes[i] == b',' {
+                i += 1;
+                let dig2 = i;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i == dig2 {
+                    return None;
+                }
+            }
+            if i >= bytes.len() || bytes[i] != b')' {
+                return None;
+            }
+            i += 1;
+        }
+
+        // Optional whitespace + UNSIGNED.
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < bytes.len() {
+            let rest = &s[i..];
+            if !rest.eq_ignore_ascii_case("unsigned") {
+                return None;
+            }
+        }
+
+        Some(s.to_string())
     }
 
     fn escape_ident(s: &str) -> String {
@@ -625,6 +686,40 @@ mod tests {
     fn test_infer_mysql_type_large_bytes() {
         let val = Value::Bytes(Bytes::from(vec![b'a'; 70000]));
         assert_eq!(TiDBSink::infer_mysql_type(&val), "LONGTEXT");
+    }
+
+    // -- sanitize_mysql_type --
+
+    #[test]
+    fn test_sanitize_mysql_type_accepts_common_types() {
+        assert_eq!(
+            TiDBSink::sanitize_mysql_type("BIGINT").as_deref(),
+            Some("BIGINT")
+        );
+        assert_eq!(
+            TiDBSink::sanitize_mysql_type("varchar(4096)").as_deref(),
+            Some("varchar(4096)")
+        );
+        assert_eq!(
+            TiDBSink::sanitize_mysql_type("DATETIME(6)").as_deref(),
+            Some("DATETIME(6)")
+        );
+        assert_eq!(
+            TiDBSink::sanitize_mysql_type("DECIMAL(10,2)").as_deref(),
+            Some("DECIMAL(10,2)")
+        );
+        assert_eq!(
+            TiDBSink::sanitize_mysql_type("INT UNSIGNED").as_deref(),
+            Some("INT UNSIGNED")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_mysql_type_rejects_injection() {
+        assert!(TiDBSink::sanitize_mysql_type("INT); DROP TABLE t; --").is_none());
+        assert!(TiDBSink::sanitize_mysql_type("TEXT; DELETE FROM t").is_none());
+        assert!(TiDBSink::sanitize_mysql_type("").is_none());
+        assert!(TiDBSink::sanitize_mysql_type("varchar(abc)").is_none());
     }
 
     // -- escape_ident --
