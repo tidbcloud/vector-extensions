@@ -54,11 +54,16 @@ impl S3ContentPartitionedSink {
     }
 
     fn key_from_event(log: &vector_lib::event::LogEvent) -> Option<PartitionKey> {
-        let component = log.get("component").and_then(|v| v.as_str())?.to_string();
-        let hour_partition = log.get("hour_partition").and_then(|v| v.as_str())?.to_string();
+        let component = log.get("component").and_then(|v| v.as_str())?;
+        let hour_partition = log.get("hour_partition").and_then(|v| v.as_str())?;
+        if !crate::common::path_segment::is_safe_path_segment(component.as_ref())
+            || !crate::common::path_segment::is_safe_path_segment(hour_partition.as_ref())
+        {
+            return None;
+        }
         Some(PartitionKey {
-            component,
-            hour_partition,
+            component: component.into_owned(),
+            hour_partition: hour_partition.into_owned(),
         })
     }
 
@@ -173,6 +178,14 @@ mod tests {
     #[test]
     fn test_key_from_event_missing_both() {
         let log = LogEvent::default();
+        assert!(S3ContentPartitionedSink::key_from_event(&log).is_none());
+    }
+
+    #[test]
+    fn test_key_from_event_rejects_path_traversal() {
+        let mut log = LogEvent::default();
+        log.insert("component", Value::Bytes(Bytes::from("../../other-tenant")));
+        log.insert("hour_partition", Value::Bytes(Bytes::from("2026010804")));
         assert!(S3ContentPartitionedSink::key_from_event(&log).is_none());
     }
 

@@ -11,20 +11,7 @@ use vector_lib::sink::StreamSink;
 use crate::common::deltalake_writer::{
     is_stale_delta_log_error, DeltaLakeWriter, DeltaTableConfig, WriteConfig,
 };
-
-/// Reject table names that could escape `base_path` via `..` or nested separators.
-fn is_safe_table_path_segment(table_name: &str) -> bool {
-    if table_name.is_empty() || table_name.contains('\0') {
-        return false;
-    }
-    if table_name.contains('/') || table_name.contains('\\') {
-        return false;
-    }
-    if table_name == "." || table_name == ".." || table_name.contains("..") {
-        return false;
-    }
-    true
-}
+use crate::common::path_segment::is_safe_path_segment;
 
 /// Delta Lake sink processor
 pub struct DeltaLakeSink {
@@ -85,7 +72,7 @@ impl DeltaLakeSink {
 
         // Write each table's events
         for (table_name, table_events) in table_events {
-            if !is_safe_table_path_segment(&table_name) {
+            if !is_safe_path_segment(&table_name) {
                 error!(
                     "Rejected Delta Lake write for unsafe table name '{}': must be a single path segment without '..' or separators",
                     table_name
@@ -240,15 +227,15 @@ mod tests {
 
     #[test]
     fn test_rejects_unsafe_table_path_segments() {
-        assert!(is_safe_table_path_segment("persisted_statements_summary"));
-        assert!(!is_safe_table_path_segment("../etc"));
-        assert!(!is_safe_table_path_segment("foo/bar"));
-        assert!(!is_safe_table_path_segment("foo\\bar"));
-        assert!(!is_safe_table_path_segment(".."));
-        assert!(!is_safe_table_path_segment(""));
+        assert!(is_safe_path_segment("persisted_statements_summary"));
+        assert!(!is_safe_path_segment("../etc"));
+        assert!(!is_safe_path_segment("foo/bar"));
+        assert!(!is_safe_path_segment("foo\\bar"));
+        assert!(!is_safe_path_segment(".."));
+        assert!(!is_safe_path_segment(""));
         // Absolute path would make PathBuf::join replace base_path entirely.
-        assert!(!is_safe_table_path_segment("/etc/cron.d"));
-        assert!(!is_safe_table_path_segment("/othertenant/table"));
+        assert!(!is_safe_path_segment("/etc/cron.d"));
+        assert!(!is_safe_path_segment("/othertenant/table"));
     }
 
     #[test]

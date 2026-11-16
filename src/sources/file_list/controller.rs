@@ -47,7 +47,12 @@ fn build_line_event(
         log_event.insert("hour_partition", LogValue::Bytes(hour.clone().into()));
         log_event.insert("component", LogValue::Bytes(comp.clone().into()));
     }
+    // Do not let line-derived captures overwrite path-partition fields taken from
+    // the object key; those segments are the tenancy / routing boundary for sinks.
     for (k, v) in &parsed {
+        if k == "component" || k == "hour_partition" {
+            continue;
+        }
         log_event.insert(k.as_str(), LogValue::Bytes(v.clone().into()));
     }
     if emit_metadata {
