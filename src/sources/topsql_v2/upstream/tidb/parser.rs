@@ -41,6 +41,74 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
     }
 
     fn keep_top_n(responses: Vec<Self::UpstreamEvent>, top_n: usize) -> Vec<Self::UpstreamEvent> {
+        // Partition by keyspace before aggregating so multi-tenant TiDB streams keep
+        // each tenant's digests under that tenant's keyspace label (and top_n budget).
+        let mut passthrough = Vec::new();
+        let mut by_keyspace: HashMap<Vec<u8>, Vec<TopSqlSubResponse>> = HashMap::new();
+        for response in responses {
+            match response.resp_oneof {
+                Some(RespOneof::Record(record)) => {
+                    by_keyspace
+                        .entry(record.keyspace_name.clone())
+                        .or_default()
+                        .push(TopSqlSubResponse {
+                            resp_oneof: Some(RespOneof::Record(record)),
+                        });
+                }
+                other => {
+                    passthrough.push(TopSqlSubResponse { resp_oneof: other });
+                }
+            }
+        }
+
+        let mut out = passthrough;
+        for (keyspace_name, group) in by_keyspace {
+            out.extend(Self::keep_top_n_one_keyspace(group, top_n, keyspace_name));
+        }
+        out
+    }
+
+    fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, interval_sec: u32) {
+        if interval_sec <= 1 {
+            return;
+        }
+        let interval_sec = interval_sec as u64;
+        for response in responses {
+            if let Some(RespOneof::Record(record)) = &mut response.resp_oneof {
+                let mut new_items = BTreeMap::new();
+                for item in &record.items {
+                    let new_ts =
+                        item.timestamp_sec + (interval_sec - item.timestamp_sec % interval_sec);
+                    match new_items.get(&new_ts) {
+                        None => {
+                            let mut new_item = item.clone();
+                            new_item.timestamp_sec = new_ts;
+                            new_items.insert(new_ts, new_item);
+                        }
+                        Some(existed_item) => {
+                            let mut new_item = existed_item.clone();
+                            new_item.cpu_time_ms += item.cpu_time_ms;
+                            new_item.stmt_exec_count += item.stmt_exec_count;
+                            new_item.stmt_duration_count += item.stmt_duration_count;
+                            new_item.stmt_duration_sum_ns += item.stmt_duration_sum_ns;
+                            new_item.stmt_network_in_bytes += item.stmt_network_in_bytes;
+                            new_item.stmt_network_out_bytes += item.stmt_network_out_bytes;
+                            new_items.insert(new_ts, new_item);
+                        }
+                    }
+                }
+                record.items = new_items.into_values().collect();
+            }
+        }
+    }
+}
+
+impl TopSqlSubResponseParser {
+    fn keep_top_n_one_keyspace(
+        responses: Vec<TopSqlSubResponse>,
+        top_n: usize,
+        keyspace_name: Vec<u8>,
+    ) -> Vec<TopSqlSubResponse> {
         #[derive(Clone)]
         struct PerPeriodDigest {
             sql_digest: Vec<u8>,
@@ -56,13 +124,8 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         let mut new_responses = vec![];
         let mut ts_others = BTreeMap::new();
         let mut ts_digests = BTreeMap::new();
-        let mut keyspace_name = None;
         for response in responses {
             if let Some(RespOneof::Record(record)) = response.resp_oneof {
-                // Save keyspace_name from the first record encountered
-                if keyspace_name.is_none() {
-                    keyspace_name = Some(record.keyspace_name.clone());
-                }
                 if record.sql_digest.is_empty() {
                     for item in record.items {
                         ts_others.insert(item.timestamp_sec, item);
@@ -165,7 +228,6 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
             digest_items.insert(others_k, ts_others.into_values().collect());
         }
 
-        let keyspace_name = keyspace_name.unwrap_or_default();
         for (digest, items) in digest_items {
             new_responses.push(TopSqlSubResponse {
                 resp_oneof: Some(RespOneof::Record(TopSqlRecord {
@@ -179,42 +241,6 @@ impl UpstreamEventParser for TopSqlSubResponseParser {
         new_responses
     }
 
-    fn downsampling(responses: &mut Vec<Self::UpstreamEvent>, interval_sec: u32) {
-        if interval_sec <= 1 {
-            return;
-        }
-        let interval_sec = interval_sec as u64;
-        for response in responses {
-            if let Some(RespOneof::Record(record)) = &mut response.resp_oneof {
-                let mut new_items = BTreeMap::new();
-                for item in &record.items {
-                    let new_ts =
-                        item.timestamp_sec + (interval_sec - item.timestamp_sec % interval_sec);
-                    match new_items.get(&new_ts) {
-                        None => {
-                            let mut new_item = item.clone();
-                            new_item.timestamp_sec = new_ts;
-                            new_items.insert(new_ts, new_item);
-                        }
-                        Some(existed_item) => {
-                            let mut new_item = existed_item.clone();
-                            new_item.cpu_time_ms += item.cpu_time_ms;
-                            new_item.stmt_exec_count += item.stmt_exec_count;
-                            new_item.stmt_duration_count += item.stmt_duration_count;
-                            new_item.stmt_duration_sum_ns += item.stmt_duration_sum_ns;
-                            new_item.stmt_network_in_bytes += item.stmt_network_in_bytes;
-                            new_item.stmt_network_out_bytes += item.stmt_network_out_bytes;
-                            new_items.insert(new_ts, new_item);
-                        }
-                    }
-                }
-                record.items = new_items.into_values().collect();
-            }
-        }
-    }
-}
-
-impl TopSqlSubResponseParser {
     fn decode_keyspace_name(keyspace_name: &[u8]) -> Option<String> {
         if keyspace_name.is_empty() {
             return None;
@@ -500,6 +526,68 @@ mod tests {
         } else {
             panic!("Expected Record");
         }
+    }
+
+    #[test]
+    fn test_keep_top_n_preserves_per_keyspace() {
+        // Multi-keyspace batch must not stamp the first keyspace onto every record.
+        let timestamp = 1000u64;
+        let ks_a = b"keyspace_a".to_vec();
+        let ks_b = b"keyspace_b".to_vec();
+        let digest_a = vec![1u8];
+        let digest_b = vec![2u8];
+        let plan = vec![9u8];
+
+        let responses = vec![
+            TopSqlSubResponse {
+                resp_oneof: Some(RespOneof::Record(TopSqlRecord {
+                    sql_digest: digest_a.clone(),
+                    plan_digest: plan.clone(),
+                    items: vec![TopSqlRecordItem {
+                        timestamp_sec: timestamp,
+                        cpu_time_ms: 50,
+                        stmt_exec_count: 1,
+                        stmt_kv_exec_count: BTreeMap::new(),
+                        stmt_duration_sum_ns: 1000,
+                        stmt_duration_count: 1,
+                        stmt_network_in_bytes: 10,
+                        stmt_network_out_bytes: 10,
+                    }],
+                    keyspace_name: ks_a.clone(),
+                })),
+            },
+            TopSqlSubResponse {
+                resp_oneof: Some(RespOneof::Record(TopSqlRecord {
+                    sql_digest: digest_b.clone(),
+                    plan_digest: plan.clone(),
+                    items: vec![TopSqlRecordItem {
+                        timestamp_sec: timestamp,
+                        cpu_time_ms: 60,
+                        stmt_exec_count: 1,
+                        stmt_kv_exec_count: BTreeMap::new(),
+                        stmt_duration_sum_ns: 1000,
+                        stmt_duration_count: 1,
+                        stmt_network_in_bytes: 10,
+                        stmt_network_out_bytes: 10,
+                    }],
+                    keyspace_name: ks_b.clone(),
+                })),
+            },
+        ];
+
+        let result = TopSqlSubResponseParser::keep_top_n(responses, 10);
+        assert_eq!(result.len(), 2);
+
+        let mut seen = BTreeMap::new();
+        for response in result {
+            if let Some(RespOneof::Record(record)) = response.resp_oneof {
+                seen.insert(record.sql_digest.clone(), record.keyspace_name.clone());
+            } else {
+                panic!("Expected Record");
+            }
+        }
+        assert_eq!(seen.get(&digest_a), Some(&ks_a));
+        assert_eq!(seen.get(&digest_b), Some(&ks_b));
     }
 
     #[test]
