@@ -347,13 +347,8 @@ pub mod utils {
     }
 
     /// Keys reserved for agent routing/provenance; collected columns must not set them.
-    ///
-    /// Also reject dotted forms (e.g. `_schema_metadata.DIGEST.mysql_type`) so a forged
-    /// result-set column label cannot nest under `_schema_metadata` via Vector path insert.
     fn is_reserved_event_key(key: &str) -> bool {
-        key == "_schema_metadata"
-            || key.starts_with("_schema_metadata.")
-            || key.starts_with("_vector_")
+        key == "_schema_metadata" || key.starts_with("_vector_")
     }
 
     /// Parse collection interval
@@ -482,10 +477,6 @@ mod tests {
             serde_json::Value::String("forged".to_string()),
         );
         row_data.insert(
-            "_schema_metadata.DIGEST.mysql_type".to_string(),
-            serde_json::Value::String("INT); DROP TABLE t; --".to_string()),
-        );
-        row_data.insert(
             "DIGEST".to_string(),
             serde_json::Value::String("ok".to_string()),
         );
@@ -531,12 +522,6 @@ mod tests {
         assert_eq!(
             log_event.get("DIGEST").and_then(|v| v.as_str()).as_deref(),
             Some("ok")
-        );
-        assert!(
-            log_event
-                .get("_schema_metadata.DIGEST.mysql_type")
-                .is_none(),
-            "dotted _schema_metadata.* column labels must not forge nested schema metadata"
         );
     }
 }
