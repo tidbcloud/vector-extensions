@@ -521,6 +521,8 @@ impl TopSQLDeltaLakeSink {
     }
 
     fn table_partition_values(table_name: &str) -> (&str, &str) {
+        use crate::common::path_segment::is_safe_path_segment;
+
         if table_name == SOURCE_TABLE_TOPRU {
             ("topru", "default")
         } else {
@@ -529,13 +531,16 @@ impl TopSQLDeltaLakeSink {
                 .and_then(|rest| rest.split_once('_'))
             {
                 Some((table_type, table_instance))
-                    if !table_type.is_empty() && !table_instance.is_empty() =>
+                    if !table_type.is_empty()
+                        && !table_instance.is_empty()
+                        && is_safe_path_segment(table_type)
+                        && is_safe_path_segment(table_instance) =>
                 {
                     (table_type, table_instance)
                 }
                 _ => {
                     error!(
-                        "Unexpected table_name format (expected `topsql_{{type}}_{{instance}}` or `topsql_topru`): {}",
+                        "Unexpected or unsafe table_name format (expected `topsql_{{type}}_{{instance}}` or `topsql_topru`): {}",
                         table_name
                     );
                     ("unknown", "unknown")

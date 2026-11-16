@@ -531,6 +531,18 @@ impl TopSQLDeltaLakeSink {
     }
 
     fn build_table_path(&self, table_name: &str, route: Option<&KeyspaceRoute>) -> PathBuf {
+        use crate::common::path_segment::is_safe_path_segment;
+
+        let safe_table_name = if is_safe_path_segment(table_name) {
+            table_name
+        } else {
+            error!(
+                "Unsafe table_name path segment for TopSQL meta; using unknown: {}",
+                table_name
+            );
+            "unknown"
+        };
+
         let mut base_path = self.base_path.clone();
         let mut segments = Vec::new();
         if let Some(route) = route {
@@ -538,7 +550,7 @@ impl TopSQLDeltaLakeSink {
                 base_path = replace_keyspace_route_segments(&base_path, route);
             }
         }
-        segments.push(format!("component={}", table_name));
+        segments.push(format!("component={}", safe_table_name));
 
         let segment_refs: Vec<&str> = segments.iter().map(|segment| segment.as_str()).collect();
         Self::join_path(&base_path, &segment_refs)

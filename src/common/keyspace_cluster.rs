@@ -71,10 +71,18 @@ pub fn validate_keyspace_route_template(path: &str) -> Result<(), String> {
 }
 
 pub fn replace_keyspace_route_segments(base_path: &PathBuf, route: &KeyspaceRoute) -> PathBuf {
-    debug_assert!(
-        !route.org_id.contains('/') && !route.cluster_id.contains('/'),
-        "org_id and cluster_id must not contain path separators"
-    );
+    use crate::common::path_segment::is_safe_path_segment;
+
+    // Fail closed: refuse to splice unsafe org/cluster into destination prefixes.
+    if !is_safe_path_segment(&route.org_id) || !is_safe_path_segment(&route.cluster_id) {
+        tracing::warn!(
+            message = "Refusing keyspace route with unsafe org_id/cluster_id path segments",
+            org_id = %route.org_id,
+            cluster_id = %route.cluster_id
+        );
+        return base_path.clone();
+    }
+
     let path = base_path.to_string_lossy();
     let replaced = path
         .split('/')
@@ -317,10 +325,15 @@ fn extract_error_message(value: &Value) -> Option<&str> {
 }
 
 fn extract_route_from_config(config: &HashMap<String, String>) -> Option<KeyspaceRoute> {
+    use crate::common::path_segment::is_safe_path_segment;
+
     let org_id = find_config_value(config, ORG_ID_KEYS)?;
     let cluster_id = find_config_value(config, CLUSTER_ID_KEYS)?;
 
     if org_id.is_empty() || cluster_id.is_empty() {
+        return None;
+    }
+    if !is_safe_path_segment(org_id) || !is_safe_path_segment(cluster_id) {
         return None;
     }
 
@@ -429,6 +442,19 @@ mod tests {
                 "s3://bucket/deltalake/org=30018/cluster=10155668891296301432/type=topsql"
             )
         );
+    }
+
+    #[test]
+    fn replace_keyspace_route_segments_rejects_unsafe_ids() {
+        let base = PathBuf::from("s3://bucket/deltalake/org=xxx/cluster=xxx/type=topsql");
+        let replaced = replace_keyspace_route_segments(
+            &base,
+            &KeyspaceRoute {
+                org_id: "../other".to_string(),
+                cluster_id: "10155668891296301432".to_string(),
+            },
+        );
+        assert_eq!(replaced, base);
     }
 
     #[test]
