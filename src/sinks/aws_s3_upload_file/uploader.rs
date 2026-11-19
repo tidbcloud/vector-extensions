@@ -38,6 +38,7 @@ impl S3Uploader {
     }
 
     pub async fn upload(&mut self, upload_key: &UploadKey) -> io::Result<UploadResponse> {
+        upload_key.ensure_still_valid_for_upload()?;
         Ok(if self.need_upload(upload_key).await? {
             UploadResponse {
                 count: 1,
