@@ -167,6 +167,35 @@ impl UploadKey {
             filename,
         })
     }
+
+    /// Re-validate the local path immediately before reading/uploading.
+    ///
+    /// Upload sinks delay the read by `delay_upload_secs` after event receipt.
+    /// Re-checking closes TOCTOU races where a validated regular file is replaced
+    /// with a symlink (e.g. to a service-account token) before upload.
+    ///
+    /// Requires the path to still canonicalize to the same stored filename
+    /// (identity check) and to pass the sensitive-prefix denylist again.
+    pub fn ensure_still_valid_for_upload(&self) -> io::Result<()> {
+        match validate_local_upload_path(&self.filename, &[]) {
+            Some(canonical) if canonical == self.filename => Ok(()),
+            Some(canonical) => {
+                warn!(
+                    message = "Rejected upload: path changed since validation (possible symlink swap).",
+                    stored = %self.filename,
+                    now = %canonical
+                );
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "upload path changed since validation",
+                ))
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "upload path failed re-validation",
+            )),
+        }
+    }
 }
 
 /// Roots that must never be uploaded even when no allow-list is configured.
@@ -417,5 +446,30 @@ mod tests {
             &[other.path().to_path_buf()]
         )
         .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_still_valid_rejects_symlink_swap_after_validation() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("legit.bin");
+        File::create(&file_path).unwrap().write_all(b"ok").unwrap();
+        let path = file_path.to_str().unwrap();
+
+        let key = UploadKey::from_event(&event_with(path, "prefix/legit.bin"), "bucket").unwrap();
+        assert!(key.ensure_still_valid_for_upload().is_ok());
+
+        // Simulate TOCTOU: replace the validated file with a symlink to a sensitive path.
+        fs::remove_file(&file_path).unwrap();
+        let secrets = dir.path().join("secrets");
+        fs::create_dir_all(&secrets).unwrap();
+        let token = secrets.join("token");
+        File::create(&token).unwrap().write_all(b"secret").unwrap();
+        // Point through a path that canonicalize will resolve differently than stored.
+        symlink(&token, &file_path).unwrap();
+
+        assert!(key.ensure_still_valid_for_upload().is_err());
     }
 }
