@@ -1,23 +1,28 @@
 # Multi-stage build for smaller final image
 FROM docker.io/debian:13-slim as builder
 
-# Install build dependencies
+# Install build dependencies.
+# Pull/upgrade zlib1g for CVE-2026-85091 (DSA-6613-1 → …+deb13u1 on trixie).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \
     systemd \
     curl \
     binutils \
+    zlib1g \
+    && apt-get upgrade -y --no-install-recommends zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 # Final stage with minimal runtime dependencies
 FROM docker.io/debian:13-slim
 
-# Install only runtime dependencies
+# Install only runtime dependencies; upgrade zlib1g for CVE-2026-85091.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     tzdata \
     systemd \
+    zlib1g \
+    && apt-get upgrade -y --no-install-recommends zlib1g \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
