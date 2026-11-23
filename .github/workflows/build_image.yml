@@ -127,11 +127,22 @@ jobs:
       #     find target/armv7-unknown-linux-gnueabihf/release/deps -name "*.rlib" -not -name "libvector*.rlib" -delete 2>/dev/null || true
       #     find target/armv7-unknown-linux-gnueabihf/release/build -type f -name "*.o" -delete 2>/dev/null || true
 
+      # Package only: binaries were built above with LTO=thin. Do not call
+      # `make release-docker` here — its phony cargo-install-cross dep forces
+      # `cross build` again, and without LTO=thin that falls back to fat LTO and
+      # can OOM after the earlier rlib cleanup.
       - name: Build and push standard image
         env:
           REPO: ${{ env.DOCKER_REPO }}
           TAG: ${{ steps.set_tags.outputs.tag }}
-        run: make release-docker
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+          CARGO_PROFILE_RELEASE_LTO: "thin"
+          CARGO_BUILD_JOBS: 4
+          CARGO_INCREMENTAL: 0
+        run: |
+          test -x target/x86_64-unknown-linux-gnu/release/vector
+          test -x target/aarch64-unknown-linux-gnu/release/vector
+          scripts/release-docker.sh
 
       - name: Clean up intermediate build artifacts
         run: |
@@ -152,11 +163,17 @@ jobs:
           REPO: ${{ env.DOCKER_REPO }}
           TAG: ${{ steps.set_tags.outputs.tag_ng }}
           NEXTGEN: "true"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+          CARGO_PROFILE_RELEASE_LTO: "thin"
+          CARGO_BUILD_JOBS: 4
+          CARGO_INCREMENTAL: 0
         run: |
           echo "Reusing the same vector binary; nextgen is a runtime env (VECTOR_NEXTGEN=true)"
+          test -x target/x86_64-unknown-linux-gnu/release/vector
+          test -x target/aarch64-unknown-linux-gnu/release/vector
           ls -lh target/x86_64-unknown-linux-gnu/release/vector
           ls -lh target/aarch64-unknown-linux-gnu/release/vector
-          make release-docker-nextgen
+          scripts/release-docker.sh
 
       - name: Build Summary
         run: |
