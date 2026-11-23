@@ -9,12 +9,6 @@
 //! Node-role mode matches deployments where worker nodes already have a RAM
 //! role that is trusted to assume a cross-account writer role (no static AK/SK,
 //! no RRSA webhook injection).
-//!
-//! Security notes:
-//! - STS calls use **POST** form bodies so OIDC tokens / `SecurityToken` /
-//!   signatures are not placed in request URLs (proxy / access logs).
-//! - `AliyunStsCredentials` redacts secrets in `Debug`.
-//! - IMDS credential error paths never dump raw JSON (may contain secrets).
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -23,7 +17,7 @@ use std::time::{Duration, SystemTime};
 
 use aws_credential_types::provider::{future, ProvideCredentials};
 use aws_credential_types::Credentials;
-use base64::prelude::BASE64_STANDARD;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use openssl::hash::MessageDigest;
@@ -32,26 +26,19 @@ use openssl::sign::Signer;
 use reqwest::Client;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Environment variables injected by ACK RRSA / pod identity webhook.
 pub const ENV_ROLE_ARN: &str = "ALIBABA_CLOUD_ROLE_ARN";
 pub const ENV_OIDC_TOKEN_FILE: &str = "ALIBABA_CLOUD_OIDC_TOKEN_FILE";
 pub const ENV_OIDC_PROVIDER_ARN: &str = "ALIBABA_CLOUD_OIDC_PROVIDER_ARN";
 
-/// ECS instance metadata endpoints for RAM role credentials.
-const ECS_METADATA_ROOT: &str = "http://100.100.100.200/latest";
+/// ECS instance metadata endpoint for RAM role credentials.
 const ECS_RAM_CREDENTIALS_BASE: &str =
     "http://100.100.100.200/latest/meta-data/ram/security-credentials/";
-const ECS_METADATA_TOKEN_URL: &str = "http://100.100.100.200/latest/api/token";
-const ECS_METADATA_TOKEN_HEADER: &str = "X-aliyun-ecs-metadata-token";
-const ECS_METADATA_TOKEN_TTL_HEADER: &str = "X-aliyun-ecs-metadata-token-ttl-seconds";
 
 /// Refresh credentials this long before the STS expiry.
 const REFRESH_SKEW: Duration = Duration::from_secs(5 * 60);
-
-/// Truncate external error bodies so logs stay bounded (never dump secrets).
-const MAX_ERROR_BODY_CHARS: usize = 256;
 
 /// Temporary credentials returned by Aliyun STS / IMDS.
 #[derive(Clone)]
@@ -82,7 +69,7 @@ pub fn resolve_rrsa_config(
         .or_else(|| std::env::var(ENV_ROLE_ARN).ok())
         .ok_or_else(|| {
             vector::Error::from(format!(
-                "{ENV_ROLE_ARN} is not set and auth.assume_role / auth.role_arn was not configured"
+                "{ENV_ROLE_ARN} is not set and auth.role_arn was not configured"
             ))
         })?;
 
@@ -116,47 +103,9 @@ fn validate_aliyun_role_arn(role_arn: &str) -> vector::Result<()> {
     Ok(())
 }
 
-/// Validate an IMDS-returned RAM role name before concatenating into a URL path.
-fn validate_ecs_ram_role_name(role_name: &str) -> vector::Result<()> {
-    if role_name.is_empty() {
-        return Err(vector::Error::from(
-            "ECS IMDS returned empty RAM role name (is a node RAM role attached?)",
-        ));
-    }
-    if role_name.len() > 128 {
-        return Err(vector::Error::from(
-            "ECS IMDS returned an unexpectedly long RAM role name",
-        ));
-    }
-    if role_name.contains("..") || role_name.contains('/') || role_name.contains('\\') {
-        return Err(vector::Error::from(
-            "ECS IMDS returned an invalid RAM role name (path characters)",
-        ));
-    }
-    if !role_name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-    {
-        return Err(vector::Error::from(
-            "ECS IMDS returned an invalid RAM role name (unexpected characters)",
-        ));
-    }
-    Ok(())
-}
-
 fn sts_endpoint(region: Option<&str>) -> String {
     let sts_region = region.unwrap_or("cn-hangzhou");
     format!("https://sts.{sts_region}.aliyuncs.com")
-}
-
-fn truncate_error_body(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.chars().count() <= MAX_ERROR_BODY_CHARS {
-        trimmed.to_string()
-    } else {
-        let truncated: String = trimmed.chars().take(MAX_ERROR_BODY_CHARS).collect();
-        format!("{truncated}…")
-    }
 }
 
 fn parse_credentials_object(credentials: &Value) -> vector::Result<AliyunStsCredentials> {
@@ -193,7 +142,7 @@ fn parse_credentials_object(credentials: &Value) -> vector::Result<AliyunStsCred
     })
 }
 
-/// Percent-encode for Aliyun RPC signatures (uppercase hex, `*` → `%2A`).
+/// Percent-encode for Aliyun RPC signatures.
 fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.as_bytes() {
@@ -237,7 +186,7 @@ fn sign_rpc_request(
     let sig = signer
         .sign_to_vec()
         .map_err(|e| vector::Error::from(format!("Failed to compute HMAC signature: {e}")))?;
-    Ok(BASE64_STANDARD.encode(sig))
+    Ok(BASE64.encode(sig))
 }
 
 fn http_client() -> vector::Result<Client> {
@@ -247,94 +196,30 @@ fn http_client() -> vector::Result<Client> {
         .map_err(|e| vector::Error::from(format!("Failed to create HTTP client: {e}")))
 }
 
-/// Try to obtain an Aliyun ECS metadata token (IMDSv2-style). Falls back to
-/// unauthenticated IMDS when the token endpoint is unavailable.
-async fn fetch_ecs_metadata_token(client: &Client) -> Option<String> {
-    match client
-        .put(ECS_METADATA_TOKEN_URL)
-        .header(ECS_METADATA_TOKEN_TTL_HEADER, "60")
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => match resp.text().await {
-            Ok(token) => {
-                let token = token.trim().to_string();
-                if token.is_empty() {
-                    warn!(
-                        message = "ECS metadata token endpoint returned empty body; falling back to unauthenticated IMDS",
-                        endpoint = ECS_METADATA_ROOT
-                    );
-                    None
-                } else {
-                    Some(token)
-                }
-            }
-            Err(_) => {
-                warn!(
-                    message = "Failed to read ECS metadata token body; falling back to unauthenticated IMDS",
-                    endpoint = ECS_METADATA_ROOT
-                );
-                None
-            }
-        },
-        Ok(resp) => {
-            warn!(
-                message = "ECS metadata token request failed; falling back to unauthenticated IMDS",
-                status = %resp.status(),
-                endpoint = ECS_METADATA_ROOT
-            );
-            None
-        }
-        Err(e) => {
-            warn!(
-                message = "ECS metadata token endpoint unreachable; falling back to unauthenticated IMDS",
-                error = %e,
-                endpoint = ECS_METADATA_ROOT
-            );
-            None
-        }
-    }
-}
-
-fn apply_metadata_token(
-    req: reqwest::RequestBuilder,
-    token: Option<&str>,
-) -> reqwest::RequestBuilder {
-    match token {
-        Some(t) => req.header(ECS_METADATA_TOKEN_HEADER, t),
-        None => req,
-    }
-}
-
 /// Fetch temporary credentials for the ECS instance / node RAM role via IMDS.
 pub async fn get_ecs_ram_role_credentials() -> vector::Result<AliyunStsCredentials> {
     let client = http_client()?;
-    let metadata_token = fetch_ecs_metadata_token(&client).await;
 
     info!(
         message = "Fetching Aliyun ECS node RAM role name from IMDS",
-        endpoint = ECS_RAM_CREDENTIALS_BASE,
-        metadata_token = metadata_token.is_some()
+        endpoint = ECS_RAM_CREDENTIALS_BASE
     );
 
-    let role_name_resp = apply_metadata_token(
-        client.get(ECS_RAM_CREDENTIALS_BASE),
-        metadata_token.as_deref(),
-    )
-    .send()
-    .await
-    .map_err(|e| {
-        vector::Error::from(format!(
-            "Failed to list ECS RAM role from IMDS ({ECS_RAM_CREDENTIALS_BASE}): {e}"
-        ))
-    })?;
+    let role_name_resp = client
+        .get(ECS_RAM_CREDENTIALS_BASE)
+        .send()
+        .await
+        .map_err(|e| {
+            vector::Error::from(format!(
+                "Failed to list ECS RAM role from IMDS ({ECS_RAM_CREDENTIALS_BASE}): {e}"
+            ))
+        })?;
 
     if !role_name_resp.status().is_success() {
         let status = role_name_resp.status();
         let text = role_name_resp.text().await.unwrap_or_default();
         return Err(vector::Error::from(format!(
-            "ECS IMDS role list failed: {status} - {}",
-            truncate_error_body(&text)
+            "ECS IMDS role list failed: {status} - {text}"
         )));
     }
 
@@ -345,7 +230,11 @@ pub async fn get_ecs_ram_role_credentials() -> vector::Result<AliyunStsCredentia
         .trim()
         .to_string();
 
-    validate_ecs_ram_role_name(&role_name)?;
+    if role_name.is_empty() {
+        return Err(vector::Error::from(
+            "ECS IMDS returned empty RAM role name (is a node RAM role attached?)",
+        ));
+    }
 
     let creds_url = format!("{ECS_RAM_CREDENTIALS_BASE}{role_name}");
     info!(
@@ -353,18 +242,15 @@ pub async fn get_ecs_ram_role_credentials() -> vector::Result<AliyunStsCredentia
         role_name = %role_name
     );
 
-    let creds_resp = apply_metadata_token(client.get(&creds_url), metadata_token.as_deref())
-        .send()
-        .await
-        .map_err(|e| {
-            vector::Error::from(format!("Failed to fetch ECS RAM credentials from IMDS: {e}"))
-        })?;
+    let creds_resp = client.get(&creds_url).send().await.map_err(|e| {
+        vector::Error::from(format!("Failed to fetch ECS RAM credentials from IMDS: {e}"))
+    })?;
 
     if !creds_resp.status().is_success() {
         let status = creds_resp.status();
-        // Do not include response body: success-shaped payloads contain secrets.
+        let text = creds_resp.text().await.unwrap_or_default();
         return Err(vector::Error::from(format!(
-            "ECS IMDS credentials request failed with HTTP {status}"
+            "ECS IMDS credentials failed: {status} - {text}"
         )));
     }
 
@@ -375,7 +261,7 @@ pub async fn get_ecs_ram_role_credentials() -> vector::Result<AliyunStsCredentia
 
     if let Some(code) = json.get("Code").and_then(|v| v.as_str()) {
         if code != "Success" {
-            // Never dump `{json}` — IMDS bodies include AccessKeySecret / SecurityToken.
+            // Do not dump `{json}` — IMDS bodies include AccessKeySecret / SecurityToken.
             return Err(vector::Error::from(format!(
                 "ECS IMDS credentials Code={code}"
             )));
@@ -391,9 +277,6 @@ pub async fn get_ecs_ram_role_credentials() -> vector::Result<AliyunStsCredentia
 }
 
 /// Call Aliyun STS `AssumeRole` signed with the given base credentials.
-///
-/// Uses **POST** so `SecurityToken`, `AccessKeyId`, and `Signature` stay out of
-/// the request URL.
 pub async fn assume_role(
     base: &AliyunStsCredentials,
     role_arn: &str,
@@ -423,10 +306,10 @@ pub async fn assume_role(
         base.security_token.clone(),
     );
 
+    // POST keeps SecurityToken / Signature out of the request URL (proxy/access logs).
     let signature = sign_rpc_request("POST", &params, &base.access_key_secret)?;
     params.insert("Signature".to_string(), signature);
 
-    // Body encoding must match the signed canonical query string encoding.
     let body: String = params
         .iter()
         .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
@@ -455,8 +338,7 @@ pub async fn assume_role(
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         return Err(vector::Error::from(format!(
-            "Aliyun STS AssumeRole returned error: {status} - {}",
-            truncate_error_body(&text)
+            "Aliyun STS AssumeRole returned error: {status} - {text}"
         )));
     }
 
@@ -484,8 +366,6 @@ pub async fn get_aliyun_sts_credentials_via_node_role(
 }
 
 /// Get temporary credentials from Aliyun STS using an OIDC token (RRSA).
-///
-/// Uses **POST** form body so `OIDCToken` is not placed in the request URL.
 pub async fn get_aliyun_sts_credentials(
     token_file: &str,
     role_arn: &str,
@@ -542,8 +422,7 @@ pub async fn get_aliyun_sts_credentials(
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         return Err(vector::Error::from(format!(
-            "Aliyun STS returned error: {status} - {}",
-            truncate_error_body(&text)
+            "Aliyun STS returned error: {status} - {text}"
         )));
     }
 
@@ -636,9 +515,8 @@ impl AliyunOidcCredentialsProvider {
         ))
     }
 
-    async fn load(
-        &self,
-    ) -> Result<Credentials, aws_credential_types::provider::error::CredentialsError> {
+    async fn load(&self) -> Result<Credentials, aws_credential_types::provider::error::CredentialsError>
+    {
         let mut guard = self.cache.lock().await;
         let now = SystemTime::now();
         let needs_refresh = match guard.as_ref() {
@@ -788,6 +666,35 @@ mod tests {
     }
 
     #[test]
+    fn percent_encode_leaves_unreserved() {
+        assert_eq!(percent_encode("abc-_.~XYZ012"), "abc-_.~XYZ012");
+    }
+
+    #[test]
+    fn percent_encode_encodes_specials() {
+        assert_eq!(percent_encode("a b*c"), "a%20b%2Ac");
+        assert_eq!(percent_encode("acs:ram::1:role/x"), "acs%3Aram%3A%3A1%3Arole%2Fx");
+    }
+
+    #[test]
+    fn sign_rpc_request_is_stable() {
+        let mut params = BTreeMap::new();
+        params.insert("AccessKeyId".to_string(), "testid".to_string());
+        params.insert("Action".to_string(), "AssumeRole".to_string());
+        params.insert("Format".to_string(), "JSON".to_string());
+        params.insert("SignatureMethod".to_string(), "HMAC-SHA1".to_string());
+        params.insert("SignatureNonce".to_string(), "nonce".to_string());
+        params.insert("SignatureVersion".to_string(), "1.0".to_string());
+        params.insert("Timestamp".to_string(), "2020-01-01T00:00:00Z".to_string());
+        params.insert("Version".to_string(), "2015-04-01".to_string());
+
+        let sig1 = sign_rpc_request("POST", &params, "testsecret").unwrap();
+        let sig2 = sign_rpc_request("POST", &params, "testsecret").unwrap();
+        assert_eq!(sig1, sig2);
+        assert!(!sig1.is_empty());
+    }
+
+    #[test]
     fn credentials_debug_redacts_secrets() {
         let creds = AliyunStsCredentials {
             access_key_id: "LTAIsecretid".into(),
@@ -800,52 +707,5 @@ mod tests {
         assert!(!rendered.contains("LTAIsecretid"));
         assert!(!rendered.contains("super-secret"));
         assert!(!rendered.contains("session-token-value"));
-    }
-
-    #[test]
-    fn validate_ecs_ram_role_name_rejects_path_chars() {
-        assert!(validate_ecs_ram_role_name("ok-role_1").is_ok());
-        assert!(validate_ecs_ram_role_name("../etc").is_err());
-        assert!(validate_ecs_ram_role_name("a/b").is_err());
-        assert!(validate_ecs_ram_role_name("").is_err());
-        assert!(validate_ecs_ram_role_name("bad role").is_err());
-    }
-
-    #[test]
-    fn percent_encode_leaves_unreserved() {
-        assert_eq!(percent_encode("abc-_.~XYZ012"), "abc-_.~XYZ012");
-    }
-
-    #[test]
-    fn percent_encode_encodes_specials() {
-        assert_eq!(percent_encode("a b*c"), "a%20b%2Ac");
-        assert_eq!(
-            percent_encode("acs:ram::1:role/x"),
-            "acs%3Aram%3A%3A1%3Arole%2Fx"
-        );
-    }
-
-    #[test]
-    fn sign_rpc_request_post_is_stable() {
-        let mut params = BTreeMap::new();
-        params.insert("AccessKeyId".to_string(), "testid".to_string());
-        params.insert("Action".to_string(), "AssumeRole".to_string());
-        params.insert("Format".to_string(), "JSON".to_string());
-        params.insert("SignatureMethod".to_string(), "HMAC-SHA1".to_string());
-        params.insert("SignatureNonce".to_string(), "nonce".to_string());
-        params.insert("SignatureVersion".to_string(), "1.0".to_string());
-        params.insert(
-            "Timestamp".to_string(),
-            "2020-01-01T00:00:00Z".to_string(),
-        );
-        params.insert("Version".to_string(), "2015-04-01".to_string());
-
-        let sig1 = sign_rpc_request("POST", &params, "testsecret").unwrap();
-        let sig2 = sign_rpc_request("POST", &params, "testsecret").unwrap();
-        assert_eq!(sig1, sig2);
-        assert!(!sig1.is_empty());
-        // POST and GET signatures must differ for the same params.
-        let sig_get = sign_rpc_request("GET", &params, "testsecret").unwrap();
-        assert_ne!(sig1, sig_get);
     }
 }
