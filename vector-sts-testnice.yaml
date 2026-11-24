@@ -1,3 +1,5 @@
+# LOAD-TEST ONLY — not a shipped customer log pipeline.
+# Synthetic CPU stress (demo_logs + perl loops). Do not treat as production evidence.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -75,7 +77,7 @@ spec:
             data_dir: /vector-data-dir
             api:
               enabled: true
-              address: 0.0.0.0:8687
+              address: 127.0.0.1:8687
               playground: false
             sources:
               internal_metrics:
@@ -128,11 +130,10 @@ spec:
                   . = parse_json!(.message)
                   .timestamp = now()
             sinks:
-              console:
-                type: console
+              # No console sink: avoid dumping event payloads to container stdout.
+              blackhole:
+                type: blackhole
                 inputs: ["parse_json"]
-                encoding:
-                  codec: json
               prometheus_exporter:
                 type: prometheus_exporter
                 inputs: ["internal_metrics"]

@@ -70,17 +70,23 @@ pub fn validate_keyspace_route_template(path: &str) -> Result<(), String> {
     ))
 }
 
-pub fn replace_keyspace_route_segments(base_path: &PathBuf, route: &KeyspaceRoute) -> PathBuf {
+/// Substitute PD-reported org/cluster into `org=` / `cluster=` template segments.
+///
+/// Returns `None` when either identifier is unsafe for a path segment. Callers
+/// must drop the event in that case — never fall back to the unsubstituted
+/// template, or every failed tenant would share one literal `org=/cluster=` prefix.
+pub fn replace_keyspace_route_segments(
+    base_path: &PathBuf,
+    route: &KeyspaceRoute,
+) -> Option<PathBuf> {
     use crate::common::path_segment::is_safe_path_segment;
 
-    // Fail closed: refuse to splice unsafe org/cluster into destination prefixes.
+    // Fail closed: refuse to write when org/cluster cannot be safely substituted.
     if !is_safe_path_segment(&route.org_id) || !is_safe_path_segment(&route.cluster_id) {
         tracing::warn!(
-            message = "Refusing keyspace route with unsafe org_id/cluster_id path segments",
-            org_id = %route.org_id,
-            cluster_id = %route.cluster_id
+            message = "Refusing keyspace route with unsafe org_id/cluster_id path segments; dropping write"
         );
-        return base_path.clone();
+        return None;
     }
 
     let path = base_path.to_string_lossy();
@@ -98,7 +104,7 @@ pub fn replace_keyspace_route_segments(base_path: &PathBuf, route: &KeyspaceRout
         .collect::<Vec<_>>()
         .join("/");
 
-    PathBuf::from(replaced)
+    Some(PathBuf::from(replaced))
 }
 
 #[derive(Clone)]
@@ -238,9 +244,10 @@ impl PdKeyspaceResolver {
                 if is_not_found_body(&body) {
                     return Ok(None);
                 }
+                // Do not include PD response body: it may contain cluster metadata.
                 return Err(format!(
-                    "pd keyspace lookup failed for {} with status {}: {}",
-                    keyspace_name, status, body
+                    "pd keyspace lookup failed for {} with status {}",
+                    keyspace_name, status
                 )
                 .into());
             }
@@ -411,6 +418,20 @@ mod tests {
     }
 
     #[test]
+    fn pd_lookup_error_message_omits_response_body() {
+        let body = r#"{"message":"internal leak: tenant=secret-org"}"#;
+        let status = StatusCode::INTERNAL_SERVER_ERROR;
+        let keyspace_name = "ks-1";
+        let err = format!(
+            "pd keyspace lookup failed for {} with status {}",
+            keyspace_name, status
+        );
+        assert!(!err.contains(body));
+        assert!(!err.contains("secret-org"));
+        assert!(err.contains("500"));
+    }
+
+    #[test]
     fn path_contains_keyspace_route_segments_requires_both_segments() {
         assert!(path_contains_keyspace_route_segments(
             "s3://bucket/deltalake/org=xxx/cluster=xxx/type=topsql"
@@ -438,23 +459,32 @@ mod tests {
 
         assert_eq!(
             replaced,
-            PathBuf::from(
+            Some(PathBuf::from(
                 "s3://bucket/deltalake/org=30018/cluster=10155668891296301432/type=topsql"
-            )
+            ))
         );
     }
 
     #[test]
     fn replace_keyspace_route_segments_rejects_unsafe_ids() {
         let base = PathBuf::from("s3://bucket/deltalake/org=xxx/cluster=xxx/type=topsql");
-        let replaced = replace_keyspace_route_segments(
+        // Must not return the unsubstituted template (shared tenant dump prefix).
+        assert!(replace_keyspace_route_segments(
             &base,
             &KeyspaceRoute {
                 org_id: "../other".to_string(),
                 cluster_id: "10155668891296301432".to_string(),
             },
-        );
-        assert_eq!(replaced, base);
+        )
+        .is_none());
+        assert!(replace_keyspace_route_segments(
+            &base,
+            &KeyspaceRoute {
+                org_id: "30018".to_string(),
+                cluster_id: "a/b".to_string(),
+            },
+        )
+        .is_none());
     }
 
     #[test]

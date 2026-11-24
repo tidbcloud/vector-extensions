@@ -29,6 +29,27 @@ fn encode_mysql_url_component(value: &str) -> String {
     out
 }
 
+/// Format a sqlx error for logs/errors without MySQL server text or query body.
+fn format_sqlx_error_for_log(err: &sqlx::Error) -> String {
+    match err {
+        sqlx::Error::Database(db) => match db.code() {
+            Some(code) => format!("database error code={code}"),
+            None => "database error".to_string(),
+        },
+        sqlx::Error::PoolTimedOut => "pool timed out".to_string(),
+        sqlx::Error::PoolClosed => "pool closed".to_string(),
+        sqlx::Error::RowNotFound => "row not found".to_string(),
+        sqlx::Error::ColumnNotFound(_) => "column not found".to_string(),
+        sqlx::Error::ColumnDecode { .. } => "column decode error".to_string(),
+        sqlx::Error::TypeNotFound { .. } => "type not found".to_string(),
+        sqlx::Error::Configuration(_) => "configuration error".to_string(),
+        sqlx::Error::Tls(_) => "tls error".to_string(),
+        sqlx::Error::Protocol(_) => "protocol error".to_string(),
+        sqlx::Error::Io(_) => "io error".to_string(),
+        _ => "sqlx error".to_string(),
+    }
+}
+
 /// Build a MySQL DSN with encoded credentials/db name and TLS query params.
 fn build_mysql_connection_url(database_config: &DatabaseConfig) -> String {
     let mut url = format!(
@@ -134,7 +155,10 @@ impl SqlCollector {
             .connect(&url)
             .await
             .map_err(|e| {
-                CollectionError::ConnectionError(format!("Failed to create pool: {}", e))
+                CollectionError::ConnectionError(format!(
+                    "Failed to create pool: {}",
+                    format_sqlx_error_for_log(&e)
+                ))
             })?;
 
         Ok(pool)
@@ -151,12 +175,21 @@ impl SqlCollector {
             table.source_schema, table.source_table
         );
 
-        debug!("Getting table schema: {}", schema_sql);
+        debug!(
+            message = "Getting table schema",
+            schema = %table.source_schema,
+            table = %table.source_table
+        );
 
         let schema_rows = sqlx::query(&schema_sql)
             .fetch_all(pool)
             .await
-            .map_err(|e| CollectionError::QueryError(format!("Schema query failed: {}", e)))?;
+            .map_err(|e| {
+                CollectionError::QueryError(format!(
+                    "Schema query failed: {}",
+                    format_sqlx_error_for_log(&e)
+                ))
+            })?;
 
         let mut column_types = HashMap::new();
 
@@ -221,23 +254,33 @@ impl SqlCollector {
         column_types: &HashMap<String, (String, bool)>,
     ) -> Result<Vec<HashMap<String, Value>>, CollectionError> {
         let sql = self.build_select_sql(table);
-        debug!("Executing query: {}", sql);
+        debug!(
+            message = "Executing query",
+            schema = %table.source_schema,
+            table = %table.source_table,
+            has_where = table.where_clause.is_some()
+        );
 
         let mut stream = sqlx::query(&sql).fetch(pool);
         let mut result = Vec::new();
         while let Some(row) = stream
             .try_next()
             .await
-            .map_err(|e| CollectionError::QueryError(format!("Data query failed: {}", e)))?
+            .map_err(|e| {
+                CollectionError::QueryError(format!(
+                    "Data query failed: {}",
+                    format_sqlx_error_for_log(&e)
+                ))
+            })?
         {
             result.push(self.row_to_map(&row, column_types)?);
         }
 
         debug!(
-            "Query returned {} rows for {}.{}",
-            result.len(),
-            table.source_schema,
-            table.source_table
+            message = "Query returned rows",
+            row_count = result.len(),
+            schema = %table.source_schema,
+            table = %table.source_table
         );
 
         Ok(result)
@@ -480,7 +523,12 @@ impl DataCollector for SqlCollector {
 
         let column_types = self.get_table_schema(table, pool).await?;
         let sql = self.build_select_sql(table);
-        debug!("Executing streaming query: {}", sql);
+        debug!(
+            message = "Executing streaming query",
+            schema = %table.source_schema,
+            table = %table.source_table,
+            has_where = table.where_clause.is_some()
+        );
 
         // row_count is unknown until the stream ends; events carry 0 here.
         // Peak memory stays near one converted row + the current event.
@@ -504,7 +552,12 @@ impl DataCollector for SqlCollector {
         while let Some(row) = stream
             .try_next()
             .await
-            .map_err(|e| CollectionError::QueryError(format!("Data query failed: {}", e)))?
+            .map_err(|e| {
+                CollectionError::QueryError(format!(
+                    "Data query failed: {}",
+                    format_sqlx_error_for_log(&e)
+                ))
+            })?
         {
             let row_data = self.row_to_map(&row, &column_types)?;
             // Drop the MySQL row before building/sending the event.
@@ -531,7 +584,10 @@ impl DataCollector for SqlCollector {
     async fn health_check(&self) -> Result<(), CollectionError> {
         if let Some(pool) = &self.pool {
             sqlx::query("SELECT 1").fetch_one(pool).await.map_err(|e| {
-                CollectionError::ConnectionError(format!("Health check failed: {}", e))
+                CollectionError::ConnectionError(format!(
+                    "Health check failed: {}",
+                    format_sqlx_error_for_log(&e)
+                ))
             })?;
             Ok(())
         } else {
@@ -594,5 +650,14 @@ mod tests {
     fn mysql_url_without_tls_has_no_query() {
         let url = build_mysql_connection_url(&sample_db_config("secret", "test", None));
         assert_eq!(url, "mysql://root:secret@127.0.0.1:4000/test");
+    }
+
+    #[test]
+    fn sqlx_error_log_omits_server_text() {
+        let err = sqlx::Error::Protocol("SELECT * FROM t WHERE secret=1 failed: leak".into());
+        let formatted = format_sqlx_error_for_log(&err);
+        assert_eq!(formatted, "protocol error");
+        assert!(!formatted.contains("secret"));
+        assert!(!formatted.contains("leak"));
     }
 }

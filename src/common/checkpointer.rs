@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
+use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use std::{fs, io};
@@ -182,8 +183,8 @@ impl UploadKey {
             Some(canonical) => {
                 warn!(
                     message = "Rejected upload: path changed since validation (possible symlink swap).",
-                    stored = %self.filename,
-                    now = %canonical
+                    stored = %path_fingerprint_for_log(&self.filename),
+                    now = %path_fingerprint_for_log(&canonical)
                 );
                 Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -207,45 +208,66 @@ const SENSITIVE_PATH_PREFIXES: &[&str] = &[
     "/run/secrets",
 ];
 
+/// Log-safe path identity: basename + hash, never the full absolute path.
+fn path_fingerprint_for_log(path: &str) -> String {
+    let basename = Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    format!("basename={basename} hash={:x}", hasher.finish())
+}
+
 fn validate_local_upload_path(
     filename: &str,
     allowed_path_prefixes: &[PathBuf],
 ) -> Option<String> {
+    let path_fp = path_fingerprint_for_log(filename);
     if filename.is_empty() || filename.contains('\0') {
-        warn!(message = "Rejected upload path: empty or contains NUL.", %filename);
+        warn!(message = "Rejected upload path: empty or contains NUL.", path = %path_fp);
         return None;
     }
 
     let path = Path::new(filename);
     if !path.is_absolute() {
-        warn!(message = "Rejected upload path: must be absolute.", %filename);
+        warn!(message = "Rejected upload path: must be absolute.", path = %path_fp);
         return None;
     }
     if path
         .components()
         .any(|c| matches!(c, Component::ParentDir))
     {
-        warn!(message = "Rejected upload path: contains '..'.", %filename);
+        warn!(message = "Rejected upload path: contains '..'.", path = %path_fp);
         return None;
     }
 
     let canonical = match path.canonicalize() {
         Ok(p) => p,
         Err(error) => {
-            warn!(message = "Rejected upload path: canonicalize failed.", %filename, %error);
+            warn!(
+                message = "Rejected upload path: canonicalize failed.",
+                path = %path_fp,
+                error = %error.kind()
+            );
             return None;
         }
     };
 
+    let canon_fp = path_fingerprint_for_log(&canonical.to_string_lossy());
     let meta = match fs::metadata(&canonical) {
         Ok(m) => m,
         Err(error) => {
-            warn!(message = "Rejected upload path: metadata failed.", path = %canonical.display(), %error);
+            warn!(
+                message = "Rejected upload path: metadata failed.",
+                path = %canon_fp,
+                error = %error.kind()
+            );
             return None;
         }
     };
     if !meta.is_file() {
-        warn!(message = "Rejected upload path: not a regular file.", path = %canonical.display());
+        warn!(message = "Rejected upload path: not a regular file.", path = %canon_fp);
         return None;
     }
 
@@ -254,7 +276,7 @@ fn validate_local_upload_path(
         if path_under_prefix(&canon_str, prefix) {
             warn!(
                 message = "Rejected upload path: under sensitive prefix.",
-                path = %canon_str,
+                path = %canon_fp,
                 %prefix
             );
             return None;
@@ -271,7 +293,7 @@ fn validate_local_upload_path(
         if !allowed {
             warn!(
                 message = "Rejected upload path: outside allowed_path_prefixes.",
-                path = %canon_str
+                path = %canon_fp
             );
             return None;
         }
@@ -290,7 +312,10 @@ fn validate_object_key(object_key: &str) -> Option<String> {
         return None;
     }
     if object_key.split('/').any(|part| part == "..") {
-        warn!(message = "Rejected object key: contains '..'.", %object_key);
+        warn!(
+            message = "Rejected object key: contains '..'.",
+            key = %path_fingerprint_for_log(object_key)
+        );
         return None;
     }
     Some(object_key.to_owned())
@@ -398,6 +423,15 @@ mod tests {
         assert!(UploadKey::from_event(&event_with("relative/file", "k"), "b").is_none());
         assert!(UploadKey::from_event(&event_with("/tmp/../etc/passwd", "k"), "b").is_none());
         assert!(UploadKey::from_event(&event_with("/etc/../proc/self/environ", "k"), "b").is_none());
+    }
+
+    #[test]
+    fn path_fingerprint_omits_full_path() {
+        let fp = path_fingerprint_for_log("/var/run/secrets/kubernetes.io/serviceaccount/token");
+        assert!(fp.contains("basename=token"));
+        assert!(fp.contains("hash="));
+        assert!(!fp.contains("/var/run/secrets"));
+        assert!(!fp.contains("serviceaccount"));
     }
 
     #[test]

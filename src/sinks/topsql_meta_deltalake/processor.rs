@@ -494,9 +494,16 @@ impl TopSQLDeltaLakeSink {
         if self.keyspace_route_resolver.is_some() && route.is_none() {
             return Ok(None);
         }
+        let Some(table_path) = self.build_table_path(&table_name, route.as_ref()) else {
+            warn!(
+                "Unsafe or unsubstituted keyspace route for TopSQL meta table {}; dropping event",
+                table_name
+            );
+            return Ok(None);
+        };
         Ok(Some(WriterKey {
             table_name: table_name.clone(),
-            table_path: self.build_table_path(&table_name, route.as_ref()),
+            table_path,
         }))
     }
 
@@ -530,7 +537,11 @@ impl TopSQLDeltaLakeSink {
         Ok(route)
     }
 
-    fn build_table_path(&self, table_name: &str, route: Option<&KeyspaceRoute>) -> PathBuf {
+    fn build_table_path(
+        &self,
+        table_name: &str,
+        route: Option<&KeyspaceRoute>,
+    ) -> Option<PathBuf> {
         use crate::common::path_segment::is_safe_path_segment;
 
         let safe_table_name = if is_safe_path_segment(table_name) {
@@ -547,13 +558,13 @@ impl TopSQLDeltaLakeSink {
         let mut segments = Vec::new();
         if let Some(route) = route {
             if path_contains_keyspace_route_segments(&self.base_path.to_string_lossy()) {
-                base_path = replace_keyspace_route_segments(&base_path, route);
+                base_path = replace_keyspace_route_segments(&base_path, route)?;
             }
         }
         segments.push(format!("component={}", safe_table_name));
 
         let segment_refs: Vec<&str> = segments.iter().map(|segment| segment.as_str()).collect();
-        Self::join_path(&base_path, &segment_refs)
+        Some(Self::join_path(&base_path, &segment_refs))
     }
 
     fn join_path(base_path: &PathBuf, segments: &[&str]) -> PathBuf {
@@ -919,13 +930,15 @@ mod tests {
             None,
         );
 
-        let table_path = sink.build_table_path(
-            SOURCE_TABLE_TOPSQL_SQL_META,
-            Some(&KeyspaceRoute {
-                org_id: "30018".to_string(),
-                cluster_id: "10155668891296301432".to_string(),
-            }),
-        );
+        let table_path = sink
+            .build_table_path(
+                SOURCE_TABLE_TOPSQL_SQL_META,
+                Some(&KeyspaceRoute {
+                    org_id: "30018".to_string(),
+                    cluster_id: "10155668891296301432".to_string(),
+                }),
+            )
+            .expect("safe route should build path");
 
         assert_eq!(
             table_path,
@@ -950,13 +963,15 @@ mod tests {
             None,
         );
 
-        let table_path = sink.build_table_path(
-            SOURCE_TABLE_TOPSQL_PLAN_META,
-            Some(&KeyspaceRoute {
-                org_id: "30018".to_string(),
-                cluster_id: "101".to_string(),
-            }),
-        );
+        let table_path = sink
+            .build_table_path(
+                SOURCE_TABLE_TOPSQL_PLAN_META,
+                Some(&KeyspaceRoute {
+                    org_id: "30018".to_string(),
+                    cluster_id: "101".to_string(),
+                }),
+            )
+            .expect("safe route should build path");
 
         assert_eq!(
             table_path,
@@ -965,10 +980,38 @@ mod tests {
     }
 
     #[test]
+    fn test_build_table_path_drops_unsafe_keyspace_route() {
+        let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
+            PathBuf::from("/tmp/test/org=xxx/cluster=xxx/type=topsql"),
+            vec![],
+            WriteConfig {
+                batch_size: 1,
+                timeout_secs: 0,
+            },
+            180,
+            None,
+            10000,
+            None,
+        );
+
+        assert!(sink
+            .build_table_path(
+                SOURCE_TABLE_TOPSQL_SQL_META,
+                Some(&KeyspaceRoute {
+                    org_id: "30018".to_string(),
+                    cluster_id: "a/../b".to_string(),
+                }),
+            )
+            .is_none());
+    }
+
+    #[test]
     fn test_build_table_path_without_keyspace_route_preserves_existing_layout() {
         let (sink, _) = create_test_sink_with_receiver(1);
 
-        let table_path = sink.build_table_path(SOURCE_TABLE_TOPSQL_PLAN_META, None);
+        let table_path = sink
+            .build_table_path(SOURCE_TABLE_TOPSQL_PLAN_META, None)
+            .expect("no route should still build path");
 
         assert_eq!(
             table_path,
