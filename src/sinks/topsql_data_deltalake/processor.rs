@@ -467,9 +467,16 @@ impl TopSQLDeltaLakeSink {
         if self.keyspace_route_resolver.is_some() && route.is_none() {
             return Ok(None);
         }
+        let Some(table_path) = self.build_table_path(&table_name, route.as_ref()) else {
+            warn!(
+                "Unsafe or unsubstituted keyspace route for TopSQL data table {}; dropping event",
+                table_name
+            );
+            return Ok(None);
+        };
         Ok(Some(WriterKey {
             table_name: table_name.clone(),
-            table_path: self.build_table_path(&table_name, route.as_ref()),
+            table_path,
         }))
     }
 
@@ -503,21 +510,25 @@ impl TopSQLDeltaLakeSink {
         Ok(route)
     }
 
-    fn build_table_path(&self, table_name: &str, route: Option<&KeyspaceRoute>) -> PathBuf {
+    fn build_table_path(
+        &self,
+        table_name: &str,
+        route: Option<&KeyspaceRoute>,
+    ) -> Option<PathBuf> {
         let (table_type, table_instance) = Self::table_partition_values(table_name);
         let mut base_path = self.base_path.clone();
 
         let mut segments = Vec::new();
         if let Some(route) = route {
             if path_contains_keyspace_route_segments(&self.base_path.to_string_lossy()) {
-                base_path = replace_keyspace_route_segments(&base_path, route);
+                base_path = replace_keyspace_route_segments(&base_path, route)?;
             }
         }
         segments.push(format!("component={}", table_type));
         segments.push(format!("instance={}", table_instance));
 
         let segment_refs: Vec<&str> = segments.iter().map(|segment| segment.as_str()).collect();
-        Self::join_path(&base_path, &segment_refs)
+        Some(Self::join_path(&base_path, &segment_refs))
     }
 
     fn table_partition_values(table_name: &str) -> (&str, &str) {
@@ -772,13 +783,15 @@ mod tests {
             None,
         );
 
-        let table_path = sink.build_table_path(
-            "topsql_tidb_127.0.0.1:10080",
-            Some(&KeyspaceRoute {
-                org_id: "1369847559692509642".to_string(),
-                cluster_id: "10110362358366286743".to_string(),
-            }),
-        );
+        let table_path = sink
+            .build_table_path(
+                "topsql_tidb_127.0.0.1:10080",
+                Some(&KeyspaceRoute {
+                    org_id: "1369847559692509642".to_string(),
+                    cluster_id: "10110362358366286743".to_string(),
+                }),
+            )
+            .expect("safe route should build path");
 
         assert_eq!(
             table_path,
@@ -802,13 +815,15 @@ mod tests {
             None,
         );
 
-        let table_path = sink.build_table_path(
-            "topsql_tidb_127.0.0.1:10080",
-            Some(&KeyspaceRoute {
-                org_id: "30018".to_string(),
-                cluster_id: "101".to_string(),
-            }),
-        );
+        let table_path = sink
+            .build_table_path(
+                "topsql_tidb_127.0.0.1:10080",
+                Some(&KeyspaceRoute {
+                    org_id: "30018".to_string(),
+                    cluster_id: "101".to_string(),
+                }),
+            )
+            .expect("safe route should build path");
 
         assert_eq!(
             table_path,
@@ -816,6 +831,31 @@ mod tests {
                 "/tmp/deltalake/org=30018/cluster=101/type=topsql/component=tidb/instance=127.0.0.1:10080"
             )
         );
+    }
+
+    #[test]
+    fn test_build_table_path_drops_unsafe_keyspace_route() {
+        let (sink, _) = TopSQLDeltaLakeSink::new_for_test(
+            PathBuf::from("/tmp/deltalake/org=xxx/cluster=xxx/type=topsql"),
+            vec![],
+            WriteConfig {
+                batch_size: 1,
+                timeout_secs: 0,
+            },
+            180,
+            None,
+            None,
+        );
+
+        assert!(sink
+            .build_table_path(
+                "topsql_tidb_127.0.0.1:10080",
+                Some(&KeyspaceRoute {
+                    org_id: "../evil".to_string(),
+                    cluster_id: "101".to_string(),
+                }),
+            )
+            .is_none());
     }
 
     #[test]
@@ -832,7 +872,9 @@ mod tests {
             None,
         );
 
-        let table_path = sink.build_table_path("topsql_topru", None);
+        let table_path = sink
+            .build_table_path("topsql_topru", None)
+            .expect("no route should still build path");
 
         assert_eq!(
             table_path,
