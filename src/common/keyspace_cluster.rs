@@ -238,9 +238,10 @@ impl PdKeyspaceResolver {
                 if is_not_found_body(&body) {
                     return Ok(None);
                 }
+                // Do not include PD response body: it may contain cluster metadata.
                 return Err(format!(
-                    "pd keyspace lookup failed for {} with status {}: {}",
-                    keyspace_name, status, body
+                    "pd keyspace lookup failed for {} with status {}",
+                    keyspace_name, status
                 )
                 .into());
             }
@@ -408,6 +409,20 @@ mod tests {
         assert!(is_not_found_body(r#"{"message":"keyspace not found"}"#));
         assert!(!is_not_found_body("certificate not found"));
         assert!(!is_not_found_body(r#"{"message":"PD server not found"}"#));
+    }
+
+    #[test]
+    fn pd_lookup_error_message_omits_response_body() {
+        let body = r#"{"message":"internal leak: tenant=secret-org"}"#;
+        let status = StatusCode::INTERNAL_SERVER_ERROR;
+        let keyspace_name = "ks-1";
+        let err = format!(
+            "pd keyspace lookup failed for {} with status {}",
+            keyspace_name, status
+        );
+        assert!(!err.contains(body));
+        assert!(!err.contains("secret-org"));
+        assert!(err.contains("500"));
     }
 
     #[test]

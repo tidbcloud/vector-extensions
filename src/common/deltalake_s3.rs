@@ -46,10 +46,17 @@ fn is_sensitive_storage_option_key(key: &str) -> bool {
             | "SECURITY_TOKEN"
             | "SECRET_ACCESS_KEY"
             | "SESSION_TOKEN"
+            | "AWS_ROLE_ARN"
+            | "AWS_IAM_ROLE_ARN"
+            | "AWS_IAM_ROLE_EXTERNAL_ID"
+            | "AWS_WEB_IDENTITY_TOKEN_FILE"
+            | "AWS_ENDPOINT_URL"
+            | "AWS_SHARED_CREDENTIALS_FILE"
     ) || upper.contains("SECRET")
-        || (upper.contains("TOKEN")
-            && !upper.contains("TOKEN_FILE")
-            && !upper.contains("SESSION_NAME"))
+        || upper.contains("ROLE_ARN")
+        || upper.contains("ENDPOINT")
+        || upper.contains("TOKEN_FILE")
+        || (upper.contains("TOKEN") && !upper.contains("SESSION_NAME"))
 }
 
 /// Exchange Aliyun RRSA/OIDC for temporary credentials and put them into
@@ -89,20 +96,16 @@ pub async fn create_service(
     tls: Option<&TlsConfig>,
     force_path_style: Option<bool>,
 ) -> vector::Result<S3Service> {
-    error!(
-        "DEBUG: Creating S3 service for Delta Lake with bucket: {:?}",
-        bucket
-    );
-
     // Ensure we have a region configured
     let region = region.cloned().unwrap_or_else(|| {
         info!("No region specified, using default us-east-1");
         RegionOrEndpoint::with_region("us-east-1".to_string())
     });
 
-    info!("Using region: {:?} for S3 service", region);
-    info!("Using auth: {:?} for S3 service", auth);
-    info!("Force path style: {:?}", force_path_style.unwrap_or(true));
+    info!(
+        message = "Creating S3 service for Delta Lake",
+        force_path_style = force_path_style.unwrap_or(true)
+    );
 
     let result = s3_common::config::create_service(
         &region,
@@ -117,8 +120,6 @@ pub async fn create_service(
         Ok(_) => info!("S3 service created successfully for Delta Lake"),
         Err(e) => {
             error!("Failed to create S3 service for Delta Lake: {}", e);
-            error!("Auth config: {:?}", auth);
-            error!("Region config: {:?}", region);
         }
     }
 
@@ -173,7 +174,11 @@ pub async fn apply_s3_storage_options(
                     }
                 };
             allow_http = endpoint_url.starts_with("http://");
-            info!("Setting OSS endpoint URL: {}", endpoint_url);
+            info!(
+                message = "Setting object-store endpoint URL",
+                allow_http,
+                scheme = if allow_http { "http" } else { "https" }
+            );
             storage_options.insert("AWS_ENDPOINT_URL".to_string(), endpoint_url);
         }
     }
@@ -255,8 +260,6 @@ pub async fn apply_s3_storage_options(
             } else if let Ok(token_file) = std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
                 // Use Web Identity Token authentication (AWS IRSA/RRSA)
                 info!("Using Web Identity Token authentication (RRSA)");
-                info!("Token file: {}", token_file);
-                info!("Role ARN: {}", assume_role);
 
                 storage_options.insert("AWS_WEB_IDENTITY_TOKEN_FILE".to_string(), token_file);
                 storage_options.insert("AWS_ROLE_ARN".to_string(), assume_role.clone());
@@ -273,7 +276,7 @@ pub async fn apply_s3_storage_options(
                 info!("✓ Delta Lake will use Web Identity Token (RRSA) authentication");
             } else {
                 // Use traditional AssumeRole (requires base credentials)
-                info!("Configuring Delta Lake with IAM Role ARN: {}", assume_role);
+                info!("Configuring Delta Lake with IAM Role AssumeRole");
                 storage_options.insert("AWS_IAM_ROLE_ARN".to_string(), assume_role.clone());
                 storage_options.insert(
                     "AWS_IAM_ROLE_SESSION_NAME".to_string(),
@@ -317,7 +320,7 @@ pub async fn apply_s3_storage_options(
             }
 
             if let Some(role_arn) = assume_role {
-                info!("Using access key with assume role: {}", role_arn);
+                info!("Using access key with assume role");
                 // Can also configure AssumeRole with base credentials
                 storage_options.insert("AWS_IAM_ROLE_ARN".to_string(), role_arn.clone());
                 storage_options.insert(
@@ -362,8 +365,6 @@ pub async fn apply_s3_storage_options(
                 .await?;
             } else if let (Some(token_file), Some(role_arn)) = (aws_token, aws_role) {
                 info!("Using Web Identity Token authentication (AWS RRSA)");
-                info!("Token file: {}", token_file);
-                info!("Role ARN: {}", role_arn);
 
                 storage_options.insert("AWS_WEB_IDENTITY_TOKEN_FILE".to_string(), token_file);
                 storage_options.insert("AWS_ROLE_ARN".to_string(), role_arn);
@@ -545,7 +546,7 @@ mod tests {
         );
         assert_eq!(
             redacted.get("AWS_ENDPOINT_URL").map(String::as_str),
-            Some("https://oss-example.aliyuncs.com")
+            Some(REDACTED)
         );
 
         // Operational map stays intact for Delta Lake.
@@ -557,6 +558,10 @@ mod tests {
             original.get("AWS_SESSION_TOKEN").map(String::as_str),
             Some("aliyun-sts-session-token")
         );
+        assert_eq!(
+            original.get("AWS_ENDPOINT_URL").map(String::as_str),
+            Some("https://oss-example.aliyuncs.com")
+        );
     }
 
     #[test]
@@ -565,7 +570,9 @@ mod tests {
         assert!(is_sensitive_storage_option_key("AWS_SESSION_TOKEN"));
         assert!(is_sensitive_storage_option_key("access_key_secret"));
         assert!(is_sensitive_storage_option_key("security_token"));
-        assert!(!is_sensitive_storage_option_key("AWS_WEB_IDENTITY_TOKEN_FILE"));
+        assert!(is_sensitive_storage_option_key("AWS_WEB_IDENTITY_TOKEN_FILE"));
+        assert!(is_sensitive_storage_option_key("AWS_ROLE_ARN"));
+        assert!(is_sensitive_storage_option_key("AWS_ENDPOINT_URL"));
         assert!(!is_sensitive_storage_option_key("AWS_ROLE_SESSION_NAME"));
         assert!(!is_sensitive_storage_option_key("AWS_REGION"));
     }
