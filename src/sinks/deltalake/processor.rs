@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use vector_lib::event::Event;
 use vector_lib::sink::StreamSink;
 
+use crate::common::aliyun_sts::AliyunRoleCredentialsProvider;
 use crate::common::deltalake_writer::{
     is_stale_delta_log_error, DeltaLakeWriter, DeltaTableConfig, WriteConfig,
 };
@@ -19,6 +20,7 @@ pub struct DeltaLakeSink {
     tables: Vec<DeltaTableConfig>,
     write_config: WriteConfig,
     storage_options: Option<HashMap<String, String>>,
+    aliyun_sts: Option<AliyunRoleCredentialsProvider>,
     writers: Arc<Mutex<HashMap<String, DeltaLakeWriter>>>,
 }
 
@@ -29,12 +31,14 @@ impl DeltaLakeSink {
         tables: Vec<DeltaTableConfig>,
         write_config: WriteConfig,
         storage_options: Option<HashMap<String, String>>,
+        aliyun_sts: Option<AliyunRoleCredentialsProvider>,
     ) -> Self {
         Self {
             base_path,
             tables,
             write_config,
             storage_options,
+            aliyun_sts,
             writers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -150,11 +154,13 @@ impl DeltaLakeSink {
                     }
                 });
 
-            DeltaLakeWriter::new(
+            DeltaLakeWriter::new_with_options(
                 table_path,
                 table_config,
                 self.write_config.clone(),
                 self.storage_options.clone(),
+                self.aliyun_sts.clone(),
+                true,
             )
         });
 
@@ -359,6 +365,7 @@ mod tests {
                 batch_size: 1000,
                 timeout_secs: 30,
             },
+            None,
             None,
         );
 

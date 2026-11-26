@@ -9,6 +9,8 @@ use deltalake::DeltaOps;
 use tracing::{error, info, warn};
 use url::Url;
 
+use crate::common::aliyun_sts::AliyunRoleCredentialsProvider;
+
 use super::errors::is_stale_delta_log_error;
 use super::schema::SchemaManager;
 use super::types::TypeConverter;
@@ -17,16 +19,42 @@ use super::types::TypeConverter;
 pub struct DeltaOpsManager {
     /// Storage options for S3/cloud storage
     storage_options: Option<HashMap<String, String>>,
+    /// Refreshable Aliyun STS provider (seeded at sink build; refreshed before writes)
+    aliyun_sts: Option<AliyunRoleCredentialsProvider>,
     /// Type converter for field conversions
     type_converter: TypeConverter,
 }
 
 impl DeltaOpsManager {
     pub fn new(storage_options: Option<HashMap<String, String>>) -> Self {
+        Self::new_with_aliyun_sts(storage_options, None)
+    }
+
+    pub fn new_with_aliyun_sts(
+        storage_options: Option<HashMap<String, String>>,
+        aliyun_sts: Option<AliyunRoleCredentialsProvider>,
+    ) -> Self {
         Self {
             storage_options,
+            aliyun_sts,
             type_converter: TypeConverter::new(),
         }
+    }
+
+    /// Resolve storage options, refreshing Aliyun STS when a provider is configured.
+    async fn fresh_storage_options(
+        &self,
+    ) -> Result<Option<HashMap<String, String>>, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(mut options) = self.storage_options.clone() else {
+            return Ok(None);
+        };
+        if let Some(provider) = &self.aliyun_sts {
+            provider
+                .apply_to_storage_options(&mut options)
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+        }
+        Ok(Some(options))
     }
 
     /// Create DeltaOps from URI with optional storage options
@@ -34,15 +62,15 @@ impl DeltaOpsManager {
         &self,
         table_uri: &Url,
     ) -> Result<DeltaOps, Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(storage_options) = &self.storage_options {
-            // Log a redacted clone only; pass the original map to Delta Lake.
+        if let Some(storage_options) = self.fresh_storage_options().await? {
+            // Log a redacted clone only; pass the resolved map to Delta Lake.
             info!(
                 "Using storage options: {:?}",
-                crate::common::deltalake_s3::redact_storage_options_for_log(storage_options)
+                crate::common::deltalake_s3::redact_storage_options_for_log(&storage_options)
             );
             Ok(DeltaOps::try_from_uri_with_storage_options(
                 table_uri.clone(),
-                storage_options.clone(),
+                storage_options,
             )
             .await?)
         } else {
@@ -90,6 +118,10 @@ impl DeltaOpsManager {
                     .iter()
                     .map(|field| self.type_converter.arrow_field_to_delta(field)),
             );
+
+        // Prefer refreshed STS options from the manager; fall back to caller map.
+        let refreshed = self.fresh_storage_options().await?;
+        let storage_options = refreshed.as_ref().or(storage_options);
 
         // Add storage options for S3
         if let Some(storage_options) = storage_options {
