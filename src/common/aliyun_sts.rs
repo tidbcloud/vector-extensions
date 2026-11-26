@@ -608,9 +608,13 @@ impl AliyunRoleCredentialsProvider {
         Self::new(role_arn, region, session_name)
     }
 
-    async fn load(
-        &self,
-    ) -> Result<Credentials, aws_credential_types::provider::error::CredentialsError> {
+    /// Role ARN this provider assumes.
+    pub fn role_arn(&self) -> &str {
+        &self.role_arn
+    }
+
+    /// Return cached STS credentials, refreshing when within [`REFRESH_SKEW`] of expiry.
+    pub async fn credentials(&self) -> vector::Result<AliyunStsCredentials> {
         let mut guard = self.cache.lock().await;
         let now = SystemTime::now();
         let needs_refresh = match guard.as_ref() {
@@ -623,24 +627,57 @@ impl AliyunRoleCredentialsProvider {
         };
 
         if needs_refresh {
+            info!(
+                message = "Refreshing Aliyun STS credentials for Delta Lake / OSS",
+                role_arn = %self.role_arn
+            );
             let creds = get_aliyun_role_credentials(
                 &self.role_arn,
                 self.region.as_deref(),
                 &self.session_name,
             )
-            .await
-            .map_err(|e| {
-                aws_credential_types::provider::error::CredentialsError::provider_error(e)
-            })?;
+            .await?;
             *guard = Some(creds);
         }
 
-        let cached = guard.as_ref().expect("credentials cache populated");
+        Ok(guard
+            .as_ref()
+            .expect("credentials cache populated")
+            .clone())
+    }
+
+    /// Write current (possibly refreshed) STS credentials into Delta Lake storage options.
+    pub async fn apply_to_storage_options(
+        &self,
+        storage_options: &mut HashMap<String, String>,
+    ) -> vector::Result<()> {
+        let creds = self.credentials().await?;
+        storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), creds.access_key_id);
+        storage_options.insert(
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            creds.access_key_secret,
+        );
+        storage_options.insert("AWS_SESSION_TOKEN".to_string(), creds.security_token);
+        Ok(())
+    }
+
+    /// Seed the credential cache (tests only).
+    #[cfg(test)]
+    pub async fn seed_cache_for_test(&self, creds: AliyunStsCredentials) {
+        *self.cache.lock().await = Some(creds);
+    }
+
+    async fn load(
+        &self,
+    ) -> Result<Credentials, aws_credential_types::provider::error::CredentialsError> {
+        let creds = self.credentials().await.map_err(|e| {
+            aws_credential_types::provider::error::CredentialsError::provider_error(e)
+        })?;
         Ok(Credentials::new(
-            cached.access_key_id.clone(),
-            cached.access_key_secret.clone(),
-            Some(cached.security_token.clone()),
-            Some(cached.expires_at),
+            creds.access_key_id,
+            creds.access_key_secret,
+            Some(creds.security_token),
+            Some(creds.expires_at),
             "aliyun-role-sts",
         ))
     }
@@ -707,5 +744,35 @@ mod tests {
         assert!(!rendered.contains("LTAIsecretid"));
         assert!(!rendered.contains("super-secret"));
         assert!(!rendered.contains("session-token-value"));
+    }
+
+    #[tokio::test]
+    async fn apply_to_storage_options_uses_cached_credentials() {
+        let provider = AliyunRoleCredentialsProvider::new(
+            "acs:ram::123:role/test",
+            Some("ap-northeast-1".to_string()),
+            "vector-test",
+        )
+        .unwrap();
+        provider
+            .seed_cache_for_test(AliyunStsCredentials {
+                access_key_id: "STS.TESTKEY".into(),
+                access_key_secret: "secret".into(),
+                security_token: "token".into(),
+                expires_at: SystemTime::now() + Duration::from_secs(3600),
+            })
+            .await;
+
+        let mut options = HashMap::new();
+        provider.apply_to_storage_options(&mut options).await.unwrap();
+        assert_eq!(options.get("AWS_ACCESS_KEY_ID").map(String::as_str), Some("STS.TESTKEY"));
+        assert_eq!(
+            options.get("AWS_SECRET_ACCESS_KEY").map(String::as_str),
+            Some("secret")
+        );
+        assert_eq!(
+            options.get("AWS_SESSION_TOKEN").map(String::as_str),
+            Some("token")
+        );
     }
 }
