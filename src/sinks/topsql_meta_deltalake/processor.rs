@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use vector_lib::event::{Event, LogEvent};
 use vector_lib::sink::StreamSink;
 
+use crate::common::aliyun_sts::AliyunRoleCredentialsProvider;
 use crate::common::deltalake_writer::{
     is_stale_delta_log_error, DeltaLakeWriter, DeltaTableConfig, WriteConfig,
 };
@@ -120,6 +121,7 @@ pub struct TopSQLDeltaLakeSink {
     write_config: WriteConfig,
     max_delay_secs: u64,
     storage_options: Option<HashMap<String, String>>,
+    aliyun_sts: Option<AliyunRoleCredentialsProvider>,
     keyspace_route_resolver: Option<PdKeyspaceResolver>,
     writers: Arc<Mutex<HashMap<WriterKey, DeltaLakeWriter>>>,
     tx: Arc<mpsc::Sender<Vec<Vec<Event>>>>,
@@ -150,6 +152,7 @@ impl TopSQLDeltaLakeSink {
         write_config: WriteConfig,
         max_delay_secs: u64,
         storage_options: Option<HashMap<String, String>>,
+        aliyun_sts: Option<AliyunRoleCredentialsProvider>,
         meta_cache_capacity: usize,
         keyspace_route_resolver: Option<PdKeyspaceResolver>,
     ) -> Self {
@@ -160,6 +163,7 @@ impl TopSQLDeltaLakeSink {
             write_config,
             max_delay_secs,
             storage_options,
+            aliyun_sts,
             keyspace_route_resolver,
             writers: Arc::new(Mutex::new(HashMap::new())),
             tx: Arc::new(tx),
@@ -190,6 +194,7 @@ impl TopSQLDeltaLakeSink {
         write_config: WriteConfig,
         max_delay_secs: u64,
         storage_options: Option<HashMap<String, String>>,
+        aliyun_sts: Option<AliyunRoleCredentialsProvider>,
         meta_cache_capacity: usize,
         keyspace_route_resolver: Option<PdKeyspaceResolver>,
     ) -> (Self, mpsc::Receiver<Vec<Vec<Event>>>) {
@@ -207,6 +212,7 @@ impl TopSQLDeltaLakeSink {
             write_config,
             max_delay_secs,
             storage_options,
+            aliyun_sts,
             keyspace_route_resolver,
             writers: Arc::new(Mutex::new(HashMap::new())),
             tx,
@@ -647,6 +653,7 @@ impl TopSQLDeltaLakeSink {
                 table_config,
                 self.write_config.clone(),
                 self.storage_options.clone(),
+                self.aliyun_sts.clone(),
                 false,
             )
         });
@@ -798,6 +805,7 @@ mod tests {
             },
             180, // Use default value for tests
             None,
+            None,
             10000, // Use default LRU cache capacity for tests
             None,
         )
@@ -880,6 +888,7 @@ mod tests {
             },
             0,
             None,
+            None,
             10000,
             Some(resolver),
         );
@@ -915,6 +924,7 @@ mod tests {
             },
             180,
             None,
+            None,
             10000,
             None,
         );
@@ -945,6 +955,7 @@ mod tests {
                 timeout_secs: 0,
             },
             180,
+            None,
             None,
             10000,
             None,

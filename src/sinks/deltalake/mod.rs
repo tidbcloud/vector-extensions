@@ -212,15 +212,16 @@ impl DeltaLakeConfig {
         let mut storage_options = self.storage_options.clone().unwrap_or_default();
 
         // Always apply S3/OSS storage options for cloud paths.
-        // Vector's AWS SDK create_service often fails under Alicloud RRSA (no static
-        // AK/SK), but Delta Lake auth still needs apply_s3_storage_options to run so
-        // Aliyun OIDC→STS credentials are injected.
+        // Vector's AWS SDK create_service often fails under Alicloud keyless auth
+        // (no static AK/SK), but Delta Lake auth still needs apply_s3_storage_options
+        // so Aliyun STS credentials (RRSA OIDC or node-role AssumeRole) are injected.
+        let mut aliyun_sts = None;
         if self.bucket.is_some() || self.base_path.starts_with("s3://") {
             info!(
                 "Applying S3/OSS storage options (s3_service present: {})",
                 s3_service.is_some()
             );
-            self.apply_s3_storage_options(&mut storage_options).await?;
+            aliyun_sts = self.apply_s3_storage_options(&mut storage_options).await?;
         } else {
             info!("No S3/OSS path configured - using default storage options only");
         }
@@ -230,6 +231,7 @@ impl DeltaLakeConfig {
             table_configs,
             write_config,
             Some(storage_options),
+            aliyun_sts,
         );
 
         Ok(VectorSink::from_event_streamsink(sink))
@@ -250,7 +252,7 @@ impl DeltaLakeConfig {
     async fn apply_s3_storage_options(
         &self,
         storage_options: &mut HashMap<String, String>,
-    ) -> vector::Result<()> {
+    ) -> vector::Result<Option<crate::common::aliyun_sts::AliyunRoleCredentialsProvider>> {
         deltalake_s3::apply_s3_storage_options(
             storage_options,
             self.bucket.as_deref(),

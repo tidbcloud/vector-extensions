@@ -8,7 +8,7 @@ use vector::sinks::Healthcheck;
 use vector_lib::config::proxy::ProxyConfig;
 use vector_lib::tls::TlsConfig;
 
-use crate::common::aliyun_sts::{self, ENV_OIDC_TOKEN_FILE, ENV_ROLE_ARN};
+use crate::common::aliyun_sts::{AliyunRoleCredentialsProvider, ENV_ROLE_ARN};
 
 /// Shared S3 + DeltaLake helpers used by multiple sinks.
 ///
@@ -52,33 +52,31 @@ fn is_sensitive_storage_option_key(key: &str) -> bool {
             && !upper.contains("SESSION_NAME"))
 }
 
-/// Exchange Aliyun RRSA/OIDC for temporary credentials and put them into
-/// Delta Lake `storage_options` (object_store reads static AWS_* keys).
-async fn insert_aliyun_rrsa_credentials(
+/// Build a refreshable Aliyun STS provider and seed `storage_options` once.
+///
+/// Callers must keep the returned provider and re-apply credentials before later
+/// Delta Lake writes — STS temps expire (~1h) and OSS often returns
+/// `InvalidAccessKeyId` after expiry.
+///
+/// Uses ACK RRSA (`AssumeRoleWithOIDC`) when `ALIBABA_CLOUD_OIDC_TOKEN_FILE` is
+/// set; otherwise uses the ECS/ACK node RAM role from IMDS and STS `AssumeRole`.
+async fn build_aliyun_role_provider(
     storage_options: &mut HashMap<String, String>,
     role_arn: &str,
     region: Option<&str>,
-) -> vector::Result<()> {
-    info!("Detected Aliyun RRSA; exchanging OIDC token for STS credentials");
-    let (resolved_role, token_file, oidc_provider_arn) =
-        aliyun_sts::resolve_rrsa_config(Some(role_arn))?;
-    let creds = aliyun_sts::get_aliyun_sts_credentials(
-        &token_file,
-        &resolved_role,
-        &oidc_provider_arn,
-        region,
+) -> vector::Result<AliyunRoleCredentialsProvider> {
+    info!("Detected Aliyun RAM role ARN; obtaining refreshable STS credentials for OSS");
+    let provider = AliyunRoleCredentialsProvider::new(
+        role_arn,
+        region.map(str::to_string),
         "vector-deltalake",
-    )
-    .await?;
-
-    storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), creds.access_key_id);
-    storage_options.insert(
-        "AWS_SECRET_ACCESS_KEY".to_string(),
-        creds.access_key_secret,
+    )?;
+    provider.apply_to_storage_options(storage_options).await?;
+    info!(
+        "✓ Delta Lake using Aliyun STS temporary credentials for OSS (role={})",
+        provider.role_arn()
     );
-    storage_options.insert("AWS_SESSION_TOKEN".to_string(), creds.security_token);
-    info!("✓ Delta Lake using Aliyun RRSA temporary credentials for OSS");
-    Ok(())
+    Ok(provider)
 }
 
 pub async fn create_service(
@@ -125,13 +123,17 @@ pub async fn create_service(
     result
 }
 
+/// Apply S3/OSS endpoint + auth into `storage_options`.
+///
+/// When Aliyun `acs:ram::` role auth is used, returns a refreshable STS provider
+/// that must be re-applied before subsequent Delta Lake writes.
 pub async fn apply_s3_storage_options(
     storage_options: &mut HashMap<String, String>,
     bucket: Option<&str>,
     region: Option<&RegionOrEndpoint>,
     auth: &AwsAuthentication,
     force_path_style: Option<bool>,
-) -> vector::Result<()> {
+) -> vector::Result<Option<AliyunRoleCredentialsProvider>> {
     info!("=== Applying S3 storage options (aws_s3_upload_file style) ===");
     debug!(
         "Initial storage_options: {:?}",
@@ -237,21 +239,25 @@ pub async fn apply_s3_storage_options(
 
     // Check Vector's auth configuration and map to Delta Lake storage_options
     let region_str = region.and_then(|r| r.region()).map(|s| s.to_string());
+    let mut aliyun_sts = None;
     match auth {
         AwsAuthentication::Role {
             assume_role,
             external_id,
             ..
         } => {
-            // Aliyun RRSA: auth.assume_role is an acs:ram:: ARN.
-            // Must not fall through to AWS AssumeRole, which still needs base AK/SK.
+            // Aliyun: auth.assume_role is an acs:ram:: ARN.
+            // Prefer RRSA OIDC when present; otherwise node RAM role → AssumeRole.
+            // Must not fall through to AWS AssumeRole (wrong STS endpoint).
             if assume_role.starts_with("acs:ram::") {
-                insert_aliyun_rrsa_credentials(
-                    storage_options,
-                    assume_role,
-                    region_str.as_deref(),
-                )
-                .await?;
+                aliyun_sts = Some(
+                    build_aliyun_role_provider(
+                        storage_options,
+                        assume_role,
+                        region_str.as_deref(),
+                    )
+                    .await?,
+                );
             } else if let Ok(token_file) = std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
                 // Use Web Identity Token authentication (AWS IRSA/RRSA)
                 info!("Using Web Identity Token authentication (RRSA)");
@@ -349,17 +355,15 @@ pub async fn apply_s3_storage_options(
             let aws_token = std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE").ok();
             let aws_role = std::env::var("AWS_ROLE_ARN").ok();
 
-            if std::env::var(ENV_OIDC_TOKEN_FILE).is_ok()
-                && aliyun_role
-                    .as_deref()
-                    .is_some_and(|r| r.starts_with("acs:ram::"))
+            // Aliyun role from env: RRSA OIDC if present, else node RAM role AssumeRole.
+            if let Some(role_arn) = aliyun_role
+                .as_deref()
+                .filter(|r| r.starts_with("acs:ram::"))
             {
-                insert_aliyun_rrsa_credentials(
-                    storage_options,
-                    aliyun_role.as_deref().unwrap(),
-                    region_str.as_deref(),
-                )
-                .await?;
+                aliyun_sts = Some(
+                    build_aliyun_role_provider(storage_options, role_arn, region_str.as_deref())
+                        .await?,
+                );
             } else if let (Some(token_file), Some(role_arn)) = (aws_token, aws_role) {
                 info!("Using Web Identity Token authentication (AWS RRSA)");
                 info!("Token file: {}", token_file);
@@ -422,7 +426,7 @@ pub async fn apply_s3_storage_options(
         redacted_options
     );
 
-    Ok(())
+    Ok(aliyun_sts)
 }
 
 pub fn build_healthcheck(

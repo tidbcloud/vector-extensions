@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use vector_lib::event::Event;
 
+use crate::common::aliyun_sts::AliyunRoleCredentialsProvider;
+
 // Module declarations
 pub mod converter;
 pub mod delta_ops;
@@ -82,6 +84,7 @@ impl DeltaLakeWriter {
             table_config,
             write_config,
             storage_options,
+            None,
             true,
         )
     }
@@ -92,6 +95,7 @@ impl DeltaLakeWriter {
         table_config: DeltaTableConfig,
         write_config: WriteConfig,
         storage_options: Option<HashMap<String, String>>,
+        aliyun_sts: Option<AliyunRoleCredentialsProvider>,
         enable_standard_fields: bool,
     ) -> Self {
         let path_str = table_path.to_string_lossy();
@@ -109,7 +113,8 @@ impl DeltaLakeWriter {
         let type_converter = TypeConverter::new();
         let schema_manager =
             SchemaManager::new_with_options(type_converter, enable_standard_fields);
-        let delta_ops_manager = DeltaOpsManager::new(storage_options.clone());
+        let delta_ops_manager =
+            DeltaOpsManager::new_with_aliyun_sts(storage_options.clone(), aliyun_sts);
 
         Self {
             table_path,
